@@ -1562,6 +1562,49 @@ void SmokeTest::addTempoJourney()
                      }});
     steps.back().poll = true;
     // Scrolled to the join, so the picture shows it.
+    // A curve drawn by hand in the editor (the In's fader): its points, with their shapes, are
+    // what the incoming track's lane gets over the window, and the transition keeps them.
+    steps.push_back({"transition drawn by hand",
+                     [this]
+                     {
+                         if (const auto* list = model().raw.getProperty("mixTransitions", {}).getArray())
+                             for (const auto& t : *list)
+                                 if (t.getProperty("id", {}).toString() == mixTransitionId)
+                                 {
+                                     TransitionEditor editor(mirror, actions, t.getProperty("outClipId", {}).toString(),
+                                                             t.getProperty("inClipId", {}).toString());
+                                     editor.drawByHandForTest(false, "level", {{0.0, -60.0, "slowStart", 0.3},
+                                                                               {0.5, -6.0, "smooth", 0.0},
+                                                                               {1.0, 0.0, "linear", 0.0}});
+                                     mirror.refreshNow();
+                                     const auto image = editor.createComponentSnapshot(editor.getLocalBounds());
+                                     juce::FileOutputStream out(workDir.getChildFile("transition-editor-manual.png"));
+                                     if (out.openedOk()) juce::PNGImageFormat().writeImageToStream(image, out);
+                                 }
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         if (const auto* list = model().raw.getProperty("mixTransitions", {}).getArray())
+                             for (const auto& t : *list)
+                                 if (t.getProperty("id", {}).toString() == mixTransitionId)
+                                 {
+                                     const auto* in = model().findClip(t.getProperty("inClipId", {}).toString());
+                                     const auto* track = in != nullptr ? model().findTrack(in->trackId) : nullptr;
+                                     const double start = static_cast<double>(t.getProperty("startMs", 0.0));
+                                     const double end = static_cast<double>(t.getProperty("endMs", 0.0));
+                                     const double middle = start + 0.5 * (end - start);
+                                     bool found = false;
+                                     if (track != nullptr)
+                                         for (const auto& p : automation::pointsOf(*track, "level"))
+                                             found = found || (std::abs(p.timeMs - middle) < 2.0 && std::abs(p.value + 6.0) < 0.01 && p.curve == "smooth");
+                                     const bool kept = t.getProperty("settings", {}).getProperty("in", {}).getProperty("manual", {}).hasProperty("level");
+                                     if (found && kept) report.add("transition drawn by hand: in fader point at the middle, -6 dB, smooth");
+                                     return found && kept;
+                                 }
+                         return false;
+                     }});
+    steps.back().poll = true;
     steps.push_back({"reveal transition",
                      [this]
                      {

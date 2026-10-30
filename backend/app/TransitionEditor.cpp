@@ -2,6 +2,7 @@
 
 #include "Theme.h"
 
+#include <algorithm>
 #include <cmath>
 #include <functional>
 
@@ -66,6 +67,18 @@ double presence(const juce::String& param, double value)
     if (param == "filter") return 1.0 - std::abs(value);
     if (param == "bitCrusherRate") return value;
     return 1.0 - value; // sends and crush mix: how much of the dry track is left
+}
+
+// And back: the value a point dragged to `p` (0..1) on the graph stands for. A filter keeps
+// the direction its half sweeps in (low-pass is negative).
+double fromPresence(const juce::String& param, double p, bool highPass)
+{
+    p = juce::jlimit(0.0, 1.0, p);
+    if (param == "level") return p <= 0.001 ? -60.0 : juce::jmax(-60.0, 20.0 * std::log10(p));
+    if (param.startsWith("tone")) return -40.0 * (1.0 - p);
+    if (param == "filter") return (highPass ? 1.0 : -1.0) * (1.0 - p);
+    if (param == "bitCrusherRate") return juce::jmax(0.01, p);
+    return 1.0 - p;
 }
 
 juce::Colour colourFor(const juce::String& param)
@@ -171,6 +184,15 @@ class TransitionEditor::HalfEditor final : public juce::Component
             addAndMakeVisible(effect);
             addAndMakeVisible(extra);
         }
+
+        // A + on each option: its curve is drawn by hand on the graph instead.
+        for (auto& [button, param] : manualButtons())
+        {
+            button->setClickingTogglesState(false);
+            button->setTooltip("Draw this curve by hand on the graph (the option greys out). Click again to go back to the option.");
+            button->onClick = [this, param = param] { toggleManual(param()); };
+            if (outgoing || button != &manualFx) addAndMakeVisible(button);
+        }
     }
 
     void set(const std::optional<mix::Half>& h)
@@ -182,6 +204,39 @@ class TransitionEditor::HalfEditor final : public juce::Component
 
     const std::optional<mix::Half>& get() const { return value; }
     std::function<void()> onChange;
+    // A curve handed to the graph (or picked there): the editor makes it the one being drawn.
+    std::function<void(const juce::String& param)> onActivate;
+
+    // The graph's edits to a curve drawn by hand.
+    void setManual(const juce::String& param, std::vector<automation::Point> points)
+    {
+        if (!value.has_value()) return;
+        value->manual[param] = std::move(points);
+        notify();
+    }
+
+    void toggleManual(const juce::String& param)
+    {
+        if (!value.has_value()) return;
+        const bool on = value->manual.count(param) == 0;
+        if (on)
+        {
+            // An effect drawn by hand still needs its send ready: an echo unless one is chosen.
+            if (outgoing && (param == "delaySend" || param == "reverbSend" || param == "bitCrusherMix") && value->effect == "none")
+            {
+                value->effect = param == "reverbSend" ? "reverb" : param == "bitCrusherMix" ? "crush" : "echo";
+                select(effect, kEffectIds, value->effect);
+            }
+            value->manual[param] = mix::manualSeed(*value, outgoing, param);
+        }
+        else
+        {
+            value->manual.erase(param);
+        }
+        refreshManual();
+        notify();
+        if (on && onActivate) onActivate(param);
+    }
 
     void resized() override
     {
@@ -189,10 +244,15 @@ class TransitionEditor::HalfEditor final : public juce::Component
         title.setBounds(area.removeFromTop(20));
         kind.setBounds(area.removeFromTop(24));
         area.removeFromTop(6);
-        auto row = [&area](juce::Label& label, juce::Component& c, juce::Component* second = nullptr)
+        auto row = [&area](juce::Label& label, juce::Component& c, juce::Component* second = nullptr, juce::Component* plus = nullptr)
         {
             auto r = area.removeFromTop(24);
             label.setBounds(r.removeFromLeft(78));
+            if (plus != nullptr)
+            {
+                plus->setBounds(r.removeFromRight(24).reduced(0, 1));
+                r.removeFromRight(4);
+            }
             if (second != nullptr)
             {
                 c.setBounds(r.removeFromLeft(r.getWidth() / 2 - 2));
@@ -207,14 +267,14 @@ class TransitionEditor::HalfEditor final : public juce::Component
         span.setBounds(area.removeFromTop(22));
         area.removeFromTop(3);
         row(curveLabel, curve);
-        row(levelLabel, level);
-        row(filterLabel, filter, &depth);
-        row(lowLabel, low);
-        row(midLabel, mid);
-        row(highLabel, high);
+        row(levelLabel, level, nullptr, &manualLevel);
+        row(filterLabel, filter, &depth, &manualFilter);
+        row(lowLabel, low, nullptr, &manualLow);
+        row(midLabel, mid, nullptr, &manualMid);
+        row(highLabel, high, nullptr, &manualHigh);
         row(swapLabel, swap);
         row(killLabel, kill);
-        if (outgoing) row(effectLabel, effect, &extra);
+        if (outgoing) row(effectLabel, effect, &extra, &manualFx);
     }
 
     void describe()
@@ -232,6 +292,51 @@ class TransitionEditor::HalfEditor final : public juce::Component
     }
 
   private:
+    std::vector<std::pair<juce::TextButton*, std::function<juce::String()>>> manualButtons()
+    {
+        return {{&manualLevel, [] { return juce::String("level"); }},
+                {&manualFilter, [] { return juce::String("filter"); }},
+                {&manualLow, [] { return juce::String("toneBass"); }},
+                {&manualMid, [] { return juce::String("toneMid"); }},
+                {&manualHigh, [] { return juce::String("toneTreble"); }},
+                {&manualFx, [this] { return fxParam(); }}};
+    }
+
+    // The effect's own parameter: what its curve drawn by hand moves.
+    juce::String fxParam() const
+    {
+        if (value.has_value())
+        {
+            if (value->effect == "reverb") return "reverbSend";
+            if (value->effect == "crush") return "bitCrusherMix";
+            for (const auto* p : {"delaySend", "reverbSend", "bitCrusherMix"})
+                if (value->manual.count(p) != 0) return p;
+        }
+        return "delaySend";
+    }
+
+    // The + buttons lit for curves drawn by hand, and their options greyed out.
+    void refreshManual()
+    {
+        const bool on = value.has_value();
+        auto manual = [this](const juce::String& p) { return value.has_value() && value->manual.count(p) != 0; };
+        for (auto& [button, param] : manualButtons())
+        {
+            const bool drawn = manual(param());
+            button->setButtonText(drawn ? "M" : "+");
+            button->setToggleState(drawn, juce::dontSendNotification);
+            button->setColour(juce::TextButton::buttonColourId, drawn ? colours::sky600 : colours::zinc900);
+            button->setEnabled(on);
+        }
+        level.setEnabled(on && !manual("level"));
+        filter.setEnabled(on && !manual("filter"));
+        depth.setEnabled(on && !manual("filter"));
+        low.setEnabled(on && !manual("toneBass"));
+        mid.setEnabled(on && !manual("toneMid"));
+        high.setEnabled(on && !manual("toneTreble"));
+        effect.setEnabled(on && !manual(fxParam()));
+    }
+
     void load()
     {
         const bool on = value.has_value();
@@ -252,6 +357,7 @@ class TransitionEditor::HalfEditor final : public juce::Component
             select(effect, kEffectIds, value->effect);
             select(extra, kExtraIds, extraId(value->extra));
         }
+        refreshManual();
         describe();
     }
 
@@ -272,6 +378,7 @@ class TransitionEditor::HalfEditor final : public juce::Component
             value->effect = chosen(effect, kEffectIds);
             value->extra = extraOf(chosen(extra, kExtraIds));
         }
+        refreshManual();
         notify();
     }
 
@@ -287,6 +394,7 @@ class TransitionEditor::HalfEditor final : public juce::Component
     juce::Label title, spanLabel, curveLabel, levelLabel, filterLabel, lowLabel, midLabel, highLabel, swapLabel, killLabel, effectLabel;
     juce::ComboBox kind, curve, level, filter, low, mid, high, effect, extra;
     juce::Slider span, depth, swap, kill;
+    juce::TextButton manualLevel{"+"}, manualFilter{"+"}, manualLow{"+"}, manualMid{"+"}, manualHigh{"+"}, manualFx{"+"};
 };
 
 // ── The editor ──────────────────────────────────────────────────────────────
@@ -310,9 +418,14 @@ TransitionEditor::TransitionEditor(ProjectMirror& projectMirror, TimelineActions
     sub.setFont(uiFont(11.0f));
     sub.setColour(juce::Label::textColourId, colours::textDim);
     sub.setText("Changes apply as you make them (Undo steps back). The window is where the two clips overlap: move or trim them to "
-                "lengthen it.",
+                "lengthen it. + on an option draws its curve by hand on the graph.",
                 juce::dontSendNotification);
     addAndMakeVisible(sub);
+    hint.setFont(uiFont(10.0f));
+    hint.setColour(juce::Label::textColourId, colours::textFaint);
+    hint.setJustificationType(juce::Justification::centredRight);
+    hint.setInterceptsMouseClicks(false, false);
+    addAndMakeVisible(hint);
 
     outEditor = std::make_unique<HalfEditor>(true, [this] { return windowBars(); });
     inEditor = std::make_unique<HalfEditor>(false, [this] { return windowBars(); });
@@ -321,6 +434,7 @@ TransitionEditor::TransitionEditor(ProjectMirror& projectMirror, TimelineActions
     for (auto* e : {outEditor.get(), inEditor.get()})
     {
         e->onChange = [this] { changed(); };
+        e->onActivate = [this, outgoing = e == outEditor.get()](const juce::String& param) { activate(outgoing, param); };
         addAndMakeVisible(e);
     }
     rampTempo.setToggleState(join.rampTempo, juce::dontSendNotification);
@@ -341,7 +455,14 @@ TransitionEditor::TransitionEditor(ProjectMirror& projectMirror, TimelineActions
     };
     addAndMakeVisible(remove);
     addAndMakeVisible(close);
-    setSize(820, 620);
+    // The first curve drawn by hand, if the transition has one, is the one being edited.
+    for (const bool outgoing : {true, false})
+        if (const auto& half = outgoing ? join.out : join.in; half.has_value() && !half->manual.empty())
+        {
+            activate(outgoing, half->manual.begin()->first);
+            break;
+        }
+    setSize(820, 720);
 }
 
 TransitionEditor::~TransitionEditor() = default;
@@ -375,6 +496,9 @@ void TransitionEditor::changed()
     join.out = outEditor->get();
     join.in = inEditor->get();
     join.rampTempo = rampTempo.getToggleState();
+    // A curve drawn by hand that has gone back to its option stops being edited.
+    const auto& half = activeOut ? join.out : join.in;
+    if (activeParam.isNotEmpty() && (!half.has_value() || half->manual.count(activeParam) == 0)) activate(activeOut, {});
     repaint(graphArea());
     startTimer(250);
 }
@@ -394,7 +518,189 @@ void TransitionEditor::timerCallback()
 
 juce::Rectangle<int> TransitionEditor::graphArea() const
 {
-    return getLocalBounds().reduced(14).withTrimmedTop(52).withHeight(120);
+    return getLocalBounds().reduced(14).withTrimmedTop(52).withHeight(200);
+}
+
+juce::Rectangle<float> TransitionEditor::band(bool outgoing) const
+{
+    auto top = graphArea().toFloat().reduced(4.0f).withTrimmedTop(14.0f);
+    auto bottom = top.removeFromBottom(top.getHeight() / 2.0f);
+    return (outgoing ? top : bottom).withTrimmedLeft(34.0f);
+}
+
+juce::Point<float> TransitionEditor::toGraph(bool outgoing, const juce::String& param, double at, double value) const
+{
+    const auto b = band(outgoing);
+    return {b.getX() + static_cast<float>(juce::jlimit(0.0, 1.0, at)) * b.getWidth(),
+            b.getBottom() - 3.0f - static_cast<float>(juce::jlimit(0.0, 1.0, presence(param, value))) * (b.getHeight() - 6.0f)};
+}
+
+TransitionEditor::HalfEditor& TransitionEditor::editorFor(bool outgoing) const
+{
+    return outgoing ? *outEditor : *inEditor;
+}
+
+std::vector<automation::Point> TransitionEditor::activePoints() const
+{
+    const auto& half = activeOut ? join.out : join.in;
+    if (activeParam.isEmpty() || !half.has_value()) return {};
+    const auto it = half->manual.find(activeParam);
+    return it != half->manual.end() ? it->second : std::vector<automation::Point>{};
+}
+
+void TransitionEditor::setActivePoints(std::vector<automation::Point> points)
+{
+    std::sort(points.begin(), points.end(), [](const auto& a, const auto& b) { return a.timeMs < b.timeMs; });
+    editorFor(activeOut).setManual(activeParam, std::move(points));
+}
+
+void TransitionEditor::activate(bool outgoing, const juce::String& param)
+{
+    activeOut = outgoing;
+    activeParam = param;
+    hint.setText(param.isEmpty() ? juce::String("+ on an option draws its curve here")
+                                 : juce::String(outgoing ? "OUT " : "IN ") + labelFor(param)
+                                       + ": click to add a point, drag it, double-click to delete; right-click a segment for its shape, right-drag to bend",
+                 juce::dontSendNotification);
+    repaint(graphArea());
+}
+
+int TransitionEditor::pointAt(bool outgoing, const juce::String& param, juce::Point<float> p) const
+{
+    const auto& half = outgoing ? join.out : join.in;
+    if (!half.has_value()) return -1;
+    const auto it = half->manual.find(param);
+    if (it == half->manual.end()) return -1;
+    for (int i = 0; i < static_cast<int>(it->second.size()); ++i)
+    {
+        const auto& point = it->second[static_cast<size_t>(i)];
+        if (toGraph(outgoing, param, point.timeMs, point.value).getDistanceFrom(p) <= 7.0f) return i;
+    }
+    return -1;
+}
+
+void TransitionEditor::drawByHandForTest(bool outgoing, const juce::String& param, const std::vector<automation::Point>& points)
+{
+    auto& editor = editorFor(outgoing);
+    if (!editor.get().has_value() || editor.get()->manual.count(param) == 0) editor.toggleManual(param);
+    activate(outgoing, param);
+    setActivePoints(points);
+    timerCallback();
+}
+
+void TransitionEditor::mouseDown(const juce::MouseEvent& e)
+{
+    dragIndex = -1;
+    bendSegment = -1;
+    bending = false;
+    if (!graphArea().contains(e.getPosition())) return;
+    const bool outgoing = band(true).contains(e.position) || !band(false).contains(e.position);
+    // A point of any curve drawn by hand in this half picks that curve.
+    if (const auto& half = outgoing ? join.out : join.in; half.has_value())
+        for (const auto& [param, points] : half->manual)
+            if (const int hit = pointAt(outgoing, param, e.position); hit >= 0)
+            {
+                if (param != activeParam || outgoing != activeOut) activate(outgoing, param);
+                if (!e.mods.isPopupMenu()) dragIndex = hit;
+                return;
+            }
+    if (activeParam.isEmpty() || outgoing != activeOut) return;
+    auto points = activePoints();
+    if (points.size() < 2) return;
+    const auto b = band(outgoing);
+    const double at = juce::jlimit(0.0, 1.0, static_cast<double>((e.position.x - b.getX()) / b.getWidth()));
+    if (e.mods.isPopupMenu())
+    {
+        // The segment under the pointer: a click shows its shapes, a drag bends it.
+        for (int i = 0; i + 1 < static_cast<int>(points.size()); ++i)
+            if (at >= points[static_cast<size_t>(i)].timeMs && at <= points[static_cast<size_t>(i) + 1].timeMs) bendSegment = i;
+        bendStartY = e.position.y;
+        return;
+    }
+    // A new point where the click is, carried on by the drag.
+    const auto& half = activeOut ? join.out : join.in;
+    const bool highPass = half.has_value() && half->filter == "highPass";
+    const double p = (b.getBottom() - 3.0f - e.position.y) / (b.getHeight() - 6.0f);
+    automation::Point added{at, fromPresence(activeParam, p, highPass), "linear", 0.0};
+    // The new point takes the shape of the segment it splits.
+    for (size_t i = 0; i + 1 < points.size(); ++i)
+        if (at > points[i].timeMs && at < points[i + 1].timeMs) added.curve = points[i].curve, added.tension = points[i].tension;
+    points.push_back(added);
+    std::sort(points.begin(), points.end(), [](const auto& a, const auto& b2) { return a.timeMs < b2.timeMs; });
+    for (int i = 0; i < static_cast<int>(points.size()); ++i)
+        if (std::abs(points[static_cast<size_t>(i)].timeMs - at) < 1.0e-9) dragIndex = i;
+    setActivePoints(points);
+}
+
+void TransitionEditor::mouseDrag(const juce::MouseEvent& e)
+{
+    if (activeParam.isEmpty()) return;
+    auto points = activePoints();
+    const auto b = band(activeOut);
+    if (dragIndex >= 0 && dragIndex < static_cast<int>(points.size()))
+    {
+        auto& point = points[static_cast<size_t>(dragIndex)];
+        // Between its neighbours, so the curve keeps its order.
+        const double lo = dragIndex > 0 ? points[static_cast<size_t>(dragIndex) - 1].timeMs + 0.001 : 0.0;
+        const double hi = dragIndex + 1 < static_cast<int>(points.size()) ? points[static_cast<size_t>(dragIndex) + 1].timeMs - 0.001 : 1.0;
+        point.timeMs = juce::jlimit(lo, juce::jmax(lo, hi), static_cast<double>((e.position.x - b.getX()) / b.getWidth()));
+        const auto& half = activeOut ? join.out : join.in;
+        point.value = fromPresence(activeParam, (b.getBottom() - 3.0f - e.position.y) / (b.getHeight() - 6.0f),
+                                   half.has_value() && half->filter == "highPass");
+        editorFor(activeOut).setManual(activeParam, points);
+        return;
+    }
+    if (bendSegment >= 0 && bendSegment < static_cast<int>(points.size()))
+    {
+        // Up bends towards a fast start, down towards a slow one.
+        const float travel = (bendStartY - e.position.y) / 60.0f;
+        if (!bending && std::abs(bendStartY - e.position.y) < 3.0f) return;
+        bending = true;
+        auto& point = points[static_cast<size_t>(bendSegment)];
+        const double amount = juce::jlimit(0.0, 1.0, static_cast<double>(std::abs(travel)));
+        point.curve = amount < 0.05 ? "linear" : travel > 0.0f ? "fastStart" : "slowStart";
+        point.tension = amount * 2.0 - 1.0;
+        editorFor(activeOut).setManual(activeParam, points);
+    }
+}
+
+void TransitionEditor::mouseUp(const juce::MouseEvent& e)
+{
+    if (e.mods.isPopupMenu() && !bending && bendSegment >= 0)
+    {
+        const int segment = bendSegment;
+        juce::PopupMenu menu;
+        const auto points = activePoints();
+        const auto current = segment < static_cast<int>(points.size()) ? points[static_cast<size_t>(segment)].curve : juce::String();
+        const std::pair<const char*, const char*> shapes[] = {{"linear", "Linear"},
+                                                              {"smooth", "Smooth (S-curve)"},
+                                                              {"fastStart", "Fast start (in)"},
+                                                              {"slowStart", "Slow start (out)"},
+                                                              {"hold", "Hold, then step"}};
+        for (const auto& [id, name] : shapes)
+            menu.addItem(name, true, current == id, [this, segment, id = juce::String(id)]
+                         {
+                             auto next = activePoints();
+                             if (segment >= static_cast<int>(next.size())) return;
+                             next[static_cast<size_t>(segment)].curve = id;
+                             next[static_cast<size_t>(segment)].tension = 0.0;
+                             setActivePoints(next);
+                         });
+        menu.showMenuAsync(juce::PopupMenu::Options().withMousePosition());
+    }
+    dragIndex = -1;
+    bendSegment = -1;
+    bending = false;
+}
+
+void TransitionEditor::mouseDoubleClick(const juce::MouseEvent& e)
+{
+    if (activeParam.isEmpty()) return;
+    const int hit = pointAt(activeOut, activeParam, e.position);
+    auto points = activePoints();
+    if (hit < 0 || points.size() <= 2) return;
+    points.erase(points.begin() + hit);
+    setActivePoints(points);
 }
 
 void TransitionEditor::paint(juce::Graphics& g)
@@ -405,45 +711,75 @@ void TransitionEditor::paint(juce::Graphics& g)
     g.fillRect(area);
     g.setColour(colours::zinc700);
     g.drawRect(area, 1.0f);
-    // Bar lines across the window.
+    // The window's bars and beats: beats faint, bars brighter and numbered along the top.
     const double bars = windowBars();
+    const auto grid = band(true).withBottom(band(false).getBottom());
     if (bars > 0.0)
-        for (int b = 1; b < static_cast<int>(std::ceil(bars)); ++b)
-        {
-            const auto x = area.getX() + static_cast<float>(b / bars) * area.getWidth();
-            g.setColour(colours::zinc800);
-            g.drawVerticalLine(juce::roundToInt(x), area.getY(), area.getBottom());
-        }
-    // Each half's shapes: outgoing in the top half, incoming in the bottom half.
-    auto draw = [&](const std::optional<mix::Half>& half, bool outgoing, juce::Rectangle<float> band)
     {
+        const int beats = static_cast<int>(std::ceil(bars * 4.0));
+        g.setFont(uiFont(9.0f));
+        for (int beat = 0; beat <= beats; ++beat)
+        {
+            const double at = beat / (bars * 4.0);
+            if (at > 1.0) break;
+            const float x = grid.getX() + static_cast<float>(at) * grid.getWidth();
+            const bool bar = beat % 4 == 0;
+            g.setColour(bar ? colours::zinc600.withAlpha(0.7f) : colours::zinc800);
+            g.drawVerticalLine(juce::roundToInt(x), grid.getY(), grid.getBottom());
+            if (bar && beat / 4 < static_cast<int>(std::ceil(bars)))
+            {
+                g.setColour(colours::textFaint);
+                g.drawText(juce::String(beat / 4 + 1), juce::Rectangle<float>(x + 2.0f, area.getY() + 1.0f, 30.0f, 12.0f),
+                           juce::Justification::centredLeft);
+            }
+        }
+    }
+    g.setColour(colours::zinc800);
+    g.drawHorizontalLine(juce::roundToInt(band(false).getY() - 1.0f), area.getX(), area.getRight());
+    // Each half's shapes: outgoing in the top half, incoming in the bottom half.
+    auto draw = [&](const std::optional<mix::Half>& half, bool outgoing)
+    {
+        const auto b = band(outgoing);
         g.setColour(outgoing ? colours::amber400.withAlpha(0.6f) : colours::sky400.withAlpha(0.6f));
         g.setFont(uiFont(10.0f, true));
-        g.drawText(outgoing ? "OUT" : "IN", band.removeFromLeft(34.0f).toNearestInt(), juce::Justification::centredLeft);
+        g.drawText(outgoing ? "OUT" : "IN", juce::Rectangle<float>(area.getX() + 4.0f, b.getY(), 30.0f, b.getHeight()).toNearestInt(),
+                   juce::Justification::centredLeft);
         if (!half.has_value()) return;
-        float legendX = band.getX();
+        float legendX = b.getX();
         for (const auto& shape : mix::shapesFor(*half, outgoing))
         {
+            const bool drawn = !shape.shaped.empty();
+            const bool active = drawn && outgoing == activeOut && shape.param == activeParam;
             juce::Path path;
             for (size_t i = 0; i < shape.points.size(); ++i)
             {
-                const auto& [t, v] = shape.points[i];
-                const float x = band.getX() + static_cast<float>(t) * band.getWidth();
-                const float y = band.getBottom() - 3.0f - static_cast<float>(presence(shape.param, v)) * (band.getHeight() - 6.0f);
-                if (i == 0) path.startNewSubPath(x, y);
-                else path.lineTo(x, y);
+                const auto [t, v] = shape.points[i];
+                const auto p = toGraph(outgoing, shape.param, t, v);
+                if (i == 0) path.startNewSubPath(p);
+                else path.lineTo(p);
             }
-            g.setColour(colourFor(shape.param));
-            g.strokePath(path, juce::PathStrokeType(shape.param == "level" ? 2.0f : 1.4f));
-            g.setFont(uiFont(9.0f));
-            g.drawText(labelFor(shape.param), juce::Rectangle<float>(legendX, band.getY() + 1.0f, 44.0f, 12.0f), juce::Justification::centredLeft);
-            legendX += 46.0f;
+            const auto colour = colourFor(shape.param);
+            g.setColour(active || !drawn ? colour : colour.withAlpha(0.75f));
+            g.strokePath(path, juce::PathStrokeType(active ? 2.6f : shape.param == "level" ? 2.0f : 1.4f));
+            if (drawn)
+                for (const auto& point : shape.shaped)
+                {
+                    const auto p = toGraph(outgoing, shape.param, point.timeMs, point.value);
+                    const float r = active ? 4.5f : 3.0f;
+                    g.setColour(colours::zinc950);
+                    g.fillEllipse(p.x - r, p.y - r, r * 2.0f, r * 2.0f);
+                    g.setColour(colour);
+                    g.drawEllipse(p.x - r, p.y - r, r * 2.0f, r * 2.0f, active ? 1.8f : 1.2f);
+                }
+            g.setColour(colour);
+            g.setFont(uiFont(9.0f, drawn));
+            g.drawText(labelFor(shape.param) + (drawn ? "*" : ""), juce::Rectangle<float>(legendX, b.getY() + 1.0f, 48.0f, 12.0f),
+                       juce::Justification::centredLeft);
+            legendX += 50.0f;
         }
     };
-    auto top = area.reduced(4.0f);
-    auto bottom = top.removeFromBottom(top.getHeight() / 2.0f);
-    draw(join.out, true, top);
-    draw(join.in, false, bottom);
+    draw(join.out, true);
+    draw(join.in, false);
 }
 
 void TransitionEditor::resized()
@@ -452,8 +788,9 @@ void TransitionEditor::resized()
     heading.setBounds(area.removeFromTop(22));
     sub.setBounds(area.removeFromTop(28));
     area.removeFromTop(2);
-    area.removeFromTop(120); // the graph
-    area.removeFromTop(10);
+    area.removeFromTop(200); // the graph
+    hint.setBounds(area.removeFromTop(16));
+    area.removeFromTop(6);
     auto buttons = area.removeFromBottom(28);
     close.setBounds(buttons.removeFromRight(90));
     buttons.removeFromRight(6);

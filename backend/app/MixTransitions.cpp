@@ -245,6 +245,21 @@ void writeShape(TimelineActions& actions, const TrackModel& track, const Shape& 
         if (p.timeMs < start - kAnchorMs || p.timeMs > end + kRestoreMs) next.push_back(p);
     next.push_back({start - kAnchorMs, before});
     double lastTime = -1.0;
+    if (!shape.shaped.empty())
+    {
+        // Drawn by hand: its points as they are, with their segment shapes.
+        for (auto p : shape.shaped)
+        {
+            double time = start + juce::jlimit(0.0, 1.0, p.timeMs) * (end - start);
+            if (time <= lastTime) time = lastTime + 1.0;
+            p.timeMs = time;
+            next.push_back(p);
+            lastTime = time;
+        }
+        next.push_back({juce::jmax(end + kRestoreMs, lastTime + 1.0), after});
+        actions.setAutomation(track.id, shape.param, next);
+        return;
+    }
     for (const auto& [t, v] : shape.points)
     {
         double time = start + juce::jlimit(0.0, 1.0, t) * (end - start);
@@ -760,6 +775,25 @@ juce::var Half::toVar() const
     o->setProperty("killDb", killDb);
     o->setProperty("effect", effect);
     o->setProperty("extra", extraName(extra));
+    if (!manual.empty())
+    {
+        auto* drawn = new juce::DynamicObject();
+        for (const auto& [param, points] : manual)
+        {
+            juce::Array<juce::var> list;
+            for (const auto& p : points)
+            {
+                auto* point = new juce::DynamicObject();
+                point->setProperty("at", p.timeMs);
+                point->setProperty("value", p.value);
+                point->setProperty("curve", p.curve);
+                point->setProperty("tension", p.tension);
+                list.add(juce::var(point));
+            }
+            drawn->setProperty(param, list);
+        }
+        o->setProperty("manual", juce::var(drawn));
+    }
     return juce::var(o);
 }
 
@@ -781,6 +815,18 @@ Half Half::fromVar(const juce::var& v)
     h.killDb = juce::jlimit(-40.0, -3.0, num("killDb", h.killDb));
     h.effect = str("effect", h.effect);
     h.extra = extraFrom(str("extra", extraName(h.extra)));
+    if (const auto* drawn = v.getProperty("manual", {}).getDynamicObject())
+        for (const auto& [param, list] : drawn->getProperties())
+            if (const auto* points = list.getArray())
+            {
+                std::vector<automation::Point> curve;
+                for (const auto& p : *points)
+                    curve.push_back({juce::jlimit(0.0, 1.0, static_cast<double>(p.getProperty("at", 0.0))),
+                                     static_cast<double>(p.getProperty("value", 0.0)), p.getProperty("curve", "linear").toString(),
+                                     juce::jlimit(-1.0, 1.0, static_cast<double>(p.getProperty("tension", 0.0)))});
+                std::sort(curve.begin(), curve.end(), [](const auto& a, const auto& b) { return a.timeMs < b.timeMs; });
+                if (curve.size() >= 2) h.manual[param.toString()] = std::move(curve);
+            }
     return h;
 }
 
@@ -838,7 +884,56 @@ std::vector<Shape> shapesFor(const Half& h, bool outgoing)
             list.push_back({"bitCrusherRate", ramp(a, b, 1.0, 0.05)});
         }
     }
+    // Curves drawn by hand replace what the options write for their parameter.
+    for (const auto& [param, points] : h.manual)
+    {
+        if (points.size() < 2) continue;
+        list.erase(std::remove_if(list.begin(), list.end(), [&](const Shape& s) { return s.param == param; }), list.end());
+        Shape drawn{param, {}, points};
+        constexpr int kSamples = 64;
+        for (int i = 0; i <= kSamples; ++i)
+        {
+            const double t = static_cast<double>(i) / kSamples;
+            drawn.points.emplace_back(t, automation::valueAt(points, t, points.front().value));
+        }
+        list.push_back(std::move(drawn));
+    }
     return list;
+}
+
+std::vector<automation::Point> manualSeed(const Half& h, bool outgoing, const juce::String& param)
+{
+    auto plain = h;
+    plain.manual.erase(param);
+    for (const auto& shape : shapesFor(plain, outgoing))
+    {
+        if (shape.param != param || shape.points.size() < 2) continue;
+        std::vector<automation::Point> seed;
+        if (shape.points.size() <= 4)
+        {
+            // A step or a ramp: its points, a step held until it moves.
+            for (size_t i = 0; i < shape.points.size(); ++i)
+            {
+                const auto& [t, v] = shape.points[i];
+                const bool stepNext = i + 1 < shape.points.size() && std::abs(shape.points[i + 1].first - t) < 1.0e-9;
+                seed.push_back({juce::jlimit(0.0, 1.0, t + (i > 0 && std::abs(shape.points[i - 1].first - t) < 1.0e-9 ? 0.001 : 0.0)),
+                                v, stepNext ? "hold" : "linear", 0.0});
+            }
+        }
+        else
+        {
+            // A curve: its ends and middle, smoothly joined.
+            const auto& first = shape.points.front();
+            const auto& middle = shape.points[shape.points.size() / 2];
+            const auto& last = shape.points.back();
+            seed = {{first.first, first.second, "smooth", 0.0}, {middle.first, middle.second, "smooth", 0.0},
+                    {last.first, last.second, "linear", 0.0}};
+        }
+        return seed;
+    }
+    const double value = defaultFor(param);
+    const double a = juce::jlimit(0.0, 1.0, h.from), b = juce::jlimit(a, 1.0, h.to);
+    return {{a, value, "linear", 0.0}, {juce::jmax(b, a + 0.05), value, "linear", 0.0}};
 }
 
 Join joinForPreset(const juce::String& presetId)
