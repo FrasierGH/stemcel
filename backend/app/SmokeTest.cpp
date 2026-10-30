@@ -1,5 +1,7 @@
 #include "SmokeTest.h"
 
+#include "RekordboxBrowser.h"
+
 #include "Db.h"
 
 #include <algorithm>
@@ -253,6 +255,8 @@ void SmokeTest::addSteps()
                              report.add("open: " + snapshot.error);
                              return;
                          }
+                         rekordboxFixtureDb = juce::File(built.getProperty("masterDb", {}).toString());
+                         rekordboxFixturePassphrase = built.getProperty("passphrase", {}).toString();
                          const auto* track = snapshot.findTrack(built.getProperty("trackId", {}).toString());
                          if (snapshot.tracks.size() == 40 && !snapshot.playlists.empty() && track != nullptr
                              && juce::File(track->path) == audio && std::abs(track->bpm - 128.0) < 0.01)
@@ -281,6 +285,82 @@ void SmokeTest::addSteps()
                          }};
     importRekordbox.poll = true;
     steps.push_back(importRekordbox);
+
+    // rekordbox writes: playlist edits to the fixture library and to both libraries of a
+    // throwaway USB export, each database copied aside once before its first change.
+    steps.push_back({"rekordbox writes",
+                     [this]
+                     {
+                         if (rekordboxTrackId == "skipped")
+                         {
+                             rekordboxWritesOk = true;
+                             return;
+                         }
+                         auto& rb = sharedRekordbox();
+                         const auto backups = workDir.getChildFile("rekordbox-backups");
+                         backups.deleteRecursively();
+                         Rekordbox::setBackupFolderForTest(backups);
+                         auto fail = [this](const juce::String& what, const juce::var& result)
+                         { report.add("rekordbox writes: " + what + " " + juce::JSON::toString(result, true)); };
+                         auto ok = [](const juce::var& r) { return static_cast<bool>(r.getProperty("ok", false)); };
+                         auto ids = [](const juce::String& id)
+                         {
+                             juce::Array<juce::var> a;
+                             a.add(id);
+                             return juce::var(a);
+                         };
+
+                         // The fixture library is the one open (the step before imported from it).
+                         const auto made = rb.write(object({{"action", "createPlaylist"}, {"name", "Smoke list"}}));
+                         if (!ok(made)) return fail("create", made);
+                         const auto listId = made.getProperty("id", {}).toString();
+                         const auto added = rb.write(object({{"action", "addTracks"}, {"playlistId", listId}, {"trackIds", ids(rekordboxTrackId)}}));
+                         if (!ok(added) || static_cast<int>(added.getProperty("changed", 0)) != 1) return fail("add", added);
+                         const auto reread = rb.open(rekordboxFixtureDb, rekordboxFixturePassphrase);
+                         const auto* list = reread.findPlaylist(listId);
+                         if (list == nullptr || list->trackIds != juce::StringArray(rekordboxTrackId))
+                             return fail("reread", juce::var(reread.error));
+
+                         // A USB export: OneLibrary and Device Library, edited separately.
+                         const auto audio = workDir.getChildFile("Files").getChildFile("rekordbox track.wav");
+                         const auto stick = workDir.getChildFile("stick");
+                         stick.deleteRecursively();
+                         const auto built = rb.buildDeviceFixture(stick, audio);
+                         if (!ok(built)) return fail("device fixture", built);
+                         for (const auto* format : {"oneLibrary", "deviceLibrary"})
+                         {
+                             RekordboxSource source;
+                             source.kind = RekordboxSource::Kind::device;
+                             source.name = "Smoke stick";
+                             source.root = stick;
+                             source.format = format;
+                             const auto device = rb.open(source);
+                             if (!device.ok || device.tracks.size() != 1) return fail(juce::String("open ") + format, juce::var(device.error));
+                             const auto trackId = device.tracks.front().id;
+                             const auto edit = rb.write(object({{"action", "createPlaylist"}, {"name", "Stick edit"}}));
+                             if (!ok(edit)) return fail(juce::String("device create ") + format, edit);
+                             const auto editId = edit.getProperty("id", {}).toString();
+                             const auto put = rb.write(object({{"action", "addTracks"}, {"playlistId", editId}, {"trackIds", ids(trackId)}}));
+                             if (!ok(put)) return fail(juce::String("device add ") + format, put);
+                             const auto again = rb.open(source);
+                             const auto* edited = again.findPlaylist(editId);
+                             if (edited == nullptr || edited->name != "Stick edit" || edited->trackIds.size() != 1)
+                                 return fail(juce::String("device reread ") + format, juce::var(again.error));
+                         }
+
+                         // One backup per library: the fixture's master.db, and the stick's
+                         // export.pdb and exportLibrary.db together — not one per write.
+                         const auto taken = backups.findChildFiles(juce::File::findDirectories, false);
+                         int withFiles = 0;
+                         for (const auto& folder : taken)
+                             if (folder.getChildFile("master.db").existsAsFile()
+                                 || (folder.getChildFile("export.pdb").existsAsFile() && folder.getChildFile("exportLibrary.db").existsAsFile()))
+                                 ++withFiles;
+                         if (taken.size() != 2 || withFiles != 2)
+                             return fail("backups", juce::var(juce::String(taken.size()) + " folders, " + juce::String(withFiles) + " with files"));
+                         rekordboxWritesOk = true;
+                     },
+                     {}, [this](const juce::var&) { return rekordboxWritesOk; }});
 
     steps.push_back({"save as",
                      [this, projectFile]
@@ -1690,6 +1770,41 @@ void SmokeTest::addTempoJourney()
                    {},
                    [this](const juce::var&) { return workDir.getChildFile("transitions-panel.png").existsAsFile(); }};
     steps.push_back(panelShot);
+    // The rekordbox tab showing the smoke stick's OneLibrary (picked in the library list),
+    // with the playlist the writes step made there, for eyes.
+    Step rekordboxShot{"rekordbox panel snapshot",
+                       [this]
+                       {
+                           auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
+                           auto* panel = window != nullptr ? findDescendant<LibraryPanel>(window) : nullptr;
+                           if (panel == nullptr || rekordboxTrackId == "skipped") return;
+                           panel->showTab(2);
+                           if (auto* browser = findDescendant<RekordboxBrowser>(window))
+                           {
+                               RekordboxSource source;
+                               source.kind = RekordboxSource::Kind::device;
+                               source.name = "Smoke stick";
+                               source.root = workDir.getChildFile("stick");
+                               source.format = "oneLibrary";
+                               browser->chooseSource(source);
+                           }
+                       },
+                       {},
+                       [this](const juce::var&)
+                       {
+                           if (rekordboxTrackId == "skipped") return true;
+                           auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
+                           auto* browser = window != nullptr ? findDescendant<RekordboxBrowser>(window) : nullptr;
+                           const auto* shown = browser != nullptr ? browser->currentSnapshot() : nullptr;
+                           if (shown == nullptr || !shown->source.isDevice()) return false;
+                           const auto image = window->createComponentSnapshot(window->getLocalBounds());
+                           juce::FileOutputStream out(workDir.getChildFile("rekordbox-panel.png"));
+                           if (out.openedOk()) juce::PNGImageFormat().writeImageToStream(image, out);
+                           if (auto* panel = findDescendant<LibraryPanel>(window)) panel->showTab(0);
+                           return true;
+                       }};
+    rekordboxShot.poll = true;
+    steps.push_back(rekordboxShot);
     // Project tabs: copy a clip, open a new tab, paste it there (its library item comes too),
     // then go back to the first tab, which returns as it was, unsaved changes and all.
     steps.push_back({"tabs: new tab",

@@ -1,11 +1,13 @@
 #pragma once
 
 #include <juce_core/juce_core.h>
+#include <juce_events/juce_events.h>
 
 #include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <vector>
 
 namespace stemcel::native
@@ -35,10 +37,34 @@ struct RekordboxPlaylist
     bool isFolder() const { return kind == "folder"; }
 };
 
+// A library the rekordbox tab can show: this computer's, one rekordbox keeps on a drive,
+// or one of the two on a USB/SD export (rekordbox lists and edits those separately).
+struct RekordboxSource
+{
+    enum class Kind
+    {
+        computer,
+        drive,
+        device,
+    };
+    Kind kind = Kind::computer;
+    juce::String name;  // the drive's or device's name
+    juce::File masterDb; // drive: its master.db
+    juce::File root;     // device: where it is mounted
+    juce::String format; // device: "deviceLibrary" (export.pdb) or "oneLibrary" (exportLibrary.db)
+
+    juce::String key() const;
+    juce::String label() const;
+    bool isDevice() const { return kind == Kind::device; }
+};
+
 struct RekordboxSnapshot
 {
     bool ok = false;
     juce::String error;
+    RekordboxSource source;
+    // The database file (a device's export.pdb / exportLibrary.db), and where analysis
+    // paths are resolved from.
     juce::String masterDb, shareRoot;
     std::vector<RekordboxTrack> tracks;
     std::vector<RekordboxPlaylist> playlists;
@@ -106,6 +132,27 @@ class Rekordbox final
     // Opens the installed library (or `masterDb` with `passphrase`, for tests) and reads
     // the whole snapshot. Replaces any library already open.
     RekordboxSnapshot open(const juce::File& masterDb = {}, const juce::String& passphrase = {});
+    RekordboxSnapshot open(const RekordboxSource& source);
+    // This computer's library first, then libraries on drives and on connected USB/SD
+    // exports (each export's Device Library and OneLibrary as two entries). Slow-ish.
+    std::vector<RekordboxSource> listSources();
+
+    // Changes the open library: a JSON request as `rbx_write_json` documents
+    // (createPlaylist, rename, delete, addTracks, removeTracks, importFiles). Refused while
+    // rekordbox is running. Before the first write to a library in this app session its
+    // database files are copied to backupFolder() (a stick's two libraries together). Returns {ok, error?, id?, changed, …}; reopen
+    // the library to see the change.
+    juce::var write(const juce::var& request);
+    // Adds audio files to this computer's library (and to the playlist named `playlist`,
+    // made if missing), whatever library is open. Same refusal and backup as write().
+    juce::var addToComputerLibrary(const juce::Array<juce::File>& files, const juce::String& playlist);
+    // Where the database copies go: ~/Stemcel/Backups/rekordbox/<time> <library>/. The
+    // smoke test points it into its own folder.
+    static juce::File backupFolder();
+    static void setBackupFolderForTest(const juce::File& folder);
+    // Told (asynchronously) after any write, so a browser showing that library reloads.
+    juce::ChangeBroadcaster changed;
+    juce::String lastChangedKey() const;
     bool isOpen() const;
     RekordboxTrackDetail trackDetail(const juce::String& trackId);
 
@@ -118,16 +165,27 @@ class Rekordbox final
     // Smoke-test support: builds a throwaway fixture library in `dir` whose first track is
     // `audio` (128 BPM grid, first downbeat at 120 ms). {ok, masterDb, passphrase, trackId}.
     juce::var buildFixture(const juce::File& dir, const juce::File& audio);
+    // Smoke-test support: a throwaway USB export in `dir` holding `audio` in a playlist
+    // "Stick list". {ok, root, trackId, playlistId}.
+    juce::var buildDeviceFixture(const juce::File& dir, const juce::File& audio);
 
   private:
     struct Functions;
     juce::String callJson(const std::function<char*()>& call);
+    RekordboxSnapshot readSnapshot(RekordboxSource source);
+    // Refusal, backup, write against `target` (the open handle or a temporary one).
+    juce::var writeTo(void* target, const RekordboxSource& source, const juce::File& database, const juce::var& request);
+    bool backUp(const RekordboxSource& source, const juce::File& database, juce::String& error);
 
     juce::DynamicLibrary library;
     std::unique_ptr<Functions> functions;
     juce::String loadError;
     mutable std::mutex mutex;
     void* handle = nullptr;
+    RekordboxSource openSource;
+    juce::File openDatabase;
+    std::set<juce::String> backedUp; // libraries copied aside this session
+    juce::String changedKey;
 };
 
 // The app's one reader (the shared library is loaded once).

@@ -1,9 +1,13 @@
-//! Read-only rekordbox library access for Stemcel's native app, over a C ABI.
+//! rekordbox library access for Stemcel's native app, over a C ABI.
 //!
-//! The heavy lifting (SQLCipher `master.db`, the columnar index, ANLZ analysis files) is
-//! rbxport's; this crate only opens the library, flattens what an importer needs into
-//! JSON, and makes sure nothing panics across the boundary. Every string returned is
-//! owned by this library and must go back through `rbx_free_string`.
+//! The heavy lifting (SQLCipher `master.db`, the columnar index, ANLZ analysis files, the
+//! libraries on a USB or SD export) is rbxport's; this crate opens a library, flattens what
+//! an importer needs into JSON, applies the few edits the app offers, and makes sure nothing
+//! panics across the boundary. Every string returned is owned by this library and must go
+//! back through `rbx_free_string`.
+//!
+//! Writes are refused while rekordbox is running (rbxport's rule), and the app copies the
+//! database files aside before the first write of a session (see `Rekordbox.cpp`).
 
 use std::ffi::{c_char, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -11,14 +15,36 @@ use std::path::{Path, PathBuf};
 
 use rbl_anlz::Anlz;
 use rbl_db::{Library as Db, LibraryLocation, OpenMode};
+use rbl_export::device_library::{self, Edit, Format};
 use rbl_index::{Library, NO_ID};
 use serde_json::{json, Map, Value};
 
-/// An open library: the loaded index plus where its analysis files live.
+/// An open library.
 pub struct RbxLibrary {
-    index: Library,
-    master_db: PathBuf,
-    share_root: PathBuf,
+    source: Source,
+}
+
+enum Source {
+    /// A desktop `master.db` (the installed library, one kept on a drive, or a test
+    /// fixture), loaded into rbxport's index.
+    Desktop { index: Library, location: LibraryLocation },
+    /// One of the two libraries on a USB or SD export, which rekordbox edits separately.
+    Device { root: PathBuf, format: Format, library: device_library::Library },
+}
+
+fn format_name(format: Format) -> &'static str {
+    match format {
+        Format::DeviceLibrary => "deviceLibrary",
+        Format::OneLibrary => "oneLibrary",
+    }
+}
+
+fn parse_format(name: &str) -> Option<Format> {
+    match name {
+        "deviceLibrary" => Some(Format::DeviceLibrary),
+        "oneLibrary" => Some(Format::OneLibrary),
+        _ => None,
+    }
 }
 
 fn to_c(text: &str) -> *mut c_char {
@@ -52,9 +78,9 @@ unsafe fn opt_str<'a>(ptr: *const c_char) -> Option<&'a str> {
 // ---------------------------------------------------------------------------------------
 
 /// Opens a library read-only. With `master_db` null, the installed rekordbox library is
-/// detected (agent `options.json`, passphrase unwrapped); otherwise `master_db` is opened
-/// with `passphrase`, and its analysis files are looked for in `share/` beside it (the
-/// layout of rbxport's fixtures and of a copied library).
+/// detected (agent `options.json`, passphrase unwrapped). Otherwise `master_db` is opened
+/// with `passphrase`, or with rekordbox's own key when `passphrase` is null (a library kept
+/// on a drive), and its analysis files are looked for in `share/` beside it.
 ///
 /// Returns null on failure and, when `error_out` is non-null, stores an error message there
 /// (free it with `rbx_free_string`).
@@ -84,6 +110,14 @@ pub unsafe extern "C" fn rbx_open(
 fn open(master_db: Option<PathBuf>, passphrase: String) -> Result<RbxLibrary, String> {
     let db = match master_db {
         None => Db::open_installed_read_only().map_err(|e| e.to_string())?,
+        Some(master_db) if passphrase.is_empty() => {
+            // A library rekordbox keeps on a drive: its key is the installed one's, and it
+            // counts as a real library (writes wait for rekordbox to quit).
+            let location = rbl_db::locate::Sources::installed()
+                .and_then(|sources| sources.location_of(&master_db))
+                .map_err(|e| e.to_string())?;
+            Db::open(location, OpenMode::ReadOnly).map_err(|e| e.to_string())?
+        }
         Some(master_db) => {
             let share_root = master_db.parent().map_or_else(|| PathBuf::from("share"), |p| p.join("share"));
             let location = LibraryLocation { master_db, share_root, passphrase, is_real_install: false };
@@ -91,12 +125,38 @@ fn open(master_db: Option<PathBuf>, passphrase: String) -> Result<RbxLibrary, St
         }
     };
     let (index, _) = rbl_index::load(&db).map_err(|e| format!("reading the library failed: {e}"))?;
-    let location = db.location();
-    Ok(RbxLibrary {
-        index,
-        master_db: location.master_db.clone(),
-        share_root: location.share_root.clone(),
-    })
+    Ok(RbxLibrary { source: Source::Desktop { index, location: db.location().clone() } })
+}
+
+/// Opens one library on a USB or SD export mounted at `root`: `format` is `deviceLibrary`
+/// (`export.pdb`) or `oneLibrary` (`exportLibrary.db`). Null on failure, with the message
+/// in `error_out` as for `rbx_open`.
+///
+/// # Safety
+/// String arguments must be null or NUL-terminated; `error_out` null or writable.
+#[no_mangle]
+pub unsafe extern "C" fn rbx_open_device(
+    root: *const c_char,
+    format: *const c_char,
+    error_out: *mut *mut c_char,
+) -> *mut RbxLibrary {
+    let root = opt_str(root).map(PathBuf::from);
+    let format = opt_str(format).and_then(parse_format);
+    let result = catch_unwind(AssertUnwindSafe(|| match (root, format) {
+        (Some(root), Some(format)) => device_library::read(&root, format)
+            .map(|library| RbxLibrary { source: Source::Device { root, format, library } })
+            .map_err(|e| e.to_string()),
+        _ => Err("bad arguments".to_owned()),
+    }));
+    let message = match result {
+        Ok(Ok(library)) => return Box::into_raw(Box::new(library)),
+        Ok(Err(message)) => message,
+        Err(_) => "internal error while opening the device's library".to_owned(),
+    };
+    if !error_out.is_null() {
+        *error_out = to_c(&message);
+    }
+    std::ptr::null_mut()
 }
 
 /// # Safety
@@ -168,7 +228,13 @@ fn track_json(lib: &Library, row: usize) -> Value {
 }
 
 fn snapshot(library: &RbxLibrary) -> Value {
-    let lib = &library.index;
+    match &library.source {
+        Source::Desktop { index, location } => desktop_snapshot(index, location),
+        Source::Device { root, format, library } => device_snapshot(root, *format, library),
+    }
+}
+
+fn desktop_snapshot(lib: &Library, location: &LibraryLocation) -> Value {
     let tracks: Vec<Value> = (0..lib.len()).map(|row| track_json(lib, row)).collect();
 
     let playlists = lib.playlists();
@@ -204,8 +270,67 @@ fn snapshot(library: &RbxLibrary) -> Value {
 
     json!({
         "ok": true,
-        "masterDb": library.master_db.to_string_lossy(),
-        "shareRoot": library.share_root.to_string_lossy(),
+        "masterDb": location.master_db.to_string_lossy(),
+        "shareRoot": location.share_root.to_string_lossy(),
+        "tracks": tracks,
+        "playlists": lists,
+    })
+}
+
+/// A path the device's library spells volume-relative (`/Contents/...`), under `root`.
+fn on_device(root: &Path, relative: &str) -> PathBuf {
+    relative.split(['/', '\\']).filter(|part| !part.is_empty()).fold(root.to_path_buf(), |path, part| path.join(part))
+}
+
+fn device_track_json(root: &Path, t: &device_library::Track) -> Value {
+    json!({
+        "id": t.id.to_string(),
+        "title": t.title,
+        "artist": non_empty(&t.artist),
+        "album": non_empty(&t.album),
+        "genre": non_empty(&t.genre),
+        "label": non_empty(&t.label),
+        "key": non_empty(&t.key),
+        "bpm": if t.bpm_x100 > 0 { json!(f64::from(t.bpm_x100) / 100.0) } else { Value::Null },
+        "durationMs": u64::from(t.duration_sec) * 1000,
+        "rating": t.rating,
+        "colour": t.color,
+        "dateAdded": non_empty(&t.date_added),
+        "comment": non_empty(&t.comment),
+        "path": on_device(root, &t.path).to_string_lossy(),
+        "analysisPath": non_empty(&t.analysis_path),
+        "artworkPath": non_empty(&t.artwork_path),
+        "hotCues": "",
+    })
+}
+
+/// The device's database file, for the app to show and to back up beside.
+fn device_database(root: &Path, format: Format) -> PathBuf {
+    let export_root = rbl_export::export_root_name(root).unwrap_or("PIONEER");
+    root.join(export_root).join("rekordbox").join(format.file_name())
+}
+
+fn device_snapshot(root: &Path, format: Format, lib: &device_library::Library) -> Value {
+    let tracks: Vec<Value> = lib.tracks.iter().map(|t| device_track_json(root, t)).collect();
+    let lists: Vec<Value> = lib
+        .nodes
+        .iter()
+        .map(|n| {
+            json!({
+                "id": n.id.to_string(),
+                "name": n.name,
+                "parentId": if n.parent == 0 { Value::Null } else { Value::String(n.parent.to_string()) },
+                "seq": n.sequence,
+                "kind": if n.folder { "folder" } else { "playlist" },
+                "trackIds": n.tracks.iter().map(|id| Value::String(id.to_string())).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    json!({
+        "ok": true,
+        "masterDb": device_database(root, format).to_string_lossy(),
+        "shareRoot": root.to_string_lossy(),
+        "device": format_name(format),
         "tracks": tracks,
         "playlists": lists,
     })
@@ -226,11 +351,48 @@ pub unsafe extern "C" fn rbx_track_json(library: *const RbxLibrary, track_id: *c
     let Some(id) = opt_str(track_id).and_then(|s| s.parse::<u64>().ok()) else {
         return to_c(&error_json("bad track id"));
     };
-    guarded(|| track_detail(library, id).to_string())
+    guarded(|| match &library.source {
+        Source::Desktop { index, location } => track_detail(index, &location.share_root, id).to_string(),
+        Source::Device { root, library, .. } => device_track_detail(root, library, id).to_string(),
+    })
 }
 
-fn track_detail(library: &RbxLibrary, id: u64) -> Value {
-    let lib = &library.index;
+/// A device track's grid and phrases from its analysis files, and its cues from the
+/// extended cue lists there (a stick's databases keep no cue rows of their own).
+fn device_track_detail(root: &Path, lib: &device_library::Library, id: u64) -> Value {
+    let Some(track) = u32::try_from(id).ok().and_then(|id| lib.track(id)) else {
+        return json!({ "ok": false, "error": "no such track" });
+    };
+    let mut detail = analysis(root, &track.analysis_path);
+    let mut cues = Vec::new();
+    if !track.analysis_path.is_empty() {
+        let dat = rbl_anlz::resolve(root, &track.analysis_path);
+        if let Ok(ext) = Anlz::read(&rbl_anlz::sibling(&dat, "EXT")) {
+            for c in ext.cue_entries() {
+                let hot = (c.hot_cue > 0)
+                    .then(|| char::from_u32(u32::from(b'A') + c.hot_cue - 1))
+                    .flatten()
+                    .map(|l| l.to_string());
+                cues.push(json!({
+                    "positionMs": c.time_ms,
+                    "endMs": if c.kind == 2 && c.loop_time_ms > c.time_ms { json!(c.loop_time_ms) } else { Value::Null },
+                    "memory": hot.is_none(),
+                    "hot": hot,
+                    "colour": c.color_code.unwrap_or(c.color_id),
+                }));
+            }
+        }
+    }
+    if let Value::Object(map) = &mut detail {
+        map.insert("ok".into(), Value::Bool(true));
+        map.insert("id".into(), Value::String(id.to_string()));
+        map.insert("cues".into(), Value::Array(cues));
+        map.insert("track".into(), device_track_json(root, track));
+    }
+    detail
+}
+
+fn track_detail(lib: &Library, share_root: &Path, id: u64) -> Value {
     let Some(row) = lib.ids.iter().position(|&x| x == id) else { return json!({ "ok": false, "error": "no such track" }) };
     let r = u32::try_from(row).unwrap_or(u32::MAX);
 
@@ -249,7 +411,7 @@ fn track_detail(library: &RbxLibrary, id: u64) -> Value {
         })
         .collect();
 
-    let mut detail = analysis(&library.share_root, lib.analysis_path.get(row));
+    let mut detail = analysis(share_root, lib.analysis_path.get(row));
     if let Value::Object(map) = &mut detail {
         map.insert("ok".into(), Value::Bool(true));
         map.insert("id".into(), Value::String(id.to_string()));
@@ -486,6 +648,235 @@ fn decode_to_wav(path: &Path, out: &Path) -> Result<(), String> {
     std::fs::rename(&tmp, out).map_err(|e| e.to_string())
 }
 
+/// `{ok, masterDb, shareRoot}` of the open library without reading it all: the database
+/// file (a device's `export.pdb` or `exportLibrary.db`) the app backs up before writing.
+///
+/// # Safety
+/// `library` must be a live pointer from `rbx_open` or `rbx_open_device`.
+#[no_mangle]
+pub unsafe extern "C" fn rbx_location_json(library: *const RbxLibrary) -> *mut c_char {
+    let Some(library) = library.as_ref() else { return to_c(&error_json("no library")) };
+    guarded(|| {
+        let (database, share_root) = match &library.source {
+            Source::Desktop { location, .. } => (location.master_db.clone(), location.share_root.clone()),
+            Source::Device { root, format, .. } => (device_database(root, *format), root.clone()),
+        };
+        json!({ "ok": true, "masterDb": database.to_string_lossy(), "shareRoot": share_root.to_string_lossy() }).to_string()
+    })
+}
+
+// ---------------------------------------------------------------------------------------
+// Libraries on connected drives
+// ---------------------------------------------------------------------------------------
+
+/// What can be opened besides the installed library: `{ok, devices:[{name, root,
+/// removable, formats:["deviceLibrary"|"oneLibrary", …]}], driveLibraries:[{name, volume,
+/// masterDb}]}`. A device is listed only when it holds a rekordbox export; a library kept on
+/// a drive is left out when it is the one rekordbox is using (that is "this computer").
+#[no_mangle]
+pub extern "C" fn rbx_devices_json() -> *mut c_char {
+    guarded(|| devices().to_string())
+}
+
+fn devices() -> Value {
+    let devices: Vec<Value> = rbl_devices::list()
+        .into_iter()
+        .filter_map(|d| {
+            let formats: Vec<&str> = device_library::formats(&d.mount_point).into_iter().map(format_name).collect();
+            (!formats.is_empty()).then(|| {
+                json!({
+                    "name": d.name,
+                    "root": d.mount_point.to_string_lossy(),
+                    "removable": d.removable,
+                    "formats": formats,
+                })
+            })
+        })
+        .collect();
+    let installed = rbl_db::detect().ok().map(|location| location.master_db);
+    let drives: Vec<Value> = rbl_devices::libraries::discover()
+        .into_iter()
+        .filter(|l| installed.as_ref() != Some(&l.master_db))
+        .map(|l| {
+            json!({
+                "name": l.name,
+                "volume": l.volume.to_string_lossy(),
+                "masterDb": l.master_db.to_string_lossy(),
+            })
+        })
+        .collect();
+    json!({ "ok": true, "devices": devices, "driveLibraries": drives })
+}
+
+// ---------------------------------------------------------------------------------------
+// Writes
+// ---------------------------------------------------------------------------------------
+
+/// `{ok:true}` when the open library may be written now, else `{ok:false, error}`. A
+/// desktop library waits for rekordbox and its agent to quit; a device only for rekordbox
+/// itself (the agent leaves sticks alone).
+///
+/// # Safety
+/// `library` must be a live pointer from `rbx_open` or `rbx_open_device`.
+#[no_mangle]
+pub unsafe extern "C" fn rbx_write_refusal_json(library: *const RbxLibrary) -> *mut c_char {
+    let Some(library) = library.as_ref() else { return to_c(&error_json("no library")) };
+    guarded(|| match write_refusal(library) {
+        None => json!({ "ok": true }).to_string(),
+        Some(reason) => error_json(reason),
+    })
+}
+
+fn write_refusal(library: &RbxLibrary) -> Option<&'static str> {
+    match &library.source {
+        Source::Desktop { location, .. } if location.is_real_install && rbl_db::is_rekordbox_running() => {
+            Some("rekordbox is running. Quit rekordbox and its agent (rekordboxAgent, in the system tray or menu bar), then try again.")
+        }
+        Source::Device { .. } if rbl_db::is_rekordbox_app_running() => {
+            Some("rekordbox is running. Quit it before changing a device's library, then try again.")
+        }
+        _ => None,
+    }
+}
+
+/// Applies one edit, given as JSON, to the open library and returns `{ok, id?, changed}` or
+/// `{ok:false, error}`. The open snapshot is not updated: reopen the library to see it.
+///
+/// Actions: `createPlaylist {name, parentId?, folder?}`, `rename {id, name}`, `delete {id}`,
+/// `addTracks {playlistId, trackIds}`, `removeTracks {playlistId, trackIds}`, and, for a
+/// desktop library only, `importFiles {paths, playlistId? | playlist?}` (adds audio files
+/// to the collection, and to that playlist, or to the playlist of that name at the top
+/// level, made if missing).
+///
+/// The caller backs the database up first; this takes no backup of its own.
+///
+/// # Safety
+/// `library` must be a live pointer from `rbx_open` or `rbx_open_device`; `request`
+/// NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn rbx_write_json(library: *const RbxLibrary, request: *const c_char) -> *mut c_char {
+    let Some(library) = library.as_ref() else { return to_c(&error_json("no library")) };
+    let Some(request) = opt_str(request).and_then(|text| serde_json::from_str::<Value>(text).ok()) else {
+        return to_c(&error_json("bad request"));
+    };
+    guarded(|| {
+        if let Some(reason) = write_refusal(library) {
+            return error_json(reason);
+        }
+        let result = match &library.source {
+            Source::Desktop { location, .. } => desktop_write(location, &request),
+            Source::Device { root, format, .. } => device_write(root, *format, &request),
+        };
+        result.unwrap_or_else(|e| error_json(&e))
+    })
+}
+
+fn text<'a>(request: &'a Value, key: &str) -> Result<&'a str, String> {
+    request.get(key).and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| format!("missing {key}"))
+}
+
+fn id_list(request: &Value, key: &str) -> Vec<String> {
+    request
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|ids| ids.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
+        .unwrap_or_default()
+}
+
+fn desktop_write(location: &LibraryLocation, request: &Value) -> Result<String, String> {
+    use rbl_db::write::{ImportOutcome, Writer, ROOT};
+    let e = |e: rbl_db::DbError| e.to_string();
+    // The app copies the database files aside before a session's first write, so the
+    // writer's own snapshot backup is not taken as well.
+    let backups = std::env::temp_dir().join("stemcel-rekordbox-writer");
+    let mut writer = Writer::open(location.clone(), backups).map_err(e)?;
+    writer.disable_automatic_backups();
+
+    let reply = match text(request, "action")? {
+        "createPlaylist" => {
+            let name = text(request, "name")?;
+            let parent = request.get("parentId").and_then(Value::as_str).filter(|s| !s.is_empty()).unwrap_or(ROOT);
+            let folder = request.get("folder").and_then(Value::as_bool).unwrap_or(false);
+            let id = if folder { writer.create_folder(name, parent) } else { writer.create_playlist(name, parent) }.map_err(e)?;
+            json!({ "ok": true, "id": id, "changed": 1 })
+        }
+        "rename" => {
+            let changed = writer.rename(text(request, "id")?, text(request, "name")?).map_err(e)?;
+            json!({ "ok": true, "changed": changed.rows })
+        }
+        "delete" => {
+            let changed = writer.delete_playlist(text(request, "id")?).map_err(e)?;
+            json!({ "ok": true, "changed": changed.rows })
+        }
+        "addTracks" => {
+            let changed = writer.add_tracks(text(request, "playlistId")?, &id_list(request, "trackIds")).map_err(e)?;
+            json!({ "ok": true, "changed": changed.rows })
+        }
+        "removeTracks" => {
+            let changed = writer.remove_tracks(text(request, "playlistId")?, &id_list(request, "trackIds")).map_err(e)?;
+            json!({ "ok": true, "changed": changed.rows })
+        }
+        "importFiles" => {
+            let paths: Vec<PathBuf> = id_list(request, "paths").into_iter().map(PathBuf::from).collect();
+            let outcomes = writer.import_files(&paths).map_err(e)?;
+            let (mut ids, mut added, mut existing, mut refused) = (Vec::new(), 0, 0, Vec::new());
+            for (path, outcome) in paths.iter().zip(outcomes) {
+                match outcome {
+                    ImportOutcome::Added(id) => {
+                        added += 1;
+                        ids.push(id);
+                    }
+                    ImportOutcome::Existing(id) => {
+                        existing += 1;
+                        ids.push(id);
+                    }
+                    ImportOutcome::Refused(why) => refused.push(format!("{}: {why}", path.display())),
+                }
+            }
+            let named = request.get("playlist").and_then(Value::as_str).filter(|s| !s.is_empty());
+            let target = match request.get("playlistId").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+                Some(id) => Some(id.to_owned()),
+                None => match named {
+                    Some(name) => Some(match writer.child_named(ROOT, name).map_err(e)? {
+                        Some(id) => id,
+                        None => writer.create_playlist(name, ROOT).map_err(e)?,
+                    }),
+                    None => None,
+                },
+            };
+            if let (Some(id), false) = (&target, ids.is_empty()) {
+                writer.add_tracks(id, &ids).map_err(e)?;
+            }
+            let playlist = target.map_or(Value::Null, Value::String);
+            json!({ "ok": true, "added": added, "existing": existing, "refused": refused, "trackIds": ids, "id": playlist, "changed": added })
+        }
+        other => return Err(format!("unknown action {other}")),
+    };
+    Ok(reply.to_string())
+}
+
+fn device_write(root: &Path, format: Format, request: &Value) -> Result<String, String> {
+    let number = |key: &str| -> Result<u32, String> { text(request, key)?.parse::<u32>().map_err(|_| format!("bad {key}")) };
+    let numbers = |key: &str| -> Vec<u32> { id_list(request, key).iter().filter_map(|id| id.parse().ok()).collect() };
+    let edit = match text(request, "action")? {
+        "createPlaylist" => Edit::Create {
+            parent: request.get("parentId").and_then(Value::as_str).and_then(|id| id.parse().ok()).unwrap_or(0),
+            name: text(request, "name")?.to_owned(),
+            folder: request.get("folder").and_then(Value::as_bool).unwrap_or(false),
+        },
+        "rename" => Edit::Rename { id: number("id")?, name: text(request, "name")?.to_owned() },
+        "delete" => Edit::Delete { id: number("id")? },
+        "addTracks" => Edit::Add { playlist: number("playlistId")?, tracks: numbers("trackIds"), duplicates: false },
+        "removeTracks" => Edit::Remove { playlist: number("playlistId")?, tracks: numbers("trackIds") },
+        "importFiles" => {
+            return Err("New audio goes onto a device through a rekordbox export. Add the tracks to this computer's library, then export or sync them from rekordbox.".to_owned())
+        }
+        other => return Err(format!("unknown action {other}")),
+    };
+    let applied = device_library::apply(root, format, &edit).map_err(|e| e.to_string())?;
+    Ok(json!({ "ok": true, "id": applied.id.to_string(), "changed": applied.changed }).to_string())
+}
+
 // ---------------------------------------------------------------------------------------
 // Test support
 // ---------------------------------------------------------------------------------------
@@ -531,6 +922,46 @@ fn build_fixture(dir: &Path, audio: &str) -> Result<String, String> {
         "trackId": fixture::track_id(0),
     })
     .to_string())
+}
+
+/// Builds a throwaway USB export in `dir` (both libraries, written by rbxport's exporter)
+/// holding `audio` as one 128 BPM track in a playlist called "Stick list", for the smoke
+/// test's device picker and edits. Returns `{ok, root, trackId, playlistId}`.
+///
+/// # Safety
+/// Both paths must be NUL-terminated UTF-8.
+#[no_mangle]
+pub unsafe extern "C" fn rbx_build_device_fixture(dir: *const c_char, audio_path: *const c_char) -> *mut c_char {
+    let (Some(dir), Some(audio)) = (opt_str(dir), opt_str(audio_path)) else { return to_c(&error_json("bad arguments")) };
+    let (dir, audio) = (PathBuf::from(dir), PathBuf::from(audio));
+    guarded(|| build_device_fixture(&dir, &audio).unwrap_or_else(|e| error_json(&e)))
+}
+
+fn build_device_fixture(dir: &Path, audio: &Path) -> Result<String, String> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let beats: Vec<rbl_anlz::Beat> = (0..16u32)
+        .map(|i| rbl_anlz::Beat {
+            beat_number: u16::try_from(i % 4 + 1).unwrap_or(1),
+            tempo_x100: 12_800,
+            time_ms: 120 + i * 60_000 / 128,
+        })
+        .collect();
+    let track = rbl_export::SourceTrack {
+        id: 1,
+        source_path: audio.to_path_buf(),
+        title: "Stick Track".into(),
+        artist: "Stemcel".into(),
+        bpm_x100: 12_800,
+        duration_sec: 4,
+        analysis: vec![("DAT".into(), rbl_anlz::write::AnlzBuilder::new().beat_grid(&beats).finish())],
+        ..rbl_export::SourceTrack::default()
+    };
+    let playlist = rbl_export::SourcePlaylist { id: 10, name: "Stick list".into(), track_indices: vec![0], ..Default::default() };
+    rbl_export::export_full(dir, &[track], &[playlist], &[], None, None, &mut |_| {}).map_err(|e| e.to_string())?;
+    let library = device_library::read(dir, Format::OneLibrary).map_err(|e| e.to_string())?;
+    let track_id = library.tracks.first().map(|t| t.id.to_string()).unwrap_or_default();
+    let playlist_id = library.nodes.iter().find(|n| n.name == "Stick list").map(|n| n.id.to_string()).unwrap_or_default();
+    Ok(json!({ "ok": true, "root": dir.to_string_lossy(), "trackId": track_id, "playlistId": playlist_id }).to_string())
 }
 
 #[cfg(test)]

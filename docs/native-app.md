@@ -40,7 +40,8 @@ StemcelNative (one process)
 ├── backend/app/                UI: JUCE components, models mirrored from ProjectState
 │     └── EngineClient          in-process commands and events (no WebSocket, no JSON)
 ├── stemcel_backend_core      the engine and every bridge command handler (shared)
-└── stemcel_rekordbox (Rust)  rbxport's rbl-db / rbl-index / rbl-anlz, loaded at runtime
+└── stemcel_rekordbox (Rust)  rbxport's rbl-db / rbl-index / rbl-anlz / rbl-export /
+                              rbl-devices, loaded at runtime
 ```
 
 - **Same command layer.** UI actions send the bridge command types the renderer sends,
@@ -56,12 +57,35 @@ StemcelNative (one process)
 
 ## rekordbox
 
-The rekordbox tab reads the installed library live and read-only: the SQLCipher
-`master.db` (passphrase unwrapped from the rekordbox agent's `options.json`), the
-playlist tree, and per-track ANLZ analysis. Importing a track brings rekordbox's beat
-grid (tempo and first downbeat, applied as a manual tempo so the engine's own detection
-never overrides it) and key. `cargo run --release --example probe` in
-`backend/rekordbox_ffi` prints counts for the installed library without any track names.
+The rekordbox tab reads a library live: the SQLCipher `master.db` (passphrase unwrapped
+from the rekordbox agent's `options.json`), the playlist tree, and per-track ANLZ
+analysis. Importing a track brings rekordbox's beat grid (tempo and first downbeat,
+applied as a manual tempo so the engine's own detection never overrides it) and key.
+`cargo run --release --example probe` in `backend/rekordbox_ffi` prints counts for the
+installed library without any track names.
+
+**Which library.** The list above the playlist tree offers this computer's library, any
+library rekordbox keeps on a drive (`PIONEER/Master/master.db`), and every connected
+USB/SD drive holding a rekordbox export. An export lists its two libraries separately,
+as rekordbox does: **Device Library** (`export.pdb`, read by every player) and
+**OneLibrary** (`exportLibrary.db`, Device Library Plus). An edit to one leaves the other
+alone. Reload looks for drives again.
+
+**Changes.** Right-click a playlist or folder for New playlist, New folder, Rename and
+Delete (right-click empty space for new lists at the top), and tracks for Add to playlist
+and Remove from the playlist on show. On this computer's library (or a drive's), a
+playlist's menu also offers Add audio files, and the Library panel's **Add to rekordbox**
+puts the selected items into the collection and a "Stemcel" playlist (stems and samples
+are first copied out of the temporary media store to `~/Stemcel/rekordbox`). New audio
+does not go onto a USB export from here: rekordbox's export or sync does that.
+
+Every change is refused while rekordbox is running (and, for a computer or drive library,
+its agent too, which syncs it with the cloud). Before the first change to a library in a
+session, its database files are copied to `~/Stemcel/Backups/rekordbox/<time> <library>/`
+(`master.db` with its `-wal` and `-shm`; for a USB export, `export.pdb`, `exportExt.pdb`
+and `exportLibrary.db` together), with a README saying where they came from. To undo,
+quit rekordbox and copy them back. The playlist edits on an export go through rbxport's
+publication journal, so an interrupted edit is finished or rolled back on the next read.
 
 ## Stem separation
 

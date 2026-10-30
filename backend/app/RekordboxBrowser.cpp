@@ -9,8 +9,24 @@ namespace stemcel::native
 {
 namespace
 {
-// One library read per app run, shared by every workspace; Reload replaces it.
+// The library on show and its last read, shared by every workspace; Reload or a change
+// to it replaces the read.
+RekordboxSource currentSource;
 std::shared_ptr<const RekordboxSnapshot> cachedSnapshot;
+
+juce::var request(std::initializer_list<std::pair<const char*, juce::var>> fields)
+{
+    auto* o = new juce::DynamicObject();
+    for (const auto& [key, value] : fields) o->setProperty(key, value);
+    return juce::var(o);
+}
+
+juce::var idArray(const juce::StringArray& ids)
+{
+    juce::Array<juce::var> out;
+    for (const auto& id : ids) out.add(id);
+    return out;
+}
 
 // rekordbox's track colours (djmdColor order).
 juce::Colour trackColour(int index)
@@ -75,6 +91,11 @@ class RekordboxBrowser::PlaylistItem final : public juce::TreeViewItem
         if (isNowSelected) browser.showPlaylist(playlist == nullptr ? juce::String() : playlist->id);
     }
 
+    void itemClicked(const juce::MouseEvent& e) override
+    {
+        if (e.mods.isPopupMenu()) browser.showPlaylistMenu(playlist);
+    }
+
   private:
     RekordboxBrowser& browser;
     const RekordboxPlaylist* playlist;
@@ -82,9 +103,18 @@ class RekordboxBrowser::PlaylistItem final : public juce::TreeViewItem
 
 RekordboxBrowser::RekordboxBrowser(LibraryContext& context) : ctx(context)
 {
+    sourceBox.setTooltip("Which rekordbox library to show: this computer's, or one on a connected drive");
+    sourceBox.onChange = [this]
+    {
+        const int index = sourceBox.getSelectedItemIndex();
+        if (index >= 0 && index < static_cast<int>(sources.size())) chooseSource(sources[static_cast<size_t>(index)]);
+    };
+    addAndMakeVisible(sourceBox);
+
     tree.setRootItemVisible(false);
     tree.setColour(juce::TreeView::backgroundColourId, colours::zinc950);
     tree.setIndentSize(14);
+    tree.addMouseListener(this, true);
     addAndMakeVisible(tree);
 
     auto& header = table.getHeader();
@@ -109,10 +139,11 @@ RekordboxBrowser::RekordboxBrowser(LibraryContext& context) : ctx(context)
     filter.onTextChange = [this] { startTimer(150); };
     addAndMakeVisible(filter);
 
-    reloadButton.setTooltip("Read the rekordbox library again");
+    reloadButton.setTooltip("Read the rekordbox library again, and look for connected drives");
     reloadButton.onClick = [this]
     {
         cachedSnapshot.reset();
+        refreshSources();
         load();
     };
     importButton.setTooltip("Import the selected tracks with their beat grid and key");
@@ -125,7 +156,11 @@ RekordboxBrowser::RekordboxBrowser(LibraryContext& context) : ctx(context)
     addChildComponent(message);
 
     ctx.audition.addChangeListener(this);
+    ctx.rekordbox.changed.addChangeListener(this);
     setWantsKeyboardFocus(true);
+    sources = {currentSource};
+    sourceBox.addItem(currentSource.label(), 1);
+    sourceBox.setSelectedItemIndex(0, juce::dontSendNotification);
     if (cachedSnapshot != nullptr) applySnapshot(cachedSnapshot);
 }
 
@@ -134,12 +169,52 @@ RekordboxBrowser::~RekordboxBrowser()
     alive->store(false);
     pool.removeAllJobs(true, 60000);
     ctx.audition.removeChangeListener(this);
+    ctx.rekordbox.changed.removeChangeListener(this);
     tree.setRootItem(nullptr);
 }
 
 void RekordboxBrowser::visibilityChanged()
 {
-    if (isVisible() && snapshot == nullptr && !loading) load();
+    if (!isVisible()) return;
+    if (snapshot == nullptr && !loading) load();
+    if (sources.size() <= 1) refreshSources();
+}
+
+void RekordboxBrowser::refreshSources()
+{
+    if (!ctx.rekordbox.isAvailable()) return;
+    pool.addJob(
+        [this, alive = alive]
+        {
+            auto found = std::make_shared<std::vector<RekordboxSource>>(ctx.rekordbox.listSources());
+            juce::MessageManager::callAsync(
+                [this, alive, found]
+                {
+                    if (!alive->load()) return;
+                    sources = *found;
+                    // The library on show stays listed even when its drive has gone, until
+                    // another is picked.
+                    const auto current = currentSource.key();
+                    auto at = std::find_if(sources.begin(), sources.end(), [&](const auto& s) { return s.key() == current; });
+                    if (at == sources.end())
+                    {
+                        sources.push_back(currentSource);
+                        at = sources.end() - 1;
+                    }
+                    sourceBox.clear(juce::dontSendNotification);
+                    for (size_t i = 0; i < sources.size(); ++i) sourceBox.addItem(sources[i].label(), static_cast<int>(i) + 1);
+                    sourceBox.setSelectedItemIndex(static_cast<int>(at - sources.begin()), juce::dontSendNotification);
+                });
+        });
+}
+
+void RekordboxBrowser::chooseSource(const RekordboxSource& source)
+{
+    if (source.key() == currentSource.key() && cachedSnapshot != nullptr) return;
+    currentSource = source;
+    cachedSnapshot.reset();
+    playlistId = {};
+    load();
 }
 
 void RekordboxBrowser::load()
@@ -156,32 +231,44 @@ void RekordboxBrowser::load()
         return;
     }
     loading = true;
-    message.setText("Reading your rekordbox library...", juce::dontSendNotification);
+    message.setText(currentSource.kind == RekordboxSource::Kind::computer ? juce::String("Reading your rekordbox library...")
+                                                                          : "Reading " + currentSource.label() + "...",
+                    juce::dontSendNotification);
     message.setVisible(true);
     message.toFront(false);
     pool.addJob(
         [this, alive = alive]
         {
-            auto result = std::make_shared<RekordboxSnapshot>(ctx.rekordbox.open());
+            auto result = std::make_shared<RekordboxSnapshot>(ctx.rekordbox.open(currentSource));
             juce::MessageManager::callAsync(
                 [this, alive, result]
                 {
                     if (!alive->load()) return;
                     loading = false;
+                    if (result->source.key() != currentSource.key()) return; // another library was picked meanwhile
                     if (!result->ok)
                     {
-                        message.setText("Couldn't read the rekordbox library: " + result->error, juce::dontSendNotification);
+                        tree.setRootItem(nullptr);
+                        snapshot.reset();
+                        rebuildRows();
+                        message.setText("Couldn't read " + currentSource.label() + ": " + result->error, juce::dontSendNotification);
                         message.setVisible(true);
+                        if (auto then = std::exchange(afterReload, {})) then(lastWrite);
                         return;
                     }
                     cachedSnapshot = result;
                     applySnapshot(result);
+                    if (auto then = std::exchange(afterReload, {})) then(lastWrite);
                 });
         });
 }
 
 void RekordboxBrowser::applySnapshot(std::shared_ptr<const RekordboxSnapshot> next)
 {
+    // A reread of the same library keeps the folders open and the playlist on show.
+    const bool same = snapshot != nullptr && next != nullptr && snapshot->source.key() == next->source.key();
+    const auto openness = same ? tree.getOpennessState(true) : nullptr;
+    const auto keep = same ? playlistId : juce::String();
     tree.setRootItem(nullptr);
     snapshot = std::move(next);
     message.setVisible(false);
@@ -198,7 +285,24 @@ void RekordboxBrowser::applySnapshot(std::shared_ptr<const RekordboxSnapshot> ne
     treeRoot = std::move(holder);
     tree.setRootItem(treeRoot.get());
     treeRoot->setOpen(true);
-    all->setSelected(true, true);
+    if (openness != nullptr) tree.restoreOpennessState(*openness, true);
+    juce::TreeViewItem* select = all;
+    if (keep.isNotEmpty() && snapshot->findPlaylist(keep) != nullptr)
+    {
+        std::function<juce::TreeViewItem*(juce::TreeViewItem*)> find = [&](juce::TreeViewItem* item) -> juce::TreeViewItem*
+        {
+            for (int i = 0; i < item->getNumSubItems(); ++i)
+            {
+                auto* child = item->getSubItem(i);
+                if (child->getUniqueName() == keep) return child;
+                if (auto* found = find(child)) return found;
+            }
+            return nullptr;
+        };
+        if (auto* found = find(treeRoot.get())) select = found;
+    }
+    select->setSelected(true, true);
+    if (select != all) tree.scrollToKeepItemVisible(select);
 }
 
 void RekordboxBrowser::showPlaylist(const juce::String& id)
@@ -357,17 +461,9 @@ void RekordboxBrowser::cellClicked(int row, int column, const juce::MouseEvent& 
         ctx.audition.toggle(juce::File(t->path));
         return;
     }
-    if (e.mods.isPopupMenu())
-    {
-        if (!table.isRowSelected(row)) table.selectRow(row);
-        const auto path = t->path;
-        juce::PopupMenu menu;
-        menu.addItem("Import to library", [this] { ctx.importer.import(selectedRequests()); });
-        menu.addItem("Audition", [this, path] { ctx.audition.toggle(juce::File(path)); });
-        menu.addItem("Show file", [path] { juce::File(path).revealToUser(); });
-        menu.showMenuAsync(juce::PopupMenu::Options().withMousePosition());
-    }
+    if (e.mods.isPopupMenu()) showTrackMenu(row);
 }
+
 
 void RekordboxBrowser::cellDoubleClicked(int, int, const juce::MouseEvent&)
 {
@@ -389,9 +485,235 @@ bool RekordboxBrowser::keyPressed(const juce::KeyPress& k)
     return false;
 }
 
-void RekordboxBrowser::changeListenerCallback(juce::ChangeBroadcaster*)
+void RekordboxBrowser::changeListenerCallback(juce::ChangeBroadcaster* source)
 {
+    if (source == &ctx.rekordbox.changed)
+    {
+        // A write to the library on show (from here, another workspace or the Library
+        // panel's "Add to rekordbox"): read it again.
+        if (ctx.rekordbox.lastChangedKey() == currentSource.key() && !loading)
+        {
+            cachedSnapshot.reset();
+            load();
+        }
+        return;
+    }
     table.repaint();
+}
+
+juce::StringArray RekordboxBrowser::selectedTrackIds() const
+{
+    juce::StringArray ids;
+    for (int i = 0; i < table.getNumSelectedRows(); ++i)
+        if (const auto* t = trackAt(table.getSelectedRow(i))) ids.add(t->id);
+    return ids;
+}
+
+void RekordboxBrowser::runWrite(const juce::var& change, const juce::String& done, std::function<void(const juce::var&)> then)
+{
+    pool.addJob(
+        [this, alive = alive, change, done, then]
+        {
+            const auto result = ctx.rekordbox.write(change);
+            juce::MessageManager::callAsync(
+                [this, alive, result, done, then]
+                {
+                    if (!alive->load()) return;
+                    if (!static_cast<bool>(result.getProperty("ok", false)))
+                    {
+                        if (ctx.notify) ctx.notify(result.getProperty("error", "rekordbox refused the change").toString(), true);
+                        if (then) then(result);
+                        return;
+                    }
+                    if (ctx.notify && done.isNotEmpty()) ctx.notify(done, false);
+                    // Rekordbox::changed has the library read again (or this does, if it
+                    // hasn't yet); `then` runs once it has been.
+                    lastWrite = result;
+                    afterReload = then;
+                    if (!loading)
+                    {
+                        cachedSnapshot.reset();
+                        load();
+                    }
+                });
+        });
+}
+
+void RekordboxBrowser::writeForTest(const juce::var& change, std::function<void(const juce::var&)> done)
+{
+    runWrite(change, {}, std::move(done));
+}
+
+void RekordboxBrowser::askForName(const juce::String& title, const juce::String& initial, std::function<void(const juce::String&)> then)
+{
+    auto* window = new juce::AlertWindow(title, {}, juce::MessageBoxIconType::NoIcon);
+    window->addTextEditor("name", initial);
+    window->addButton("OK", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    window->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+    window->enterModalState(true, juce::ModalCallbackFunction::create(
+                                      [window, then](int result)
+                                      {
+                                          const auto name = window->getTextEditorContents("name").trim();
+                                          if (result == 1 && name.isNotEmpty()) then(name);
+                                      }),
+                            true);
+}
+
+void RekordboxBrowser::createPlaylist(const juce::String& parentId, bool folder)
+{
+    askForName(folder ? "New folder" : "New playlist", folder ? "New Folder" : "New Playlist",
+               [this, parentId, folder](const juce::String& name)
+               {
+                   runWrite(request({{"action", "createPlaylist"},
+                                     {"name", name},
+                                     {"parentId", parentId.isEmpty() ? juce::var() : juce::var(parentId)},
+                                     {"folder", folder}}),
+                            "Made " + juce::String(folder ? "folder" : "playlist") + " \"" + name + "\" in " + currentSource.label());
+               });
+}
+
+void RekordboxBrowser::renamePlaylist(const RekordboxPlaylist& playlist)
+{
+    const auto id = playlist.id;
+    askForName("Rename", playlist.name,
+               [this, id](const juce::String& name)
+               { runWrite(request({{"action", "rename"}, {"id", id}, {"name", name}}), "Renamed to \"" + name + "\""); });
+}
+
+void RekordboxBrowser::deletePlaylist(const RekordboxPlaylist& playlist)
+{
+    const auto id = playlist.id;
+    const auto name = playlist.name;
+    const auto what = playlist.isFolder() ? juce::String("the folder \"") + name + "\" and everything in it"
+                                          : juce::String("the playlist \"") + name + "\"";
+    juce::AlertWindow::showAsync(juce::MessageBoxOptions()
+                                     .withIconType(juce::MessageBoxIconType::WarningIcon)
+                                     .withTitle("Delete from " + currentSource.label())
+                                     .withMessage("Delete " + what + "? The tracks stay in the library.")
+                                     .withButton("Delete")
+                                     .withButton("Cancel")
+                                     .withAssociatedComponent(this),
+                                 [this, id, name, alive = alive](int result)
+                                 {
+                                     if (result == 1 && alive->load())
+                                         runWrite(request({{"action", "delete"}, {"id", id}}), "Deleted \"" + name + "\"");
+                                 });
+}
+
+void RekordboxBrowser::addFilesToPlaylist(const juce::String& targetId)
+{
+    chooser = std::make_unique<juce::FileChooser>("Add audio files to " + currentSource.label(), juce::File(),
+                                                  "*.wav;*.aif;*.aiff;*.mp3;*.m4a;*.aac;*.flac;*.alac;*.ogg");
+    chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles
+                             | juce::FileBrowserComponent::canSelectMultipleItems,
+                         [this, targetId](const juce::FileChooser& fc)
+                         {
+                             juce::StringArray paths;
+                             for (const auto& f : fc.getResults()) paths.add(f.getFullPathName());
+                             if (paths.isEmpty()) return;
+                             runWrite(request({{"action", "importFiles"}, {"paths", idArray(paths)}, {"playlistId", targetId}}),
+                                      {},
+                                      [this](const juce::var& result)
+                                      {
+                                          if (!static_cast<bool>(result.getProperty("ok", false)) || !ctx.notify) return;
+                                          const int added = result.getProperty("added", 0);
+                                          const int existing = result.getProperty("existing", 0);
+                                          const auto* refused = result.getProperty("refused", {}).getArray();
+                                          juce::String text = "Added " + juce::String(added) + " file(s) to " + currentSource.label();
+                                          if (existing > 0) text << " (" << existing << " already there)";
+                                          if (refused != nullptr && !refused->isEmpty())
+                                              text << "; skipped " << refused->size() << ": " << (*refused)[0].toString();
+                                          ctx.notify(text, refused != nullptr && !refused->isEmpty());
+                                      });
+                         });
+}
+
+void RekordboxBrowser::showPlaylistMenu(const RekordboxPlaylist* playlist)
+{
+    if (snapshot == nullptr) return;
+    const bool device = currentSource.isDevice();
+    juce::PopupMenu menu;
+    // New lists go inside a folder, or beside a playlist (rekordbox's own menus).
+    const auto parentId = playlist == nullptr ? juce::String() : playlist->isFolder() ? playlist->id : playlist->parentId;
+    menu.addItem("New playlist", [this, parentId] { createPlaylist(parentId, false); });
+    menu.addItem("New folder", [this, parentId] { createPlaylist(parentId, true); });
+    if (playlist != nullptr)
+    {
+        const auto list = *playlist;
+        menu.addSeparator();
+        if (!device && list.kind == "playlist")
+            menu.addItem("Add audio files...", [this, id = list.id] { addFilesToPlaylist(id); });
+        menu.addItem("Rename...", [this, list] { renamePlaylist(list); });
+        menu.addItem("Delete...", [this, list] { deletePlaylist(list); });
+    }
+    menu.addSeparator();
+    menu.addItem("Show backups", [] { Rekordbox::backupFolder().createDirectory(); Rekordbox::backupFolder().revealToUser(); });
+    menu.showMenuAsync(juce::PopupMenu::Options().withMousePosition());
+}
+
+void RekordboxBrowser::addPlaylistTargets(juce::PopupMenu& menu, const juce::String& parentId)
+{
+    for (const auto* list : snapshot->childrenOf(parentId))
+    {
+        if (list->isFolder())
+        {
+            juce::PopupMenu sub;
+            addPlaylistTargets(sub, list->id);
+            if (sub.getNumItems() > 0) menu.addSubMenu(list->name, sub);
+        }
+        else if (list->kind == "playlist")
+        {
+            const auto id = list->id;
+            const auto name = list->name;
+            menu.addItem(name,
+                         [this, id, name]
+                         {
+                             const auto ids = selectedTrackIds();
+                             runWrite(request({{"action", "addTracks"}, {"playlistId", id}, {"trackIds", idArray(ids)}}),
+                                      "Added " + juce::String(ids.size()) + " track(s) to \"" + name + "\"");
+                         });
+        }
+    }
+}
+
+void RekordboxBrowser::showTrackMenu(int row)
+{
+    const auto* t = trackAt(row);
+    if (t == nullptr) return;
+    if (!table.isRowSelected(row)) table.selectRow(row);
+    const auto path = t->path;
+    juce::PopupMenu menu;
+    menu.addItem("Import to library", [this] { ctx.importer.import(selectedRequests()); });
+    menu.addItem("Audition", [this, path] { ctx.audition.toggle(juce::File(path)); });
+    menu.addItem("Show file", [path] { juce::File(path).revealToUser(); });
+    if (snapshot != nullptr)
+    {
+        menu.addSeparator();
+        juce::PopupMenu targets;
+        addPlaylistTargets(targets, {});
+        menu.addSubMenu("Add to playlist", targets, targets.getNumItems() > 0);
+        if (const auto* list = snapshot->findPlaylist(playlistId); list != nullptr && list->kind == "playlist")
+        {
+            const auto id = list->id;
+            const auto name = list->name;
+            menu.addItem("Remove from \"" + name + "\"",
+                         [this, id, name]
+                         {
+                             const auto ids = selectedTrackIds();
+                             runWrite(request({{"action", "removeTracks"}, {"playlistId", id}, {"trackIds", idArray(ids)}}),
+                                      "Took " + juce::String(ids.size()) + " track(s) out of \"" + name + "\"");
+                         });
+        }
+    }
+    menu.showMenuAsync(juce::PopupMenu::Options().withMousePosition());
+}
+
+void RekordboxBrowser::mouseUp(const juce::MouseEvent& e)
+{
+    // Right-click in the tree's empty space: new lists at the top level.
+    if (!e.mods.isPopupMenu() || snapshot == nullptr || e.eventComponent == nullptr) return;
+    if (e.eventComponent != &tree && !tree.isParentOf(e.eventComponent)) return;
+    if (tree.getItemAt(e.getEventRelativeTo(&tree).getPosition().y) == nullptr) showPlaylistMenu(nullptr);
 }
 
 void RekordboxBrowser::paint(juce::Graphics& g)
@@ -403,6 +725,7 @@ void RekordboxBrowser::resized()
 {
     auto area = getLocalBounds();
     auto left = area.removeFromLeft(juce::jmin(260, area.getWidth() / 3));
+    sourceBox.setBounds(left.removeFromTop(26).reduced(0, 2));
     tree.setBounds(left);
     area.removeFromLeft(4);
     auto top = area.removeFromTop(26).reduced(0, 2);

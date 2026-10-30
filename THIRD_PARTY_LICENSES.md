@@ -155,6 +155,34 @@ SOFTWARE.
   process boundary. Per the LGPL, the unmodified upstream source is available
   from the project links above.
 
+## rekordbox reader (Rust, `backend/rekordbox_ffi`)
+
+### rbxport — © Chris Le and contributors
+
+- **Licence**: GPL-2.0-or-later.
+- **Source**: <https://github.com/chrisle/rbxport>, pinned by git revision in
+  `backend/rekordbox_ffi/Cargo.toml`.
+- **Notice**: The crates `rbl-db`, `rbl-index`, `rbl-anlz`, `rbl-export` and
+  `rbl-devices` are built, unmodified, into the `stemcel_rekordbox` library
+  the app loads at runtime: they read a rekordbox library (SQLCipher
+  `master.db`, ANLZ analysis files, a USB export's `export.pdb` and
+  `exportLibrary.db`) and apply its playlist edits. As with MiniBPM, the
+  **or later** clause lets the code be taken under GPL-3.0, which AGPL-3.0 §13
+  permits combining with.
+
+### LAME (through the `mp3lame-encoder` crate) — © The LAME Project
+
+- **Licence**: LGPL-2.1-or-later (LAME); MIT or Apache-2.0 (the Rust bindings).
+- **Notice**: rbxport's export crate links LAME statically into
+  `stemcel_rekordbox`. Stemcel does not use its encoder; it is linked because
+  the export crate depends on it. Stemcel's complete source, including this
+  library's, is published under the AGPL, so the LGPL's requirement that the
+  combined work can be rebuilt against a modified LAME is met.
+
+Their other Rust dependencies (SQLCipher with a vendored OpenSSL, symphonia,
+lofty, serde and so on) are under permissive or Apache-2.0 licences; `cargo
+license` in `backend/rekordbox_ffi` lists them.
+
 ## Frontend (Electron + Vue)
 
 ### Electron, Chromium, Node.js

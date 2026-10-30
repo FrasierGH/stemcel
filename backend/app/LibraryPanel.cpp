@@ -742,6 +742,74 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
         return juce::File::getSpecialLocation(juce::File::userHomeDirectory).getChildFile(appFolderName()).getChildFile("Sample Library");
     }
 
+    // The selected files into this computer's rekordbox collection and its "Stemcel"
+    // playlist (Rekordbox::addToComputerLibrary: refused while rekordbox runs, and the
+    // database is backed up before the session's first change).
+    void addToRekordbox()
+    {
+        const auto lasting = juce::File::getSpecialLocation(juce::File::userHomeDirectory)
+                                 .getChildFile(appFolderName())
+                                 .getChildFile("rekordbox");
+        juce::Array<juce::File> files;
+        for (const auto& id : selection)
+        {
+            const auto* item = ctx.mirror.model().findLibraryItem(id);
+            if (item == nullptr || item->kind == "clip") continue;
+            // The file as imported, not a WAV made to play it.
+            juce::File file(item->filePath);
+            if (!file.existsAsFile()) file = juce::File(item->audioPath());
+            if (!file.existsAsFile()) continue;
+            // Stems and samples Stemcel made live in its temporary media store, which rekordbox
+            // would lose track of: they're copied somewhere lasting first.
+            if (file.isAChildOf(systemTempDirectory()))
+            {
+                lasting.createDirectory();
+                const auto base = juce::File::createLegalFileName(displayTitle(*item));
+                auto target = lasting.getChildFile(base + file.getFileExtension());
+                for (int n = 2; target.exists(); ++n) target = lasting.getChildFile(base + " " + juce::String(n) + file.getFileExtension());
+                if (!file.copyFileTo(target))
+                {
+                    if (ctx.notify) ctx.notify("Couldn't copy " + displayTitle(*item) + " to " + lasting.getFullPathName(), true);
+                    continue;
+                }
+                file = target;
+            }
+            files.add(file);
+        }
+        if (files.isEmpty())
+        {
+            if (ctx.notify) ctx.notify("None of the selected items has an audio file to add to rekordbox", true);
+            return;
+        }
+        if (ctx.notify) ctx.notify("Adding " + juce::String(files.size()) + " file(s) to rekordbox...", false);
+        auto notify = ctx.notify;
+        auto& rekordbox = ctx.rekordbox;
+        juce::Component::SafePointer<juce::Component> self(this);
+        juce::Thread::launch(
+            [files, notify, self, &rekordbox]
+            {
+                const auto result = rekordbox.addToComputerLibrary(files, "Stemcel");
+                juce::MessageManager::callAsync(
+                    [result, notify, self]
+                    {
+                        if (self == nullptr || !notify) return;
+                        if (!static_cast<bool>(result.getProperty("ok", false)))
+                        {
+                            notify("rekordbox: " + result.getProperty("error", "the change was refused").toString(), true);
+                            return;
+                        }
+                        const int added = result.getProperty("added", 0);
+                        const int existing = result.getProperty("existing", 0);
+                        const auto* refused = result.getProperty("refused", {}).getArray();
+                        juce::String text = "Added " + juce::String(added) + " file(s) to rekordbox's \"Stemcel\" playlist";
+                        if (existing > 0) text << " (" << existing << " already in the collection)";
+                        if (refused != nullptr && !refused->isEmpty())
+                            text << "; skipped " << refused->size() << ": " << (*refused)[0].toString();
+                        notify(text, refused != nullptr && !refused->isEmpty());
+                    });
+            });
+    }
+
     void saveToSampleLibrary(const juce::String& itemId)
     {
         const auto* item = ctx.mirror.model().findLibraryItem(itemId);
@@ -843,6 +911,8 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
         if (item->kind == "stem" || item->kind == "sample")
             menu.addItem("Save to Sample Library", [this, id] { saveToSampleLibrary(id); });
         if (isFile) menu.addItem("Reanalyse File", [this, id] { reanalyse(id); });
+        if (isFile)
+            menu.addItem("Add to rekordbox", ctx.rekordbox.isAvailable(), false, [this] { addToRekordbox(); });
         if (item->kind == "source" || item->kind == "sample")
             menu.addItem("Separate Stems", ctx.separateStems != nullptr, false, [this, id] { if (ctx.separateStems) ctx.separateStems(id); });
         else if (isClip)

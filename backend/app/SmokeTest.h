@@ -101,6 +101,9 @@ class SmokeTest final : private juce::Timer
     juce::String rightClipId;
     juce::String importedId;
     juce::String rekordboxTrackId;
+    bool rekordboxWritesOk = false;
+    juce::File rekordboxFixtureDb;
+    juce::String rekordboxFixturePassphrase;
     juce::String rekordboxItemId;
     bool polling = false;
     double expectedMixSeconds = 0.0;
