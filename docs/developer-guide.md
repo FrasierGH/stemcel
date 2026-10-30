@@ -130,11 +130,9 @@ backend/                 JUCE audio engine + WebSocket bridge (C++17, CMake)
                          keep-alive. AudioEngine, BusGraph and OffsetSource each
                          use focused implementation units for their hot paths.
     dsp/                 Per-track DSP, shared Reverb / Delay, BPM + loudness,
-                         waveform peaks, automation snapshots and per-stem
-                         cleanup enhancers. Shared helpers centralise smoothing
-                         and BPM analysis.
-    stems/               ONNX stem-separation orchestration (RoFormer + htdemucs
-                         backup, GPU→CPU fallback); invokes the enhancers in dsp/
+                         waveform peaks, automation snapshots and the recording
+                         denoiser. Shared helpers centralise smoothing and BPM
+                         analysis.
     mixdown/             Offline render + export / normalise / dither on the
                          same canonical chain as playback
     project/             juce::ValueTree state + UndoManager, .stemcel save /
@@ -1675,7 +1673,7 @@ the new location. Starting a New project (`handleProjectNew`) also purges the te
 since a new project abandons any unsaved artifacts. The artifact base directories are chosen
 by a single backend helper, `projectArtifactsBaseDir(projectPath, subdir)` —
 `<projectDir>/<subdir>` when saved, else `<temp>/Stemcel/<subdir>` — so stems
-(`StemSeparationCommands`) and samples (`SampleExport`) share the same temp-vs-project
+(the native app's UVR runs) and samples (`SampleExport`) share the same temp-vs-project
 decision and no path is passed over the bridge.
 
 **Missing files** — on every `tracksAsJson` / `libraryAsJson` call, the backend resolves
@@ -2833,304 +2831,14 @@ The OS busy cursor stays in its `progress` state through these stages.
 
 ## Stem separation
 
-Stem separation splits a track into **vocals, drums, bass and other**. The
-primary engine is a pair of optional MIT-licensed **RoFormer quality models** — a
-Mel-Band RoFormer for vocals and a 4-stem BS-RoFormer for drums/bass (see below)
-— which are downloaded once and then used automatically. The MIT-licensed
-`htdemucs-ft` ONNX export (a "bag" of four specialist models, one per source, run
-through ONNX Runtime in the backend, `OnnxStemSeparator.cpp`) is the **backup**:
-it is used per stem only when that stem's quality model isn't installed (or the
-user forces the backup via `stems.useBackupModel`, or a partial selection
-includes `other` without the full four-stem set). On first use the default
-download fetches the two RoFormer quality packs, not htdemucs; the backup is
-fetched on demand only when a run actually needs it. ONNX Runtime is
-fetched and bundled via CMake (`onnxruntime.dll` ships beside the backend); the
-model weights (htdemucs ~1.2 GB; the quality packs ~1 GB together) are **not**
-shipped — the Electron main process (`src/main/stems/`, pinned manifests + a
-dependency-injected `ModelStore`) downloads them on demand, verifies each file's
-SHA-256 + size, and commits atomically. The native app does not use these models: it separates stems with UVR's models through
-audio-separator (`docs/native-app.md`, "Stem separation").
-
-A fully pack-covered run needs no htdemucs weights on disk at all: the backend
-only validates the htdemucs files for stems it will actually produce with the
-backup, and `other` is the residual `mixture − (vocals + drums + bass)` whenever
-all four stems are produced.
-
-Each htdemucs specialist model processes fixed 7.8 s stereo segments with a
-quality-selectable overlap (**Fast / Balanced / Best** → 0.10 / 0.25 / 0.50,
-sent as `quality` on `STEM_SEPARATE`) and triangular-window weighted overlap-add;
-the same preset overlap now also drives the RoFormer packs' chunk stride, so the
-Fast/Balanced/Best knob is a real speed/quality control on either engine.
-"Best" also applies **vocal test-time augmentation** (the demucs `shifts` trick,
-4 deterministic time-shifts averaged — vocals only, so ~2× cost) to cut the
-"watery"/phase artefacts. When all four stems are requested the `other` model run
-is skipped and `other = mixture − (vocals + drums + bass)` is synthesised instead
-— a mixture-consistency residual that is faster and loses no energy. Separation
-runs on a background thread and never touches the audio callback; progress is
-reported via `STEM_PROGRESS` at most every 100 ms while stage changes and the
-terminal update pass through immediately. Each stem lands as soon as its WAV is
-written (`STEM_PARTIAL`), and `STEM_READY` waits for in-flight imports before
-backfilling the rest and reporting completion. The renderer opens the preparing
-state before resolving request settings, reads the stem preferences once for
-dispatch, and resolves independent model paths and GPU status concurrently.
-Generated-stem envelopes include their sample rate, duration, and channel count.
-The import path still decodes each WAV for waveform peaks, but uses that
-authoritative geometry and the source's cached project media to skip file
-metadata extraction, sample-rate probing, musical-key detection, playback-path
-resolution, and repeated project-media reads.
-
-**The Separate Stems dialog** lets the user tick which of **vocals / drums / bass /
-other** to extract. It opens with **nothing ticked** (Start stays disabled until at
-least one stem is chosen), so a run processes only the parts the user picks rather
-than making them un-tick from a full set — and each un-picked stem proportionally
-shortens the run.
-
-**Optional vocal cleanup** (opt-in, vocals only) runs after separation and is
-**model-aware**. For an **htdemucs** vocal it runs the full chain: a cross-stem
-**de-bleed** (`VocalDebleeder`, a conservative STFT Wiener soft mask using
-`instrumental = mixture − vocal` as the interferer reference) removes pitched
-instrument bleed the broadband denoiser can't, then RNNoise + a sub-bass
-high-pass/expander. For the high-SDR **RoFormer** vocal the de-bleed is **skipped
-entirely** (it over-cuts a clean vocal on dense mixes) and the RNNoise wet +
-expander are gentled (the `cleanModel` path). Objective tuning uses the
-`StemcelStemEval` dev tool (SI-SDR/SDR vs a reference stem).
-
-**Optional vocal de-reverb** (`Dereverberator`, vocals only) is a separate,
-**per-run** cleanup — ticked (with a `Light`/`Medium`/`Strong` selector) in the
-Separate Stems dialog, never a persisted preference, because whether a vocal wants
-de-reverb is a per-source artistic call (a dry studio acapella must not be touched,
-a live/room recording benefits), not a set-once global default. It is sent on the
-`STEM_SEPARATE` payload as `dereverb` + `dereverbStrength` and resolved independently
-of `enhanceVocals`. It runs **before** the RNNoise denoise (a tighter envelope helps
-the denoiser) and, when de-bleed is active, after it (so the reverb estimate isn't
-contaminated by other instruments' tails). It is a conservative statistical STFT
-late-reverb subtraction (a Lebart/Habets-style estimator): with no separate reference
-signal, it estimates the late-reverberant power per bin as a **recursively-accumulated,
-room-decayed copy of the signal's own (delayed, smoothed) power spectrum** — a diffuse
-estimate present *continuously*, so it removes reverb embedded IN sustained singing,
-not only in gaps (the earlier decay-only model was too subtle). That estimate is
-spectrally over-subtracted with a floor and a cap (so a steady note is never crushed
-to the floor), giving a gain in `[sqrt(floor), 1]` (strictly attenuating — never
-amplifies or nulls), band-limited ~120 Hz–12 kHz, shared across channels (stereo image
-preserved), smoothed across **time and frequency** (to avoid musical noise), with
-**broadband onset protection** so vocal attacks stay crisp, then a wet/dry blend. The
-inherent trade is that a single-channel dereverb can't tell a dry sustained note from a
-reverberant one, so it dries held notes somewhat — `Light`/`Medium`/`Strong` scale the
-floor, over-subtraction, reverb weight, and wet mix together so the user picks the
-amount. Full WPE-style linear prediction was deliberately rejected as too unstable to
-ship without auditioning; the worst case here is an over-dry vocal, never a blow-up.
-When de-reverb is active, a final **`VocalRestorer`** stage runs **last** — after the
-denoise and expander — to counter the dulling AND the level drop that spectral
-subtraction leaves behind: two gentle high-shelves (presence ~3.5–4 kHz + a little air
-above the sibilant band) plus a single static **active-loudness match**. The vocal's
-loudness is sampled BEFORE de-reverb (`VocalRestorer::activeLoudness` — the RMS of only
-the loud ~50 ms blocks, so silence and reverb tails are excluded) and the finished stem
-is brought back to it, undoing the level loss without re-inflating the removed tail (the
-gate ignores the quiet gaps) and without pumping (one scalar for the whole stem, clamped
-to ~[-3, +8] dB). It runs after the expander on purpose (so the make-up can't lift the
-noise/reverb floor back over the expander threshold), and a per-sample soft-knee limiter
-keeps the shelves + make-up from ever clipping. Matching the loud-frame loudness (not a
-full-buffer RMS) is what keeps this a level restoration rather than a reverb re-inflation.
-
-**Vocal Quality Pack** (primary vocal engine, downloaded on demand): a
-higher-quality **Mel-Band RoFormer** vocal model (MIT; `MelRoformerVocals` + the
-host-side STFT engine `MelRoformerSpectral`, run through the same ONNX Runtime).
-When the pack is installed it is used **automatically** (unless
-`stems.useBackupModel` forces htdemucs): the renderer passes its `.onnx` path as
-`roformerModelPath` and the backend produces **vocals** with it (drums/bass come
-from the rhythm pack, `other` stays the residual). The host pipeline (STFT
-n_fft 2048 / hop 441, complex-mask multiply, iSTFT, preset-driven chunk overlap)
-is unit-tested by an identity-mask round-trip and was validated end-to-end
-against a numpy reference of the model's reference WebGPU host. htdemucs is the
-backup when the pack is absent.
-
-**Rhythm Quality Pack** (primary drums/bass engine, downloaded on demand): a
-higher-quality 4-stem **BS-RoFormer** model (MIT — an export of ZFTurbo's
-MUSDB18-HQ checkpoint; `BsRoformerRhythm` + the host-side STFT engine
-`BsRoformerSpectral`, run through the same ONNX Runtime). When installed it is
-used **automatically** (unless the backup is forced): the renderer passes its
-`.onnx` path as `rhythmModelPath` and the backend produces **drums and bass**
-with it (one model run extracts both; vocals come from the vocal pack, `other`
-stays the residual), composing with the vocal pack into a fully RoFormer hybrid.
-**Cascaded vocal pre-removal:** when both packs are active the rhythm pack is fed
-`mixture − vocal` (using the dedicated vocal pack's high-SDR estimate) rather than
-the raw mixture, so residual vocal energy can't bleed into drums / bass — the
-vocal estimate is the one already extracted for the vocals stem, or one internal
-vocal pass when vocals wasn't selected. The model applies its mask in-graph and returns the masked per-stem spectrogram
-(the host runs STFT n_fft 2048 / hop 441 and per-stem iSTFT, preset-driven chunk
-overlap); it is exported at an 8 s window (the largest that fits a modest GPU's
-VRAM). Recoverable DirectML failures are handled by the hybrid separator's
-shared CPU fallback. The host pipeline is unit-tested by an identity round-trip, and
-the C++ runner was validated end-to-end against a numpy reference (drums/bass RMS
-matched to four decimals). htdemucs is the backup when the pack is absent.
-
-In **Preferences ▸ Stems** the two packs share one combined **Download models**
-action (~1 GB), and the vocal, drums/bass, and htdemucs backup models each appear
-as a compact **Locate…** row (identical style) to point at an existing on-disk
-copy — the backup row carries a note that it is only a fallback. The backup has
-no manual download button (it is fetched on demand when a run needs it); an
-**Always use the backup model** toggle sits below the locator group. Each
-pack/model persists its located directory override (`vocalPackDir` /
-`rhythmPackDir` / `stemModelDir`).
-
-GPU acceleration uses the **DirectML** execution provider. The bundled ONNX
-Runtime is a DirectML build (one DLL serves CPU and GPU, with `DirectML.dll`
-shipped alongside); the renderer threads a `useGpu` flag through to the backend
-session options. Using the GPU is **opt-in** — the `stems.useGpu` preference
-defaults off. The Preferences ▸ Stems toggle is enabled unless a GPU probe
-positively reports software-only rendering (`detectGpuFromInfo`): DirectML runs
-on any Direct3D-12 adapter, so an integrated GPU that Chromium's probe reports as
-inactive or without a vendorId must still be offered. The path is hardened
-against recoverable GPU faults — both a timeout/TDR device reset **and** running
-out of (often shared, integrated-GPU) memory transparently retry the whole job on
-the CPU so the user still gets their stems. After either failure, the backend
-quarantines DirectML for the lifetime of that process. Later jobs route directly
-to the CPU instead of retrying a GPU already known to fail; restarting the
-backend clears the quarantine. Model, decode, cancellation, and unrelated ONNX
-errors do not quarantine the GPU. On memory-constrained integrated GPUs the
-fixed-shape RoFormer models may simply not fit, in which case the run falls back
-to the CPU; GPU acceleration is therefore treated as a best-effort,
-dedicated-GPU-oriented option rather than a guaranteed speed-up.
-
-The raw, denormalised stereo mixture used by the RoFormer packs is built once
-per job and shared by the vocal and rhythm paths. Backup-only htdemucs jobs do
-not build it. Fixed-shape ONNX tensor wrappers are also reused across chunks,
-and the rhythm spectral engine keeps its iSTFT working buffers for the next
-stem and chunk instead of reallocating them.
-
-Inference runs on **one thread per physical core**, bounded by the historical
-`logical − 2` default (`inferenceIntraOpThreads()` in `stems/InferenceThreads.cpp`
-counts physical cores via `GetLogicalProcessorInformationEx` + `EfficiencyClass`
-and returns `min(physicalCores, logical − 2)`, falling back to `logical − 2`
-when detection is unavailable). The transformer models synchronise at every op
-boundary, so oversubscribing a hyperthreaded CPU — running two threads per core
-that fight over the same execution units — is markedly **slower** than one
-thread per physical core: the fix drops the hyperthread siblings on HT CPUs
-(e.g. 20 logical / 14 physical → 14 threads) while keeping every physical core
-(P **and** E) on non-hyperthreaded hybrid CPUs, where the E-cores add real
-throughput with no sibling contention. Reserving the two logical processors of
-the `logical − 2` bound leaves headroom for the backend's websocket-send and
-message threads, so the progress bar keeps flowing. On the GPU path the compute
-runs on the adapter instead.
-
-When the vocal and rhythm quality packs are both active, vocal cleanup runs on
-one reserved processor while rhythm inference uses the model worker pool. The
-separation thread continues to own progress and stem-ready callbacks, so the
-vocal can be published as soon as cleanup finishes without concurrent bridge
-callbacks. Cancellation stops both tasks, and a failed GPU attempt still
-discards its staged notifications before the CPU retry.
-
-Cancellation aborts the **in-flight** ONNX run rather than waiting for the
-current chunk (which can take tens of seconds on a slow CPU) to finish. Each
-`Session::Run` is wrapped by `runCancellable()` (`stems/StemRunCancellation.h`),
-which spins a lightweight watcher thread that calls `Ort::RunOptions::SetTerminate()`
-the moment the cancel flag is set; ONNX Runtime then unwinds at the next op
-boundary and the resulting `Ort::Exception` is translated to a normal
-`StemFailureCode::Cancelled`. So `STEM_SEPARATE_CANCEL` lands in well under a
-second instead of up to a whole chunk later.
-
-The separation-progress dialog is driven by the reactive `stemSeparationState`
-and reports **"Loading … model…"** while an uncached ONNX session is being
-created. Cached sessions skip that stage. If DirectML has fallen back, the
-dialog reports that separation is continuing on the CPU. The dialog stays open
-through a final **"Writing files…"** phase: on `STEM_READY` the
-renderer marks the job finalising (`markStemSeparationFinalizing`) and only
-clears the state — dismissing the dialog — once the stems have been read,
-imported, and placed on the timeline. This stops the dialog from vanishing
-seconds before the new clips appear during the (main-thread-bound) import.
-
-A **timeline** separation (started from a placed clip) also lands each stem on its
-own new track aligned to the source clip's start; a **library** separation
-(started from a source or sample library item) imports the stems to the library only,
-leaving it to the user to drag them onto the timeline. The audio that is separated
-is always the selected clip's (or library item's) **own** library item — a stem is
-a standalone WAV, so re-separating an already-separated stem separates that stem's
-audio, not the original source (which may no longer be in the library). The
-library panel hides **Separate Stems** on stems (they are already separated), but a
-stem placed on the timeline can still be re-separated from its clip. A timeline
-separation only processes the **clip's own time window** (`[inMs, inMs + durationMs)`
-of its library item, sent as the `clipId` whose window the backend reads from
-`ProjectState`), so the stem WAVs
-are clip-length and drop in already aligned; a library separation has no clip and
-separates the **whole track**. Either way the source is untouched
-(non-destructive) and each stem is added to the library as a top-level **stem**
-item. Because each stem is sample-aligned with its source it
-**inherits** the source's analysis (BPM, beat grid, key, variable-tempo flag)
-rather than being re-analysed. On disk each separation writes its WAVs into a
-`stems\<sourceFileName>-stems` folder named after the original source file
-(disambiguated with `-2`/`-3`… for repeat runs), so it matches the
-`samples/<sourceFileName>/` grouping and travels with the project folder when it
-is moved or synced between machines; an **unsaved** project writes them to the
-temporary workspace (`<temp>/Stemcel/stems`) and they are migrated into the
-project folder on the first save (or discarded if the project is never saved).
-Each stem file basename uses the source's friendly library name plus a **unique
-GUID token** (`<sourceName> - <stem> - <guid>.wav`) so regenerating stems from the
-same source
-never overwrites earlier files — including when an unsaved temp workspace is later
-merged into a saved project's `stems` folder. A stem inherits the source's **media
-GUID**, so it keeps the original's tags and artwork (resolved from the central
-`metadata/` + `covers/` store, see *Project state model*) even after the source
-item is removed. Because separated stems
-are already WAV, they are played back directly from their project file — the
-`DecodedCache` short-circuits a WAV source (it only transcodes non-WAV formats),
-so no redundant (and, for float stems, lossy) decoded copy is written to the
-central cache. Track transports are restarted on every play-prime, so a short
-stem clip that has played to its end resumes correctly on the next seek + play
-(an `AudioTransportSource` auto-stops at EOF and repositioning alone would not
-clear that, leaving the clip silent until reloaded).
-
-Optionally, each stem can be passed through a **post-separation cleanup and
-enhancement** pass before it is written (Preferences ▸ Stems, off by default per
-stem, with a Light / Medium / Strong strength). Drums, bass and the residual each
-have a small purpose-built DSP unit in `backend/src/dsp/` (`DrumEnhancer`,
-`BassEnhancer`, `OtherEnhancer`) that runs a cleanup stage followed by an
-enhancement stage; the vocal path runs an RNNoise denoise and then
-`VocalEnhancer`:
-
-- **Vocals** — for the htdemucs backup vocal a cross-stem **de-bleed** (a Wiener
-  mask built from `mixture − vocal`) runs first, then **RNNoise** (xiph,
-  BSD-2-Clause; fetched and statically linked via CMake) suppresses broadband
-  noise and separation artefacts, then `VocalEnhancer` applies a subsonic
-  high-pass and a gentle downward expander on the quiet bleed.
-- **Drums** — high-pass + expander cleanup, then a **transient designer** that
-  emphasises the attack of each hit for punch.
-- **Bass** — high-pass + low-passed-detector expander cleanup, then a **harmonic
-  exciter** that adds a high-passed harmonic layer above ~120 Hz (without boosting
-  the sub/fundamental band) so the bass keeps its definition on small speakers.
-- **Other** (the residual) — high-pass + a shallow STFT spectral attenuation that
-  shaves the musical-noise floor, then a mid/side **stereo widener** that opens up
-  the image while preserving the mono sum.
-
-**Model-aware gentling.** The cleanup parameters were tuned for the dirtier
-htdemucs stems; the RoFormer quality packs produce far cleaner stems, so each
-`*EnhanceOptions` struct carries a `cleanModel` flag the separator sets per stem:
-vocals when `haveVocalPack`, drums/bass when `useRhythmPack`, and the residual
-`other` only when it is the full mixture-consistency residual built from both packs
-(`mixtureConsistency && haveVocalPack && haveRhythmPack`). On the clean path the
-processing is scaled right back: the vocal **cross-stem de-bleed is skipped
-entirely** (it would gut a clean vocal on dense mixes — the symptom that prompted
-this) and the denoise wet + expander run far gentler; the drum transient boost is
-×0.4, the bass harmonic blend and the residual widener / spectral reduction are
-×0.5, and the drum/bass expander range and ratio-excess are halved. The htdemucs
-backup path keeps the original (stronger) settings (`cleanModel=false`). Because the
-vocal-removal cascade already strips vocal bleed from the rhythm input, aggressive
-post-cleanup is largely redundant on the RoFormer path.
-
-On the drum, bass and residual paths the cleanup stage self-bypasses on dense,
-sustained or low-contrast material, but the enhancement stage still runs
-afterwards (it is a no-op on silence), and a soft-knee limiter on those three
-paths keeps the added energy from clipping. The whole pass is non-destructive — it
-only shapes the freshly written stem WAVs and never touches the user's source, and
-it is a guaranteed no-op when disabled, empty, or silent. See
-[`THIRD_PARTY_LICENSES.md`](../THIRD_PARTY_LICENSES.md) for RNNoise attribution.
-
-When verbose diagnostic logging is enabled, `stem-perf` entries record renderer
-preparation and import durations, backend decode, normalisation, separation and
-WAV-write durations, ONNX session cache hits or misses, progress-message counts
-and each job's total duration. RoFormer profile entries further split each run
-into setup, host STFT/tensor preparation, ONNX inference, synthesis,
-overlap-add, and finalisation. These timings are emitted in Release builds and
-run only on the existing stem worker or renderer orchestration paths.
+Stemcel separates stems with Ultimate Vocal Remover's models through
+[audio-separator](https://github.com/nomadkaraoke/python-audio-separator), run as a child
+process by the native app (`backend/app/UvrSeparator.*`, `backend/app/Stems.*`); the backend
+has no separation engine of its own. The recipes, the best-of-both two-run default, GPU
+detection and the measured quality are in [native-app.md](native-app.md), "Stem
+separation". The stems land in the project's artifact folder like any other
+(`projectArtifactsBaseDir(projectPath, "stems")`), and `StemcelStemEval` scores them
+against references.
 
 ## Decoding compressed sources
 
@@ -4580,11 +4288,8 @@ sidebar:
   (right-handed, default) or **M** (left-handed). It is a renderer-only
   preference (`scratch.crossfaderCutKey`, values `KeyZ` / `KeyM`) that is never
   sent to the backend; an unrecognised persisted value falls back to `KeyZ`.
-- **Stems** — stem-separation model management (a combined **Download models**
-  action for the two RoFormer quality packs, plus a **Locate** row for each of the
-  vocal, drums/bass, and backup models, an **Always use the backup model** toggle
-  below them, per-stem cleanup options, and the experimental **GPU
-  acceleration** toggle).
+- **Stems** — where audio-separator is (with **Locate…**) and where its models are
+  kept, and the command that installs it.
 - **Developer** — diagnostic logging, log folder and DevTools access.
 
 ### MIDI controller preferences
@@ -4724,20 +4429,9 @@ Persisted fields:
   to attach it (a `mailto:` draft can't auto-attach, so the reveal + attach is manual).
 - **Show Developer Tools** — enables DevTools shortcuts independently of file
   logging.
-- **Stem-separation settings** — `stems.useGpu` (GPU acceleration, default off),
-  `stems.quality` (Fast / Balanced / Best — the inference + RoFormer chunk
-  overlap), `stems.useBackupModel` (force the htdemucs backup for every stem,
-  default off), and the per-stem cleanup toggles + strengths (`enhanceVocals` /
-  `enhanceDrums` / `enhanceBass` / `enhanceOther` and their `*Strength`).
-- **Located model directories** — optional override paths to existing on-disk
-  copies of each separation model: `paths.stemModelDir` (htdemucs backup),
-  `paths.vocalPackDir` and `paths.rhythmPackDir` (the RoFormer packs). Empty =
-  use the app-managed download location: a discoverable `Stemcel\Models`
-  folder in the user's home folder for packaged installs (one subfolder per
-  model id; a userData/%APPDATA% path would be redirected into a hidden MSIX
-  container), `<userData>/models` for dev builds. Existing downloads are
-  best-effort migrated from the legacy `<userData>/models` location on first run
-  after the default moved.
+- **Stem-separation settings** — `stems.audioSeparatorPath` (the tool, when it is not
+  where Stemcel looks), `stems.uvrRecipe` and `stems.uvrCustomModel` (the dialog's last
+  choice).
 
 QoL settings take effect on **Save**; developer settings require a restart and
 the dialog surfaces that explicitly.
@@ -5485,15 +5179,14 @@ reconfigure the Debug cache out from under your dev session.
 
 ## Building on macOS
 
-macOS 14 (Sonoma) or later, on Apple Silicon or Intel — 14 is the floor of the
-prebuilt ONNX Runtime the backend links. The same CMake project and Electron
+macOS 14 (Sonoma) or later, on Apple Silicon or Intel. The same CMake project and Electron
 app build natively; the platform differences are all handled in the build:
 
 | Piece | Windows | macOS |
 | --- | --- | --- |
 | Audio driver | WASAPI / DirectSound / ASIO | CoreAudio |
 | LAME | prebuilt `lame.exe` (`scripts/Fetch-Lame.ps1`) | `lame`, built from pinned source (`scripts/fetch-lame.sh`) |
-| Stem separation | ONNX Runtime win-x64 (+ DirectML GPU) | ONNX Runtime osx-arm64, CPU — **Apple Silicon only**; Intel builds configure with it disabled |
+| Stem separation | audio-separator, installed by the user (CUDA PyTorch for an NVIDIA GPU) | audio-separator, installed by the user (MPS GPU) |
 | Crash report | SEH filter | fatal-signal handler with a backtrace, same `backend-crash-<stamp>.log` |
 | Packaging | MSIX + portable zip | DMG + zipped `.app` |
 

@@ -21,7 +21,7 @@ namespace stemcel::recording
  * 1. A high-pass at `kHighPassHz`, which is below any sung or spoken
  *    fundamental and above mains hum, desk thumps and mic-stand rumble. The
  *    denoiser was not trained on rumble, so this goes first.
- * 2. `VocalDenoiser` — the RNNoise suppressor already used on the vocals stem.
+ * 2. `VocalDenoiser` — the RNNoise noise suppressor.
  *    This is the stage that does the work: a network trained on speech in noise
  *    takes the bed out from *under* the performance, which is the part no
  *    expander can reach. An expander can only turn the whole take down once all

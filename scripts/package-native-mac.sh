@@ -4,7 +4,7 @@
 # shipped as a DMG and a zipped .app in <repo>/dist/.
 #
 # The bundle carries everything beside the executable (Contents/MacOS): LAME, the MIDI
-# controller profiles, ONNX Runtime and the rekordbox reader (built by cargo).
+# controller profiles and the rekordbox reader (built by cargo).
 #
 # Usage:
 #   bash scripts/package-native-mac.sh              # build and package

@@ -5,7 +5,7 @@
 .DESCRIPTION
     Builds StemcelNative in Release (Visual Studio 2022 generator), checks that
     every runtime file the app loads sits beside Stemcel.exe (LAME, MIDI controller
-    profiles, ONNX Runtime + DirectML, the rekordbox reader, the VC++ runtime), runs
+    profiles, the rekordbox reader, the VC++ runtime it links), runs
     the app's smoke test from the staged folder, and writes
     dist/Stemcel-<version>-native-win-x64.zip.
 
@@ -37,7 +37,7 @@ if (-not $SkipBuild) {
 }
 
 $artefacts = Join-Path $build 'StemcelNative_artefacts\Release'
-foreach ($required in @('Stemcel.exe', 'lame.exe', 'midi-mappings', 'stemcel_rekordbox.dll', 'onnxruntime.dll', 'vcruntime140.dll')) {
+foreach ($required in @('Stemcel.exe', 'lame.exe', 'midi-mappings', 'stemcel_rekordbox.dll', 'vcruntime140.dll')) {
     if (-not (Test-Path (Join-Path $artefacts $required))) {
         throw "Bundling guard: $required is missing beside Stemcel.exe in $artefacts"
     }

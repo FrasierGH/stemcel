@@ -70,7 +70,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # The FetchContent dependencies (JUCE, Rubber Band, ONNX Runtime and the
+      # The FetchContent dependencies (JUCE, Rubber Band, libsamplerate and the
       # rest) are a large download that changes only when CMakeLists.txt pins a
       # new revision, which is exactly the cache key.
       #
@@ -154,7 +154,7 @@ jobs:
 
       # Handed to the e2e job so it runs the binary this job proved, and so the
       # backend is built once rather than twice. The directory is otherwise
-      # self-contained — CRT and ONNX DLLs, lame.exe and the MIDI mappings are
+      # self-contained — lame.exe and the MIDI mappings are
       # all copied beside the executable by POST_BUILD steps.
       #
       # The debug symbols are excluded deliberately: StemcelBackend.pdb alone

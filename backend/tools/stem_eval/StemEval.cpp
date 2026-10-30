@@ -14,7 +14,7 @@
 // the shorter length is used. SI-SDR is scale-invariant (a correct stem at a
 // different gain still scores high); plain SDR penalises level mismatch.
 
-#include "../../src/stems/StemMetrics.h"
+#include "StemMetrics.h"
 
 #include <algorithm>
 #include <cmath>

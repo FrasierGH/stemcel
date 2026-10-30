@@ -225,13 +225,6 @@ license` in `backend/rekordbox_ffi` lists them.
   each model keeps its author's licence, shown by `audio-separator --list_models`
   and the model's page.
 
-### ONNX Runtime (+ DirectML) — © Microsoft
-
-- **Licence**: MIT.
-- **Use**: bundled with the backend, which still carries an ONNX separation
-  engine; the native app separates stems through audio-separator instead.
-- **Project**: <https://github.com/microsoft/onnxruntime>
-
 ## Fonts
 
 ### JetBrains Mono — © 2020 The JetBrains Mono Project Authors

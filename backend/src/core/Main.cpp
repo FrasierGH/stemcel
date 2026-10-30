@@ -198,9 +198,9 @@ int runBackend(int argc, char* argv[])
                              + juce::String(juce::SystemStats::getNumPhysicalCpus()) + " physical @ "
                              + juce::String(juce::SystemStats::getCpuSpeedInMegahertz()) + " MHz | RAM "
                              + juce::String(juce::SystemStats::getMemorySizeInMegabytes()) + " MB");
-    // CPU SIMD feature flags: the ONNX Runtime (stem separation) and the DSP paths pick
-    // code paths off these, so a "why is separation slow / crashing here" report is far
-    // easier to triage when the log shows what the machine actually supports.
+    // CPU SIMD feature flags: the DSP paths pick code paths off these, so a "why is this
+    // slow / crashing here" report is far easier to triage when the log shows what the
+    // machine actually supports.
     const auto cpuFlag = [](bool present, const char* name) -> juce::String
     { return present ? (juce::String(" ") + name) : juce::String(); };
     stemcel::log::info("sys",
