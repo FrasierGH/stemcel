@@ -1,0 +1,768 @@
+// Persistence: ValueTree <-> JSON conversion, project file save/load with
+// view-state, and the peaks cache binary round-trip + validation.
+
+#include "TestRegistry.h"
+
+#include "AudioEngine.h"
+#include "AudioConstants.h"
+#include "BridgeAuth.h"
+#include "EdgeFadeSnapshot.h"
+#include "LoudnessAnalyzer.h"
+#include "Leveler.h"
+#include "MixdownEngine.h"
+#include "PeakJobCoordinator.h"
+#include "PayloadHelpers.h"
+#include "PeaksCache.h"
+#include "WaveformCommands.h"
+#include "DecodedCache.h"
+#include "ProjectFile.h"
+#include "ProjectImportSource.h"
+#include "ProjectSession.h"
+#include "ProjectState.h"
+#include "SharedFx.h"
+#include "ScratchTestFixtures.h"
+#include "ToneEq.h"
+#include "ValueTreeJson.h"
+#include "WarpProcessor.h"
+
+#include <atomic>
+#include <array>
+#include <chrono>
+#include <cmath>
+#include <exception>
+#include <limits>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include <juce_events/juce_events.h>
+
+namespace stemcel::tests
+{
+namespace
+{
+
+void testValueTreeJsonRoundTripAndValidation()
+{
+    const auto tree = makeProjectTree();
+    const auto encoded = stemcel::ValueTreeJson::toVar(tree);
+    require(encoded.isObject(), "toVar should encode a valid ValueTree as an object");
+    const auto decoded = stemcel::ValueTreeJson::fromVar(encoded);
+    expectTreeEquivalent(decoded, tree);
+
+    require(stemcel::ValueTreeJson::toVar(juce::ValueTree()).isVoid(),
+            "toVar should return void for invalid trees");
+    require(!stemcel::ValueTreeJson::fromVar(juce::var()).isValid(),
+            "fromVar should reject non-object values");
+
+    auto* missingType = new juce::DynamicObject();
+    missingType->setProperty("id", "x");
+    require(!stemcel::ValueTreeJson::fromVar(juce::var(missingType)).isValid(),
+            "fromVar should reject objects without $type");
+
+    auto* invalidType = new juce::DynamicObject();
+    invalidType->setProperty(stemcel::ValueTreeJson::kTypeKey, "not valid");
+    require(!stemcel::ValueTreeJson::fromVar(juce::var(invalidType)).isValid(),
+            "fromVar should reject invalid identifiers");
+}
+
+void testProjectFileSaveLoadAndViewState()
+{
+    const auto dir = makeTempDir("project-file");
+    const auto file = dir.getChildFile("mix.stemcel");
+
+    stemcel::ProjectState state;
+    state.replaceTree(makeProjectTree());
+    state.setViewScrollX(12.0);
+    state.setPlayheadMs(34.0);
+    state.setViewSelectedTrack("t1");
+    state.setViewFxPanelOpen(true);
+    state.setViewFxTab("plugins");
+    state.setViewSnapGrid("half");
+    state.setViewTimelineSelection(
+        stemcel::ProjectState::TimelineSelectionView{1000.0, 2500.0, true});
+    // Rename a clip and confirm the user-facing name survives the
+    // ValueTree JSON round-trip — this is the persistence the timeline
+    // inline-rename relies on.
+    require(state.setClipName("c1", "Verse chop"), "setClipName before save should succeed");
+    state.markClean();
+
+    const auto saveResult = stemcel::ProjectFile::save(file, state);
+    require(saveResult.wasOk(), "ProjectFile::save should succeed");
+    require(file.existsAsFile(), "ProjectFile::save should create target file");
+
+    juce::var savedRoot;
+    require(juce::JSON::parse(file.loadFileAsString(), savedRoot).wasOk(), "saved project should parse");
+    require(static_cast<int>(savedRoot.getProperty("schemaVersion", 0))
+                == stemcel::ProjectFile::kCurrentSchemaVersion,
+            "saved project should include current schema");
+    require(savedRoot.getProperty("savedAt", {}).isString(), "saved project should include savedAt");
+
+    juce::ValueTree sourceTree;
+    const auto sourceLoadResult = stemcel::ProjectFile::loadTree(file, sourceTree);
+    require(sourceLoadResult.ok, "ProjectFile::loadTree should succeed");
+    require(sourceTree.getType().toString() == "PROJECT",
+            "ProjectFile::loadTree should return a PROJECT tree");
+
+    const auto sourceDir = dir.getChildFile("source");
+    const auto sourceFile = sourceDir.getChildFile("source.stemcel");
+    const auto stemFile = sourceDir.getChildFile("stems").getChildFile("stem-1").getChildFile("audio.wav");
+    require(stemFile.getParentDirectory().createDirectory(), "source stem directory should be created");
+    require(stemFile.replaceWithText("test"), "source stem file should be created");
+    stemcel::ProjectState sourceProject;
+    require(sourceProject.addLibraryItem("stem-1", stemFile.getFullPathName(), "audio.wav", 1000.0,
+                                         44100, 2, stemFile.getFullPathName(), {}, "stem", "Source Stem"),
+            "source stem should be added");
+    const auto scratchFile = sourceDir.getChildFile("scratches").getChildFile("sp-1")
+                                       .getChildFile("source.wav");
+    require(scratchFile.getParentDirectory().createDirectory(), "source scratch directory should be created");
+    require(scratchFile.replaceWithText("test"), "source scratch file should be created");
+    require(sourceProject.addLibraryItem("scratch-1", scratchFile.getFullPathName(), "source.wav", 1000.0,
+                                         44100, 2, scratchFile.getFullPathName(), {}, "sample", "Scratch Sample"),
+            "source scratch sample should be added");
+    const auto missingSnapshotFile = sourceDir.getChildFile("scratches").getChildFile("sp-missing")
+                                              .getChildFile("rendered.wav");
+    require(missingSnapshotFile.getParentDirectory().createDirectory(),
+            "missing-snapshot scratch directory should be created");
+    require(missingSnapshotFile.replaceWithText("test"),
+            "missing-snapshot scratch render should be created");
+    require(sourceProject.addLibraryItem("scratch-missing", missingSnapshotFile.getFullPathName(),
+                                         "rendered.wav", 1000.0, 44100, 2,
+                                         missingSnapshotFile.getFullPathName(), {}, "sample",
+                                         "Incomplete Scratch Sample"),
+            "incomplete scratch sample should be added");
+    auto sourceLibrary = sourceProject.getTree().getChildWithName("LIBRARY");
+    sourceLibrary.getChild(1).setProperty("scratchPatternId", "sp-1", nullptr);
+    sourceLibrary.getChild(2).setProperty("scratchPatternId", "sp-missing", nullptr);
+    require(sourceProject.addScratchPattern(makeValidPatternVar("sp-1", "Scratch Sample")),
+            "source scratch pattern should be added");
+    require(sourceProject.addScratchPattern(makeValidPatternVar("sp-missing", "Incomplete Scratch Sample")),
+            "incomplete scratch pattern should be added");
+    // A take is a sample by kind and sits directly in `recordings/`, so only the folder
+    // holding it tells the importer to offer it as a recording (ADR 0030).
+    const auto recordingFile = sourceDir.getChildFile("recordings").getChildFile("Recording 1.wav");
+    require(recordingFile.getParentDirectory().createDirectory(),
+            "source recordings directory should be created");
+    require(recordingFile.replaceWithText("test"), "source recording file should be created");
+    require(sourceProject.addLibraryItem("recording-1", recordingFile.getFullPathName(), "Recording 1.wav",
+                                         1000.0, 44100, 2, recordingFile.getFullPathName(), {}, "sample",
+                                         "Recording 1"),
+            "source recording should be added");
+    require(stemcel::ProjectFile::save(sourceFile, sourceProject).wasOk(),
+            "source project should be saved");
+    juce::String sourceError;
+    const auto importSource = stemcel::loadSourceProjectImport(sourceFile, sourceError);
+    require(importSource.has_value(), "source import records should load");
+    require(importSource->library.count("stem-1") == 1, "source import should expose managed stems");
+    require(importSource->library.count("scratch-1") == 1,
+            "source import should expose scratch samples with a linked pattern");
+    require(importSource->library.count("scratch-missing") == 0,
+            "source import should reject scratch samples without a source snapshot");
+    require(importSource->scratchPatterns.count("sp-1") == 1,
+            "source import should retain the linked scratch pattern");
+    require(importSource->library.count("recording-1") == 1,
+            "source import should expose recordings alongside stems and samples");
+    requireEqual(importSource->library.at("recording-1").category, juce::String("recordings"),
+                 "a recording should keep its own import category");
+    require(static_cast<bool>(
+                importSource->library.at("recording-1").data.getProperty("recordingOrigin", false)),
+            "an imported recording should carry its provenance");
+    requireEqual(importSource->library.at("stem-1").category, juce::String("stems"),
+                 "a stem should keep its own import category");
+
+    stemcel::ProjectState loaded;
+    const auto loadResult = stemcel::ProjectFile::load(file, loaded);
+    require(loadResult.ok, "ProjectFile::load should succeed");
+    require(loadResult.schemaVersion == stemcel::ProjectFile::kCurrentSchemaVersion,
+            "load should report schema");
+    expectTreeEquivalent(loaded.getTree(), state.getTree());
+    require(!loaded.isDirty(), "loaded project should be clean");
+    requireEqual(loaded.getClipName("c1"), "Verse chop", "clip name should persist through save/load");
+    requireEqual(loaded.getViewSelectedTrack(), "t1", "selected track should persist through save/load");
+    require(loaded.getViewFxPanelOpen(), "fx-panel-open flag should persist through save/load");
+    requireEqual(loaded.getViewFxTab(), "plugins", "fx tab should persist through save/load");
+    requireEqual(loaded.getViewSnapGrid(), "half", "snap grid should persist through save/load");
+    const auto loadedSelection = loaded.getViewTimelineSelection();
+    require(loadedSelection.has_value(), "timeline selection should persist through save/load");
+    requireNear(loadedSelection->startMs, 1000.0, 0.0001, "saved selection start should round-trip");
+    requireNear(loadedSelection->endMs, 2500.0, 0.0001, "saved selection end should round-trip");
+    require(loadedSelection->loop, "saved selection loop state should round-trip");
+
+    const auto viewStateResult = stemcel::ProjectFile::saveViewState(
+        file, -10.0, 240.0, 99.0, "t1", true, true, true,
+        stemcel::ProjectState::TimelineSelectionView{3000.0, 4500.0, false}, "bar", "project");
+    require(viewStateResult.wasOk(), "saveViewState should update existing project file");
+    stemcel::ProjectState reloaded;
+    require(stemcel::ProjectFile::load(file, reloaded).ok, "reloading after view-state save should work");
+    requireNear(reloaded.getViewScrollX(), 0.0, 0.0001, "saveViewState should clamp negative scroll");
+    requireNear(reloaded.getViewPxPerSecond(), 240.0, 0.0001, "saveViewState should persist zoom");
+    requireNear(reloaded.getPlayheadMs(), 99.0, 0.0001, "saveViewState should update playhead");
+    requireEqual(reloaded.getViewSelectedTrack(), "t1", "saveViewState should persist selected track");
+    require(reloaded.getViewFxPanelOpen(), "saveViewState should persist fx-panel-open flag");
+    requireEqual(reloaded.getViewSnapGrid(), "bar", "saveViewState should persist the snap grid");
+    requireEqual(reloaded.getViewFxTab(), "project", "saveViewState should persist the fx tab");
+    const auto updatedSelection = reloaded.getViewTimelineSelection();
+    require(updatedSelection.has_value(), "saveViewState should persist a timeline selection");
+    requireNear(updatedSelection->startMs, 3000.0, 0.0001,
+                "saveViewState should update selection start");
+    requireNear(updatedSelection->endMs, 4500.0, 0.0001,
+                "saveViewState should update selection end");
+    require(! updatedSelection->loop, "saveViewState should update selection loop state");
+    require(reloaded.getMetronomeEnabled(), "saveViewState should persist the metronome toggle (on)");
+    require(reloaded.getClipEditorMetronomeEnabled(),
+            "saveViewState should persist the clip-editor metronome toggle (on)");
+
+    // Turning the metronomes off via the targeted view-state write must round-trip as off.
+    const auto viewStateOff = stemcel::ProjectFile::saveViewState(file, 0.0, 240.0, 99.0, "t1", true, false, false);
+    require(viewStateOff.wasOk(), "saveViewState (metronome off) should update the project file");
+    stemcel::ProjectState reloadedOff;
+    require(stemcel::ProjectFile::load(file, reloadedOff).ok, "reloading after metronome-off save should work");
+    require(! reloadedOff.getMetronomeEnabled(), "saveViewState should persist the metronome toggle (off)");
+    require(! reloadedOff.getClipEditorMetronomeEnabled(),
+            "saveViewState should persist the clip-editor metronome toggle (off)");
+    require(! reloadedOff.getViewTimelineSelection().has_value(),
+            "saveViewState should clear an absent timeline selection");
+    // An omitted grid must leave the previously saved choice alone rather than
+    // silently rewriting it, so a legacy caller cannot wipe the setting.
+    requireEqual(reloadedOff.getViewSnapGrid(), "bar",
+                 "saveViewState should leave an omitted snap grid untouched");
+    requireEqual(reloadedOff.getViewFxTab(), "project",
+                 "saveViewState should leave an omitted fx tab untouched");
+
+    const auto missing = dir.getChildFile("missing.stemcel");
+    stemcel::ProjectState untouched;
+    untouched.addTrack("keep");
+    untouched.markClean();
+    const auto missingLoad = stemcel::ProjectFile::load(missing, untouched);
+    require(!missingLoad.ok && missingLoad.error.isNotEmpty(), "missing project load should fail with error");
+    require(untouched.hasTrack("keep"), "failed load should leave project untouched");
+
+    const auto badFile = dir.getChildFile("bad.stemcel");
+    require(badFile.replaceWithText("{ bad json"), "bad test file should write");
+    const auto badLoad = stemcel::ProjectFile::load(badFile, untouched);
+    require(!badLoad.ok && badLoad.error.containsIgnoreCase("Malformed"), "malformed project should fail");
+
+    dir.deleteRecursively();
+}
+
+// A "clean up project files" removal prunes just the removed item from the saved file,
+// in place, leaving every other saved item and field intact.
+void testProjectFileRemoveLibraryItems()
+{
+    const auto dir = makeTempDir("prune-library");
+    const auto file = dir.getChildFile("mix.stemcel");
+
+    stemcel::ProjectState state;
+    state.addTrack("t1");
+    require(state.addLibraryItem("keep1", "C:\\audio\\a.wav", "a.wav", 1000.0, 48000, 2), "add keep1");
+    require(state.addLibraryItem("gone", "C:\\proj\\samples\\S\\s.wav", "s.wav", 500.0, 48000, 2), "add gone");
+    require(state.addLibraryItem("keep2", "C:\\audio\\b.wav", "b.wav", 750.0, 48000, 2), "add keep2");
+    state.markClean();
+    require(stemcel::ProjectFile::save(file, state).wasOk(), "initial save should succeed");
+
+    // Prune only "gone" from the saved file.
+    const auto result = stemcel::ProjectFile::removeLibraryItems(file, {"gone"});
+    require(result.wasOk(), "removeLibraryItems should succeed");
+
+    stemcel::ProjectState loaded;
+    require(stemcel::ProjectFile::load(file, loaded).ok, "reload after prune should succeed");
+    require(!loaded.getLibraryItemFilePath("keep1").isEmpty(), "keep1 should survive the prune");
+    require(!loaded.getLibraryItemFilePath("keep2").isEmpty(), "keep2 should survive the prune");
+    require(loaded.getLibraryItemFilePath("gone").isEmpty(), "the pruned item should be gone from the file");
+    require(loaded.hasTrack("t1"), "unrelated content (the track) must be preserved");
+
+    // No-op cases: absent item and a never-saved file both succeed without error.
+    require(stemcel::ProjectFile::removeLibraryItems(file, {"not-there"}).wasOk(),
+            "pruning an absent item is a no-op success");
+    const auto missing = dir.getChildFile("missing.stemcel");
+    require(stemcel::ProjectFile::removeLibraryItems(missing, {"gone"}).wasOk(),
+            "pruning an unsaved (missing) file is a no-op success");
+
+    dir.deleteRecursively();
+}
+
+// Project-internal artifact paths (inside the folder) save relative for portability;
+// original sources outside the folder stay absolute and resolve unchanged.
+void testProjectFilePortablePaths()
+{
+    const auto dir = makeTempDir("portable-paths");
+    const auto file = dir.getChildFile("Mix.stemcel");
+
+    const juce::String insideAbs = dir.getChildFile("Samples").getChildFile("clip.wav").getFullPathName();
+    // Must be absolute on the host OS, or the portable-path rewrite treats it as relative.
+#if JUCE_WINDOWS
+    const juce::String outsideAbs = "C:\\audio\\loop.wav";
+#else
+    const juce::String outsideAbs = "/audio/loop.wav";
+#endif
+
+    juce::ValueTree project(juce::Identifier{"PROJECT"});
+    project.setProperty("name", "Portable", nullptr);
+
+    juce::ValueTree library(juce::Identifier{"LIBRARY"});
+    juce::ValueTree inside(juce::Identifier{"ITEM"});
+    inside.setProperty("id", "libInside", nullptr);
+    inside.setProperty("filePath", insideAbs, nullptr);
+    inside.setProperty("kind", "sample", nullptr);
+    library.appendChild(inside, nullptr);
+    juce::ValueTree outside(juce::Identifier{"ITEM"});
+    outside.setProperty("id", "libOutside", nullptr);
+    outside.setProperty("filePath", outsideAbs, nullptr);
+    outside.setProperty("kind", "source", nullptr);
+    library.appendChild(outside, nullptr);
+    project.appendChild(library, nullptr);
+    project.appendChild(juce::ValueTree(juce::Identifier{"MARKERS"}), nullptr);
+
+    stemcel::ProjectState state;
+    state.replaceTree(project);
+    state.markClean();
+
+    require(stemcel::ProjectFile::save(file, state).wasOk(), "portable save should succeed");
+
+    // JSON escapes backslashes; compare against the escaped form of each path.
+    const auto json = file.loadFileAsString();
+    require(!json.contains(insideAbs.replace("\\", "\\\\")),
+            "internal artifact path should be stored relative, not absolute");
+    require(json.contains("Samples"), "internal artifact should keep its relative subfolder");
+    require(json.contains(outsideAbs.replace("\\", "\\\\")),
+            "external source path should stay absolute on disk");
+
+    stemcel::ProjectState loaded;
+    require(stemcel::ProjectFile::load(file, loaded).ok, "portable load should succeed");
+    requireEqual(loaded.getLibraryItemFilePath("libInside"), insideAbs,
+                 "internal artifact path should resolve back to absolute on load");
+    requireEqual(loaded.getLibraryItemFilePath("libOutside"), outsideAbs,
+                 "external source path should remain absolute on load");
+
+    dir.deleteRecursively();
+}
+
+void testProjectArtifactsBaseDir()
+{
+    // Unsaved -> temp workspace; saved -> a subfolder beside the project file.
+    const auto tempStems = stemcel::projectArtifactsBaseDir(juce::String{}, "stems");
+    requireEqual(tempStems.getFullPathName(),
+                 stemcel::tempArtifactsRoot().getChildFile("stems").getFullPathName(),
+                 "unsaved artifacts live under the temp workspace");
+
+    const auto projectDir = makeTempDir("artifacts-base");
+    const auto projectFile = projectDir.getChildFile("Mix.stemcel");
+    const auto samples = stemcel::projectArtifactsBaseDir(projectFile.getFullPathName(), "samples");
+    requireEqual(samples.getFullPathName(), projectDir.getChildFile("samples").getFullPathName(),
+                 "saved project keeps samples beside the project file");
+    projectDir.deleteRecursively();
+}
+
+void testMigrateTempArtifactsIntoProject()
+{
+    const auto projectDir = makeTempDir("migrate-project");
+    const auto projectFile = projectDir.getChildFile("Mix.stemcel");
+
+    // Seed a temp-workspace stem (WAV + sidecar) as if separated before first save.
+    const auto tempRoot = stemcel::tempArtifactsRoot();
+    const auto tempStemDir = tempRoot.getChildFile("stems").getChildFile("song-stems");
+    require(tempStemDir.createDirectory().wasOk(), "temp stem dir should create");
+    const auto tempStemWav = tempStemDir.getChildFile("vocals.wav");
+    require(tempStemWav.replaceWithText("placeholder stem audio"), "temp stem file should write");
+    require(tempStemDir.getChildFile("metadata.json").replaceWithText("{}"), "temp sidecar should write");
+
+    // Must be absolute on the host OS, or the portable-path rewrite treats it as relative.
+#if JUCE_WINDOWS
+    const juce::String outsideAbs = "C:\\audio\\loop.wav";
+#else
+    const juce::String outsideAbs = "/audio/loop.wav";
+#endif
+
+    juce::ValueTree project(juce::Identifier{"PROJECT"});
+    project.setProperty("name", "Migrate", nullptr);
+    juce::ValueTree library(juce::Identifier{"LIBRARY"});
+    juce::ValueTree stem(juce::Identifier{"ITEM"});
+    stem.setProperty("id", "libStem", nullptr);
+    stem.setProperty("filePath", tempStemWav.getFullPathName(), nullptr);
+    stem.setProperty("playbackFilePath", tempStemWav.getFullPathName(), nullptr);
+    library.appendChild(stem, nullptr);
+    juce::ValueTree outside(juce::Identifier{"ITEM"});
+    outside.setProperty("id", "libOutside", nullptr);
+    outside.setProperty("filePath", outsideAbs, nullptr);
+    library.appendChild(outside, nullptr);
+    project.appendChild(library, nullptr);
+    project.appendChild(juce::ValueTree(juce::Identifier{"MARKERS"}), nullptr);
+
+    stemcel::ProjectState state;
+    state.replaceTree(project);
+
+    stemcel::AudioEngine engine;
+    engine.initialise({}, {}, nullptr);
+    juce::ThreadPool pool;
+    stemcel::DecodedCache decodedCache;
+
+    stemcel::migrateTempArtifactsIntoProject(projectFile.getFullPathName(), engine, state, pool,
+                                               decodedCache);
+
+    const auto movedDir = projectDir.getChildFile("stems").getChildFile("song-stems");
+    require(movedDir.getChildFile("vocals.wav").existsAsFile(), "stem WAV should move beside the project");
+    require(movedDir.getChildFile("metadata.json").existsAsFile(),
+            "stem sidecar should move with the stem folder");
+    require(! tempRoot.isDirectory(), "temp workspace should be purged after migration");
+    requireEqual(state.getLibraryItemFilePath("libStem"),
+                 movedDir.getChildFile("vocals.wav").getFullPathName(),
+                 "stem filePath should be rewritten beside the project");
+    requireEqual(state.getLibraryItemPlaybackPath("libStem"),
+                 movedDir.getChildFile("vocals.wav").getFullPathName(),
+                 "stem playbackFilePath should be rewritten beside the project");
+    requireEqual(state.getLibraryItemFilePath("libOutside"), outsideAbs,
+                 "external source path should stay absolute through migration");
+
+    engine.shutdown();
+    projectDir.deleteRecursively();
+}
+
+void testPeaksCacheRoundTripAndValidation()
+{
+    const auto dir = makeTempDir("peaks-cache");
+    const auto source = dir.getChildFile("source.wav");
+    require(source.replaceWithText("not real audio, just a cache key source"), "source file should write");
+
+    const stemcel::PeaksCache cache(dir.getChildFile("cache"));
+
+    stemcel::waveform::PeaksResult result;
+    result.peaksPerSecond = 200;
+    result.sampleRate = 44100.0;
+    result.peaks = {-0.5F, 0.25F, -1.0F, 1.0F};
+    cache.store(source, result);
+
+    const auto cacheFile = cache.getCacheFilePath(source, 200);
+    require(cacheFile.existsAsFile(), "cache store should create a cache file");
+
+    const auto loaded = cache.tryLoad(source, 200);
+    require(loaded.peaks.size() == result.peaks.size(), "cache load should restore peak count");
+    requireNear(loaded.sampleRate, 44100.0, 0.0001, "cache load should restore sample rate");
+    require(loaded.peaksPerSecond == 200, "cache load should restore peaks-per-second");
+    for (std::size_t i = 0; i < result.peaks.size(); ++i)
+    {
+        requireNear(loaded.peaks[i], result.peaks[i], 0.0001, "cache load should restore peak data");
+    }
+
+    require(cache.tryLoad(source, 100).peaks.empty(), "different peak resolution should miss");
+
+    // Stereo (multi-lane) round-trip: lane 0 summary + lanes 1/2 L/R,
+    // stored channel-major. `peakCount` in the header is per-lane.
+    stemcel::waveform::PeaksResult stereo;
+    stereo.peaksPerSecond = 200;
+    stereo.sampleRate = 48000.0;
+    stereo.laneCount = 3;
+    // 2 buckets per lane × 3 lanes × (min,max): [summary..][L..][R..]
+    stereo.peaks = {-0.1F, 0.1F, -0.2F, 0.2F, // summary
+                    -0.5F, 0.5F, -0.6F, 0.6F, // left
+                    -0.7F, 0.7F, -0.8F, 0.8F}; // right
+    const auto stereoSource = dir.getChildFile("stereo.wav");
+    require(stereoSource.replaceWithText("stereo cache key source"), "stereo source should write");
+    cache.store(stereoSource, stereo);
+    const auto loadedStereo = cache.tryLoad(stereoSource, 200);
+    require(loadedStereo.laneCount == 3, "stereo cache load should restore lane count");
+    require(loadedStereo.peaks.size() == stereo.peaks.size(), "stereo cache load should restore all lanes");
+    require(loadedStereo.bucketsPerLane() == 2, "stereo cache load should report per-lane bucket count");
+    for (std::size_t i = 0; i < stereo.peaks.size(); ++i)
+    {
+        requireNear(loadedStereo.peaks[i], stereo.peaks[i], 0.0001, "stereo cache load should restore lane data");
+    }
+
+    const auto corrupt = cache.getCacheFilePath(source, 300);
+    require(corrupt.replaceWithData("short", 5), "corrupt cache fixture should write");
+    require(cache.tryLoad(source, 300).peaks.empty(), "short cache file should be treated as miss");
+
+    dir.deleteRecursively();
+}
+
+void testPeakJobCoordinatorCoalescesAndFansOut()
+{
+    stemcel::PeakJobCoordinator coordinator;
+    const juce::File source("C:\\audio\\loop.wav");
+
+    const auto first = coordinator.addWaiter(
+        source, 500, {stemcel::PeakResponseTarget::timelineClip, "clip-1"});
+    const auto second = coordinator.addWaiter(
+        source, 500, {stemcel::PeakResponseTarget::timelineClip, "clip-2"});
+    const auto duplicate = coordinator.addWaiter(
+        source, 500, {stemcel::PeakResponseTarget::timelineClip, "clip-1"});
+    const auto editor = coordinator.addWaiter(
+        source, 500, {stemcel::PeakResponseTarget::clipEditor, "library-1"});
+    const auto highResolution = coordinator.addWaiter(
+        source, 2000, {stemcel::PeakResponseTarget::clipEditor, "library-1"});
+
+    require(first.startsJob, "first source-resolution waiter should start a job");
+    require(! second.startsJob && ! duplicate.startsJob && ! editor.startsJob,
+            "matching source-resolution waiters should coalesce");
+    require(highResolution.startsJob, "different peak resolution should start a separate job");
+
+    const auto waiters = coordinator.takeWaiters(first.key);
+    require(waiters.size() == 3, "coalesced job should retain distinct timeline and editor waiters");
+    require(waiters[0].id == "clip-1" && waiters[1].id == "clip-2" && waiters[2].id == "library-1",
+            "coalesced waiters should retain request order");
+
+    const auto retry = coordinator.addWaiter(
+        source, 500, {stemcel::PeakResponseTarget::timelineClip, "clip-3"});
+    require(retry.startsJob, "completed source-resolution key should permit a later retry");
+    coordinator.takeWaiters(retry.key);
+    coordinator.takeWaiters(highResolution.key);
+}
+
+void testClipAddWaveformRequestDefaultsToEnabled()
+{
+    auto* object = new juce::DynamicObject();
+    juce::var payload(object);
+    require(stemcel::clipAddRequestsWaveform(payload), "missing requestWaveform defaults to true");
+
+    object->setProperty("requestWaveform", false);
+    require(!stemcel::clipAddRequestsWaveform(payload), "explicit false skips waveform request");
+
+    object->setProperty("requestWaveform", true);
+    require(stemcel::clipAddRequestsWaveform(payload), "explicit true requests waveform");
+
+    object->setProperty("requestWaveform", "false");
+    require(stemcel::clipAddRequestsWaveform(payload), "invalid non-boolean value keeps safe default");
+}
+
+void testPeaksCacheConcurrentStoresRemainValid()
+{
+    const auto dir = makeTempDir("peaks-cache-concurrent");
+    const auto source = dir.getChildFile("source.wav");
+    require(source.replaceWithText("concurrent cache key source"), "concurrent source file should write");
+    const stemcel::PeaksCache cache(dir.getChildFile("cache"));
+
+    stemcel::waveform::PeaksResult result;
+    result.peaksPerSecond = 500;
+    result.sampleRate = 48000.0;
+    result.laneCount = 3;
+    result.peaks.resize(12000);
+    for (std::size_t i = 0; i < result.peaks.size(); ++i)
+    {
+        result.peaks[i] = static_cast<float>(i % 101) / 100.0F;
+    }
+
+    std::atomic<bool> start{false};
+    std::vector<std::thread> writers;
+    for (int i = 0; i < 4; ++i)
+    {
+        writers.emplace_back([&]()
+        {
+            while (! start.load(std::memory_order_acquire))
+            {
+                std::this_thread::yield();
+            }
+            cache.store(source, result);
+        });
+    }
+    start.store(true, std::memory_order_release);
+    for (auto& writer : writers)
+    {
+        writer.join();
+    }
+
+    const auto loaded = cache.tryLoad(source, result.peaksPerSecond);
+    require(loaded.peaks == result.peaks, "concurrent cache stores should leave one complete valid entry");
+    const auto tempFiles = dir.getChildFile("cache").findChildFiles(juce::File::findFiles, false, "*.tmp");
+    require(tempFiles.isEmpty(), "concurrent cache stores should not leave temporary files");
+    dir.deleteRecursively();
+}
+
+void testLegacySampleModeMigratesToAudioType()
+{
+    juce::ValueTree project(juce::Identifier{"PROJECT"});
+    project.setProperty("name", "Legacy", nullptr);
+
+    juce::ValueTree library(juce::Identifier{"LIBRARY"});
+    juce::ValueTree simple(juce::Identifier{"ITEM"});
+    simple.setProperty("id", "legacySimple", nullptr);
+    simple.setProperty("filePath", "C:\\audio\\fx.wav", nullptr);
+    simple.setProperty("kind", "audio-file", nullptr);
+    simple.setProperty("sampleMode", "sample", nullptr);
+    library.appendChild(simple, nullptr);
+    juce::ValueTree music(juce::Identifier{"ITEM"});
+    music.setProperty("id", "legacyMusic", nullptr);
+    music.setProperty("filePath", "C:\\audio\\loop.wav", nullptr);
+    music.setProperty("kind", "audio-file", nullptr);
+    music.setProperty("sampleMode", "music", nullptr);
+    library.appendChild(music, nullptr);
+    project.appendChild(library, nullptr);
+    project.appendChild(juce::ValueTree(juce::Identifier{"MARKERS"}), nullptr);
+
+    stemcel::ProjectState state;
+    state.replaceTree(project);
+
+    const auto json = state.libraryAsJson();
+    require(json.isArray() && json.getArray()->size() == 2, "migrated library should expose two items");
+    for (const auto& item : *json.getArray())
+    {
+        const auto id = item.getProperty("id", {}).toString();
+        require(!item.hasProperty("sampleMode"), "legacy sampleMode must not survive migration");
+        if (id == "legacySimple")
+            requireEqual(item.getProperty("audioType", {}).toString(), juce::String("simple"),
+                         "legacy sampleMode 'sample' migrates to audioType 'simple'");
+        else if (id == "legacyMusic")
+            requireEqual(item.getProperty("audioType", {}).toString(), juce::String("music"),
+                         "legacy sampleMode 'music' migrates to audioType 'music'");
+    }
+}
+
+void testLegacyOneShotTempoIsConvertedToPinnedClipRatio()
+{
+    // A one-shot carries no tempo, but a project saved before that rule can hold an
+    // item that is (or migrates to) "simple" while still storing a detected BPM. The
+    // resolver answers 0 for such an item, so a clip warping against it would lose its
+    // ratio and play dry at its original length. The load must instead pin the ratio
+    // that BPM implied onto the clip — same audio, consistent data.
+    juce::ValueTree project(juce::Identifier{"PROJECT"});
+    project.setProperty("name", "LegacyOneShot", nullptr);
+    project.setProperty("bpm", 120.0, nullptr);
+
+    juce::ValueTree library(juce::Identifier{"LIBRARY"});
+    juce::ValueTree hit(juce::Identifier{"ITEM"});
+    hit.setProperty("id", "hit", nullptr);
+    hit.setProperty("filePath", "C:\\audio\\hit.wav", nullptr);
+    hit.setProperty("kind", "audio-file", nullptr);
+    hit.setProperty("sampleMode", "sample", nullptr); // migrates to audioType "simple"
+    hit.setProperty("bpm", 96.0, nullptr);
+    hit.setProperty("beatAnchorSec", 0.25, nullptr);
+    library.appendChild(hit, nullptr);
+    // An unclassified cut of that one-shot inherits the classification, so its own
+    // stored tempo must go the same way.
+    juce::ValueTree cut(juce::Identifier{"ITEM"});
+    cut.setProperty("id", "cut", nullptr);
+    cut.setProperty("filePath", "C:\\audio\\cut.wav", nullptr);
+    cut.setProperty("kind", "sample", nullptr);
+    cut.setProperty("sourceItemId", "hit", nullptr);
+    cut.setProperty("bpm", 128.0, nullptr);
+    library.appendChild(cut, nullptr);
+    // A music item must keep everything it has.
+    juce::ValueTree loop(juce::Identifier{"ITEM"});
+    loop.setProperty("id", "loop", nullptr);
+    loop.setProperty("filePath", "C:\\audio\\loop.wav", nullptr);
+    loop.setProperty("kind", "audio-file", nullptr);
+    loop.setProperty("sampleMode", "music", nullptr);
+    loop.setProperty("bpm", 100.0, nullptr);
+    library.appendChild(loop, nullptr);
+    project.appendChild(library, nullptr);
+
+    juce::ValueTree track(juce::Identifier{"TRACK"});
+    track.setProperty("id", "t1", nullptr);
+    const auto addClip = [&track](const char* id, const char* itemId, bool warp, bool pinned) {
+        juce::ValueTree clip(juce::Identifier{"CLIP"});
+        clip.setProperty("id", id, nullptr);
+        clip.setProperty("libraryItemId", itemId, nullptr);
+        clip.setProperty("startMs", 0.0, nullptr);
+        clip.setProperty("durationMs", 1000.0, nullptr);
+        clip.setProperty("warpEnabled", warp, nullptr);
+        if (pinned) clip.setProperty("tempoRatio", 2.0, nullptr);
+        track.appendChild(clip, nullptr);
+    };
+    addClip("cWarped", "hit", true, false);
+    addClip("cPinned", "hit", true, true);
+    addClip("cDry", "hit", false, false);
+    addClip("cLoop", "loop", true, false);
+    project.appendChild(track, nullptr);
+    project.appendChild(juce::ValueTree(juce::Identifier{"MARKERS"}), nullptr);
+
+    stemcel::ProjectState state;
+    state.replaceTree(project);
+
+    const auto root = state.getTree();
+    const auto lib = root.getChildWithName(juce::Identifier{"LIBRARY"});
+    const auto itemOf = [&](const char* id) {
+        return lib.getChildWithProperty(juce::Identifier{"id"}, id);
+    };
+    require(!itemOf("hit").hasProperty("bpm"), "a one-shot must not keep a stored tempo");
+    require(!itemOf("hit").hasProperty("beatAnchorSec"), "a one-shot must not keep a beat anchor");
+    require(!itemOf("cut").hasProperty("bpm"), "a cut of a one-shot is a one-shot too");
+    requireNear(static_cast<double>(itemOf("loop").getProperty("bpm", 0.0)), 100.0, 1e-9,
+                "a music item keeps its tempo");
+    require(state.getLibraryItemBpm("hit") == 0.0, "the resolver reports no tempo for a one-shot");
+
+    const auto clips = root.getChildWithProperty(juce::Identifier{"id"}, "t1");
+    const auto clipOf = [&](const char* id) {
+        return clips.getChildWithProperty(juce::Identifier{"id"}, id);
+    };
+    requireNear(static_cast<double>(clipOf("cWarped").getProperty("tempoRatio", 0.0)), 120.0 / 96.0,
+                1e-9, "a warped clip keeps the stretch its one-shot's old tempo implied");
+    requireNear(static_cast<double>(clipOf("cPinned").getProperty("tempoRatio", 0.0)), 2.0, 1e-9,
+                "an already-pinned clip states its own ratio and must be left alone");
+    require(!clipOf("cDry").hasProperty("tempoRatio"), "an unwarped clip must not gain a ratio");
+    require(!clipOf("cLoop").hasProperty("tempoRatio"),
+            "a clip following a music item must keep tracking the project tempo");
+}
+
+void testLegacyLibraryKindMigrates()
+{
+    juce::ValueTree project(juce::Identifier{"PROJECT"});
+    project.setProperty("name", "LegacyKinds", nullptr);
+
+    juce::ValueTree library(juce::Identifier{"LIBRARY"});
+    // Legacy import with no source link → source.
+    juce::ValueTree source(juce::Identifier{"ITEM"});
+    source.setProperty("id", "legacySource", nullptr);
+    source.setProperty("filePath", "C:\\audio\\song.wav", nullptr);
+    source.setProperty("kind", "audio-file", nullptr);
+    library.appendChild(source, nullptr);
+    // Legacy saved-from-clip file (audio-file WITH a source link) → sample.
+    juce::ValueTree sample(juce::Identifier{"ITEM"});
+    sample.setProperty("id", "legacySample", nullptr);
+    sample.setProperty("filePath", "C:\\proj\\samples\\hit.wav", nullptr);
+    sample.setProperty("kind", "audio-file", nullptr);
+    sample.setProperty("sourceItemId", "legacySource", nullptr);
+    library.appendChild(sample, nullptr);
+    // Legacy reusable clip → clip.
+    juce::ValueTree clip(juce::Identifier{"ITEM"});
+    clip.setProperty("id", "legacyClip", nullptr);
+    clip.setProperty("filePath", "C:\\audio\\song.wav", nullptr);
+    clip.setProperty("kind", "saved-clip", nullptr);
+    clip.setProperty("sourceItemId", "legacySource", nullptr);
+    library.appendChild(clip, nullptr);
+    // Item with an absent kind → source.
+    juce::ValueTree kindless(juce::Identifier{"ITEM"});
+    kindless.setProperty("id", "legacyKindless", nullptr);
+    kindless.setProperty("filePath", "C:\\audio\\other.wav", nullptr);
+    library.appendChild(kindless, nullptr);
+    project.appendChild(library, nullptr);
+    project.appendChild(juce::ValueTree(juce::Identifier{"MARKERS"}), nullptr);
+
+    stemcel::ProjectState state;
+    state.replaceTree(project);
+
+    const auto json = state.libraryAsJson();
+    require(json.isArray() && json.getArray()->size() == 4, "migrated library should expose four items");
+    for (const auto& item : *json.getArray())
+    {
+        const auto id = item.getProperty("id", {}).toString();
+        const auto kind = item.getProperty("kind", {}).toString();
+        if (id == "legacySource")
+            requireEqual(kind, juce::String("source"), "legacy audio-file with no source link migrates to source");
+        else if (id == "legacySample")
+            requireEqual(kind, juce::String("sample"), "legacy audio-file with a source link migrates to sample");
+        else if (id == "legacyClip")
+            requireEqual(kind, juce::String("clip"), "legacy saved-clip migrates to clip");
+        else if (id == "legacyKindless")
+            requireEqual(kind, juce::String("source"), "absent kind migrates to source");
+    }
+}
+
+} // namespace
+
+void addPersistenceTests(std::vector<TestCase>& tests)
+{
+    tests.push_back({"ValueTreeJson round-trip and validation", testValueTreeJsonRoundTripAndValidation});
+    tests.push_back({"ProjectFile save/load and view-state update", testProjectFileSaveLoadAndViewState});
+    tests.push_back({"ProjectFile prunes library items in place", testProjectFileRemoveLibraryItems});
+    tests.push_back({"ProjectFile portable relative paths", testProjectFilePortablePaths});
+    tests.push_back({"project artifacts base dir follows the project", testProjectArtifactsBaseDir});
+    tests.push_back({"migrate temp artifacts into project folder", testMigrateTempArtifactsIntoProject});
+    tests.push_back({"PeaksCache round-trip and validation", testPeaksCacheRoundTripAndValidation});
+    tests.push_back({"Peak jobs coalesce and fan out", testPeakJobCoordinatorCoalescesAndFansOut});
+    tests.push_back({"CLIP_ADD waveform request defaults to enabled", testClipAddWaveformRequestDefaultsToEnabled});
+    tests.push_back({"PeaksCache concurrent stores remain valid", testPeaksCacheConcurrentStoresRemainValid});
+    tests.push_back({"legacy sampleMode migrates to audioType", testLegacySampleModeMigratesToAudioType});
+    tests.push_back({"legacy one-shot tempo becomes a pinned clip ratio",
+                     testLegacyOneShotTempoIsConvertedToPinnedClipRatio});
+    tests.push_back({"legacy library kind migrates to source/sample/clip", testLegacyLibraryKindMigrates});
+}
+
+} // namespace stemcel::tests

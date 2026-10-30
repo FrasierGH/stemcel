@@ -1,0 +1,40 @@
+# Decision Index — Stemcel
+
+One line per decision. Linked from `CONTEXT.md` and read when relevant; each
+linked ADR under `docs/adr/` holds the reasoning and rejected alternatives and is
+read only when a task touches that decision. Write the ADR at the moment of
+decision and add its line here.
+
+| ID | Importance | Decision | Record |
+| --- | --- | --- | --- |
+| D-0001 | `CRITICAL` | Two-process split: Electron UI + headless JUCE engine | `docs/adr/0001-two-process-split.md` |
+| D-0002 | `CRITICAL` | Backend `ValueTree` is the single source of truth for project state | `docs/adr/0002-valuetree-source-of-truth.md` |
+| D-0003 | `CRITICAL` | Text-only bridge; bulk data via disk | `docs/adr/0003-text-only-bridge.md` |
+| D-0004 | `CRITICAL` | zod schema is the single source of truth for the wire protocol | `docs/adr/0004-zod-wire-protocol-sot.md` |
+| D-0005 | `CRITICAL` | Dynamic loopback port + per-session AUTH token | `docs/adr/0005-dynamic-port-auth.md` |
+| D-0006 | `CRITICAL` | Real-time audio thread: lock-free, no allocation | `docs/adr/0006-realtime-audio-thread.md` |
+| D-0007 | `CRITICAL` | Non-destructive editing (settings on clips, never mutate source) | `docs/adr/0007-non-destructive-editing.md` |
+| D-0008 | `IMPORTANT` | Out-of-process engine resilience and recovery | `docs/adr/0008-engine-resilience.md` |
+| D-0009 | `IMPORTANT` | Stem separation via ONNX Runtime (RoFormer + htdemucs backup) | `docs/adr/0009-stem-separation-onnx.md` |
+| D-0010 | `IMPORTANT` | Licence: AGPL-3.0-or-later | `docs/adr/0010-licence-agpl.md` |
+| D-0011 | `IMPORTANT` | Product ethos: radical beginner-first simplicity | `docs/adr/0011-product-ethos-simplicity.md` |
+| D-0012 | `IMPORTANT` | UI/UX design-system conventions | `docs/adr/0012-ui-ux-design-system.md` |
+| D-0013 | `IMPORTANT` | Frontend stack: Vue 3 + Pinia + PixiJS + Tailwind | `docs/adr/0013-frontend-stack.md` |
+| D-0014 | `IMPORTANT` | Testing strategy (custom backend harness + Vitest + Playwright e2e) | `docs/adr/0014-testing-strategy.md` |
+| D-0015 | `IMPORTANT` | Project file format: versioned JSON | `docs/adr/0015-project-file-format.md` |
+| D-0016 | `CRITICAL` | Maintainability & file-size policy | `docs/adr/0016-maintainability-file-size.md` |
+| D-0017 | `IMPORTANT` | Performance priorities: audio playback is first-class | `docs/adr/0017-performance-priorities.md` |
+| D-0018 | `IMPORTANT` | Autosave-backed crash recovery | `docs/adr/0018-autosave-crash-recovery.md` |
+| D-0019 | `CRITICAL` | Backward compatibility for a released product (versioned, read-old/write-latest) | `docs/adr/0019-backward-compatibility-released-product.md` |
+| D-0020 | `IMPORTANT` | Exclude inaudible tracks from playback and effects processing | `docs/adr/0020-exclude-inaudible-tracks-from-rendering.md` |
+| D-0021 | `IMPORTANT` | Scratch Editor: modal single-session editor over a prepared, bounded scratch source, with direct MIDI-to-audio control, a monitor-only pre-rendered backing bed, notation-based recording, transport-independent replay, and save-to-library as a baked sample | `docs/adr/0021-scratch-editor-action-patterns.md` |
+| D-0022 | `IMPORTANT` | Canonical Track FX, shared-return, master-FX, and mixdown routing | `docs/adr/0022-canonical-effects-routing.md` |
+| D-0023 | `IMPORTANT` | Engine owns every loop wrap — timeline and Clip Editor preview (immediate, unfaded, uncompensated restart) | `docs/adr/0023-engine-owned-timeline-loop.md` |
+| D-0024 | `CRITICAL` | One original BPM per clip and one warp target, resolved by a single function per process that share the same rules | `docs/adr/0024-single-source-bpm-resolver.md` |
+| D-0025 | `CRITICAL` | VST3 effect plugins as per-track inserts: out-of-process scanning, in-process hosting, a bounded real-time exception for third-party `processBlock`, backend-owned editor windows, and state persisted inline as an unresolved-tolerant slot | `docs/adr/0025-vst3-plugin-hosting.md` |
+| D-0026 | `IMPORTANT` | Plugin delay compensation by delaying every track to a common alignment, so the whole mix is uniformly late by one bounded constant | `docs/adr/0026-plugin-delay-compensation.md` |
+| D-0027 | `IMPORTANT` | Correcting a mis-detected tempo is a distinct operation from changing the arrangement's tempo: one backend command that corrects the resolved tempo owner, asks explicitly before carrying the project tempo, and never moves a persisted absolute timeline anchor | `docs/adr/0027-tempo-correction-never-moves-anchors.md` |
+| D-0028 | `IMPORTANT` | Tempo detection conditions audio with a zero-phase percussive emphasis before beat tracking, settles a disputed period refinement with an independent second engine consulted only on dispute, and fits the beat grid to onset starts rather than to onset-function peaks | `docs/adr/0028-tempo-detection-conditioning-and-arbiter.md` |
+| D-0029 | `IMPORTANT` | MP3 is decoded by the bundled `lame.exe` as a child process with the JUCE reader kept only as a fallback, preview decodes through the same cache, and `lame.exe` becomes a required build dependency | `docs/adr/0029-lame-as-the-mp3-decoder.md` |
+| D-0030 | `IMPORTANT` | Audio recording captures on a standalone input-only device outside the engine's device manager, is bounded by a time window rather than owned by a track, corrects latency and clock drift offline at finalise, and produces a `sample` library item in `recordings/` — carrying the project's grid as a Music take, or no grid at all as a Simple one | `docs/adr/0030-audio-recording-capture-model.md` |
+| D-0031 | `IMPORTANT` | Pitch shifting derives its Rubber Band transient and pitch options from the shift itself rather than from the warp mode alone: a pitch-shifted R2 clip moves off crisp transients onto mixed and uses the fixed-shift pitch method, escalating to the consistent one only on a live change, and the transients choice is revisited when the pitch changes live so playback matches the render | `docs/adr/0031-pitch-shift-quality.md` |

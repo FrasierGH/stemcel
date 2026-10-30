@@ -1,0 +1,99 @@
+# Packages the native (JUCE, no Electron) Stemcel: a DMG and zipped .app for Apple
+# Silicon, and a portable zip for Windows x64. Each package is smoke-tested from where it
+# will run (inside the .app bundle / the staged folder) before upload.
+#
+# The macOS app is ad-hoc signed (no Developer ID on the runner): it runs on any Apple
+# Silicon Mac once Gatekeeper's quarantine flag is cleared.
+
+name: Package native
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["native-ui", "native-only"]
+    paths:
+      - "backend/**"
+      - "scripts/package-native-mac.sh"
+      - "scripts/Package-Native.ps1"
+      - "scripts/fetch-lame.sh"
+      - ".github/workflows/package-native.yml"
+
+concurrency:
+  group: package-native-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: macOS (Apple Silicon)
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            backend/build-native-release/_deps
+            backend/build-native-release/rekordbox_ffi
+          key: native-release-macos-15-${{ hashFiles('backend/CMakeLists.txt', 'backend/rekordbox_ffi/Cargo.lock') }}
+          restore-keys: native-release-macos-15-
+
+      - name: Install Ninja
+        run: brew install ninja
+
+      - name: Rust toolchain
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - name: Build, sign, smoke-test and package
+        run: bash scripts/package-native-mac.sh
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: stemcel-native-macos-arm64
+          path: |
+            dist/*-native-mac-*.dmg
+            dist/*-native-mac-*.zip
+          if-no-files-found: error
+
+  windows:
+    name: Windows x64
+    # Pinned like ci.yml: windows-latest has no "Visual Studio 17 2022" generator.
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            backend/build-native-release/_deps
+            backend/build-native-release/rekordbox_ffi
+          key: native-release-windows-${{ hashFiles('backend/CMakeLists.txt', 'backend/rekordbox_ffi/Cargo.lock') }}
+          restore-keys: native-release-windows-
+
+      # rarewares.org (the only source of this build) is sometimes unreachable from the
+      # runners; one successful fetch is cached for every later run.
+      - name: Cache LAME
+        uses: actions/cache@v6
+        with:
+          path: backend/third_party/lame/lame.exe
+          key: lame-win-x64-3.100.1-${{ hashFiles('scripts/Fetch-Lame.ps1') }}
+          restore-keys: lame-win-x64-3.100.1-
+
+      - name: Fetch LAME
+        shell: pwsh
+        run: ./scripts/Fetch-Lame.ps1
+
+      # The runner has Strawberry Perl, which OpenSSL's vendored build needs.
+      - name: Build, smoke-test and package
+        shell: pwsh
+        run: ./scripts/Package-Native.ps1 -Perl C:\Strawberry\perl\bin\perl.exe
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: stemcel-native-windows-x64
+          path: dist/*-native-win-x64.zip
+          if-no-files-found: error

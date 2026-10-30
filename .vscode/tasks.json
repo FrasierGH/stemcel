@@ -1,0 +1,175 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    // ─── Backend (JUCE / CMake) ──────────────────────────────────────────
+    // Every backend task is launched through scripts/Invoke-DevShell.ps1 so
+    // cl.exe / cmake / ninja are on PATH regardless of how VS Code was started.
+    // Tasks use type "process" (not "shell") so each arg is passed verbatim —
+    // VS Code's shell wrapper would otherwise mangle the embedded quotes.
+    {
+      "label": "backend: configure",
+      "type": "process",
+      "command": "pwsh",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}/scripts/Invoke-DevShell.ps1",
+        "cmake -S '${workspaceFolder}/backend' -B '${workspaceFolder}/backend/build' -G 'Visual Studio 17 2022'"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "panel": "dedicated",
+        "reveal": "always",
+        "clear": true
+      },
+      "detail": "Configure the JUCE backend with the existing Visual Studio generator."
+    },
+    {
+      "label": "backend: kill running",
+      "type": "process",
+      "command": "pwsh",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "$p = Get-Process StemcelBackend -ErrorAction SilentlyContinue; if ($p) { $p | Stop-Process -Force -ErrorAction SilentlyContinue; $p | Wait-Process -Timeout 5 -ErrorAction SilentlyContinue }; exit 0"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "panel": "dedicated",
+        "reveal": "silent"
+      },
+      "detail": "Stop any running StemcelBackend.exe so the linker can overwrite it."
+    },
+    {
+      "label": "backend: build",
+      "type": "process",
+      "command": "pwsh",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}/scripts/Invoke-DevShell.ps1",
+        "cmake --build '${workspaceFolder}/backend/build' --config Debug --target StemcelBackend --parallel"
+      ],
+      "dependsOn": ["backend: kill running", "backend: configure"],
+      "dependsOrder": "sequence",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": ["$msCompile"],
+      "presentation": {
+        "panel": "dedicated",
+        "reveal": "always"
+      },
+      "detail": "Build the Debug console backend (headless engine)."
+    },
+    {
+      "label": "backend: build (Release)",
+      "type": "process",
+      "command": "pwsh",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}/scripts/Invoke-DevShell.ps1",
+        "cmake --build '${workspaceFolder}/backend/build' --config Release --parallel"
+      ],
+      "dependsOn": ["backend: kill running"],
+      "problemMatcher": ["$msCompile"],
+      "detail": "Build the JUCE backend (Release)."
+    },
+    {
+      "label": "backend: clean",
+      "type": "process",
+      "command": "pwsh",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}/scripts/Invoke-DevShell.ps1",
+        "cmake --build '${workspaceFolder}/backend/build' --target clean"
+      ],
+      "problemMatcher": [],
+      "detail": "Clean backend build artefacts."
+    },
+    {
+      "label": "backend: lint",
+      "type": "process",
+      "command": "pwsh",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}/scripts/Invoke-DevShell.ps1",
+        "pwsh -NoProfile -ExecutionPolicy Bypass -File '${workspaceFolder}/scripts/Invoke-ClangTidy.ps1'"
+      ],
+      "problemMatcher": ["$gcc"],
+      "presentation": {
+        "panel": "dedicated",
+        "reveal": "always"
+      },
+      "detail": "Run clang-tidy over backend C++ sources (requires backend: configure first)."
+    },
+
+    // ─── Native app ──────────────────────────────────────────────────────
+    {
+      "label": "native: build",
+      "type": "process",
+      "command": "pwsh",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}/scripts/Invoke-DevShell.ps1",
+        "cmake --build '${workspaceFolder}/backend/build' --config Debug --target StemcelNative --parallel"
+      ],
+      "dependsOn": ["backend: configure"],
+      "problemMatcher": ["$msCompile"],
+      "presentation": {
+        "panel": "dedicated",
+        "reveal": "always"
+      },
+      "detail": "Build the Debug native app (engine + JUCE UI + rekordbox reader)."
+    },
+
+    // ─── Setup ───────────────────────────────────────────────────────────
+    {
+      "label": "setup: dev",
+      "type": "process",
+      "command": "pwsh",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}/scripts/Setup-Dev.ps1"
+      ],
+      "problemMatcher": [],
+      "presentation": {
+        "panel": "dedicated",
+        "reveal": "always",
+        "clear": true
+      },
+      "detail": "One-shot: verify/install prereqs (MSVC, CMake, Ninja, Rust), configure backend."
+    },
+
+    // ─── Combined ────────────────────────────────────────────────────────
+    {
+      "label": "dev: all",
+      "dependsOrder": "parallel",
+      "dependsOn": ["native: build"],
+      "problemMatcher": [],
+      "detail": "Build the native app."
+    }
+  ]
+}

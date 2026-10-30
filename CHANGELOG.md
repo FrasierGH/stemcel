@@ -1,0 +1,505 @@
+# Changelog
+
+## 1.9.0
+
+### Added
+
+- **Record Audio** captures live input over the arrangement and keeps the take as a library item or a clip on the timeline.
+- The capture device, mono or stereo channels, input gain and live input metering are set in the record dialog.
+- A take is aligned to the timeline automatically, compensating for audio hardware latency and transport start.
+- A take keeps a moment of audio ahead of where recording began, so a note played fractionally early is not clipped.
+- The waveform and beat grid drawn while recording now show a take where it will actually sit on the timeline.
+- Recording runs from the start of the project, from the playhead, or over a selected range, with an optional count-in.
+- The backing heard under a performance is chosen and levelled in the dialog, leaving the project's own mutes, solos and levels untouched.
+- A metronome and a live waveform of the performance are available while recording.
+- **Hear Yourself** monitors the input alongside the backing.
+- Takes are captured as **Music**, which inherits the project tempo and warps with it, or **Simple** for speech and sound effects.
+- An optional cleanup removes low-level background noise from a take.
+- A finished take can be auditioned alone or against the arrangement, renamed, converted from mono to stereo, and re-recorded before it is kept.
+- A stereo take can be split into its two channels as it is kept, so a two-channel mixer can be used as the input device and its two sources land on separate tracks.
+- Recording starts and stops with the **R** key or the space bar anywhere in the Record Audio dialog, and the space bar plays a finished take back while it is being reviewed.
+- The waveforms shown while recording and while reviewing a take now follow the **Waveform display** preference, so a stereo take is drawn as separate left and right channels.
+- **Calibrate timing** measures the audio hardware's true output-to-input round trip and applies it to every take on the same pair of devices.
+- A calibration can be typed in by hand where measuring acoustically is not possible.
+- **File ▸ Import from Project…** offers another project's recordings alongside its stems and samples.
+- The recording input driver is chosen in **Preferences ▸ Audio**.
+
+### Changed
+
+- Pitch-shifted clips now play in tune and without smearing, changing how an existing project that uses pitch shift sounds.
+- The warp mode is now named **Warp & Pitch Mode** and has its own module in the Clip Editor, making clear that one setting shapes both. It can now be chosen on a clip that is pitch shifted without a tempo warp.
+- Waveforms are drawn on a perceptual scale, so a clip looks as loud as it sounds.
+- Audio device wording throughout the app now says whether a device is the audio output or the recording input.
+- The audio driver choices in **Preferences ▸ Audio** now read as short trade-offs rather than paragraphs.
+- Clips on a track silenced by a mute or another track's solo are drawn faded.
+
+### Fixed
+
+- Mono clips played only through the left speaker, so panning one to the right faded it out. Mono audio now plays centred, matching what was already exported.
+- Clips made from a recording or a sample no longer show the link icon used by saved clips.
+- The Pitch panel no longer advises reanalysing a recording to generate key presets.
+- Removing a saved scratch left its audio file behind when **Clean up project files** was on.
+- The metronome ran ahead of the music whenever a track used an effect that adds latency, so anything played to the click landed early.
+- Checkboxes and radio buttons showed the browser's own white focus outline instead of the app's own styling.
+- Playback no longer falls back to the system default output when the audio device list changes.
+- Deleting a stem or sample with **Clean up project files** on left the project marked as having unsaved changes when nothing else had changed.
+
+## 1.8.0
+
+### Added
+
+- **Edit BPM** corrects a mis-detected tempo on a library item or clip, respacing its beat markers without moving any clip, marker or automation point.
+- A tempo correction reports which clips it re-warped and which it left alone.
+- **MiniBPM** is included as a second tempo estimator, settling a tempo the primary detector is unsure of.
+
+### Changed
+
+- MP3 files are now decoded with the bundled LAME decoder, which reads files the previous decoder could not and no longer trims the last fraction of a second. Existing MP3s are decoded again on first use, so their beat markers are recalculated.
+- Tempo detection is more accurate on dense material such as full-band rock and soul.
+- A tempo corrected on a file now corrects every stem and clip taken from it.
+- A tempo inherited through several steps, such as a clip of a stem, is now shown.
+- Previewing a library file no longer draws beat markers over its waveform.
+
+### Fixed
+
+- Some MP3s could not be played, previewed or analysed at all, failing silently with no tempo and no sound. They now import and play correctly.
+- Previewing an MP3 that had not been decoded yet could stay silent. It is now decoded first, in the background.
+- Importing an MP3 could record the wrong track length, or reject the file as unreadable. The imported length now matches the audio that plays.
+- Tempo detection now completes on MP3s whose final moments fail to decode, flagging the result as unconfirmed.
+- Correcting a tempo while it is still being detected now keeps the correction.
+- Correcting the tempo of a stem or saved clip no longer shifts the beat markers of the file it came from.
+- A tempo correction that cannot be applied now restores the displayed tempo instead of leaving the rejected number on screen.
+- A tempo correction that invalidates a transition now redraws the timeline and updates the crossfades it left behind.
+- Beat markers no longer sit a few milliseconds late on bass-heavy material.
+- Tempo analysis finishing after a save now says so, instead of silently marking the project unsaved again.
+- Changing the project tempo no longer turns warp on for clips already at that tempo.
+- Removing the last track now clears the markers and area selection with it.
+- The warning that a measured bar length is about to be discarded now follows the clip being edited.
+
+## 1.7.1
+
+### Changed
+
+- Sliding a clip's beat markers now changes only that clip, and copies made from it inherit that alignment.
+- Editing a clip's beat markers now moves the audio inside the clip instead of moving the clip.
+- Pasting a clip now lines its beat up with the playhead the same way dragging it does.
+
+### Fixed
+
+- Dragging a clip edge no longer shifts the audio inside the clip or drifts off the line it snapped to.
+- The waveform inside a clip is now drawn from the clip's exact position in the audio.
+- Splitting, duplicating or pasting a clip still waiting on its tempo analysis now keeps it in time with the original.
+- Duplicating a clip trimmed on the grid now keeps every copy on the grid.
+- A clip cut exactly on a beat no longer loses its first beat marker or jumps a beat when snapped to a bar.
+- Sliding a clip's beat markers now moves the audio by exactly that much, leaving the clip where it was placed even when it sits off the beat.
+- Importing some MP3s no longer fails to detect a tempo, leaving them and their stems without one.
+
+## 1.7.0
+
+### Added
+
+- VST3 effect plugins can be added to a track from a new Plugins tab in the lower panel, and run as a chain that can be reordered, bypassed, and opened for editing in the plugin's own window.
+- Installed plugins are found by a scan that runs outside the app, so a plugin that fails to load cannot take the app down with it.
+- A project remembers its plugins and their settings, keeps them in place when one is not installed on the computer opening it, and exports the same chain the arrangement plays.
+- Plugins that sync to the beat, such as tempo-matched delays, follow the project tempo and playhead.
+- Plugins that need time to work ahead, such as linear-phase equalisers and lookahead limiters, are kept in time with the rest of the mix in both playback and export.
+- Adding a plugin that needs MIDI notes or a side-chain input says so, instead of leaving the track quiet with no explanation.
+- A file can be dragged from the Files tab straight onto a track, which imports it into the library and places it in one action, or onto empty space below the tracks to get a new track for it.
+
+### Changed
+
+- The lower panel now reopens on the tab it was left on when the project was closed, instead of always returning to Track FX.
+- Dragging a file onto the timeline now shows the same drop position marker as dragging from the library, instead of a plain highlight over the whole timeline.
+
+### Fixed
+
+- The transport controls no longer get stuck showing stopped while the project is still playing if the engine has to reconnect.
+- Editing a track while it is playing — adding a beat repeat region, dropping in a transition, or importing to the library — no longer makes the transport briefly show stopped and the timeline jump back to the last saved position before catching up.
+- Starting a new project no longer keeps looping the previous project's loop range, and no longer inherits its reverb, delay or beat repeat settings.
+
+## 1.6.1
+
+### Changed
+
+- The file browser's now-playing bar now shows only what is actually playing, and holds its place when nothing is.
+- Clicking into the project tempo box now selects its contents.
+
+### Fixed
+
+- The project tempo now retimes the arrangement once the edit settles, instead of on every arrow or spinner step.
+- A file in the file browser can now be selected and played from anywhere on its row, instead of only from its name.
+
+## 1.6.0
+
+### Added
+
+- A Files tab in the library panel browses folders of audio on disk, so a track can be found, auditioned and imported without leaving the app.
+
+### Changed
+
+- MP3 files are now read by the JUCE decoder, with the system codec used only for the formats it alone can handle.
+
+### Fixed
+
+- An imported MP3 whose length the system codec misreported now plays in full in the preview and clip editor, and analyses to the correct tempo and beat grid, instead of stopping after a fraction of a second with a default tempo.
+- Opening or adding a track automation lane now scrolls it into view instead of leaving it below the bottom of the timeline.
+- Changing the project tempo now carries clip volume shapes and track automation with the music, instead of leaving them at fixed millisecond positions where they shaped the wrong part of the track.
+- The playhead can now be grabbed from the ruler while the timeline is scrolled down, instead of starting a clip drag on whichever clip happened to sit under that point.
+- Cancelling the Clip Editor after moving a clip's beat markers now discards the change instead of leaving the moved grid on the clip.
+- Scrollbars in the library panel and dialogs are now drawn at the same width as the timeline's, instead of appearing noticeably thinner than the rest of the app.
+- Importing audio in a format the engine cannot read no longer leaves its converted copies in the temporary folder for good; they are now cleaned up, and re-importing a file reuses its copy instead of writing it again.
+
+## 1.5.3
+
+### Changed
+
+- The backend clang-tidy configuration now excludes a documented set of style-only and known-noisy checks, and the lint script finds the build tree it needs on its own, writes its full output to a report file, and summarises findings per check.
+- The backend now builds clean under clang-tidy, so a new warning stands out instead of being lost among existing ones.
+- The backend lint now runs across all cores and no longer analyses third-party headers it was only going to discard the results from, cutting a full clang-tidy pass from around seven minutes to under fifty seconds.
+- The backend lint can now check just the sources affected by your changes, following a changed header through to everything that includes it, and falling back to a full run whenever that cannot be worked out safely.
+
+### Fixed
+
+- The stem separation dialog no longer names a model while loading, so a drums-only job stops appearing to load a vocal model it was never asked for.
+- Playback that silently stops working is now detected and recovered: if the audio device stops delivering audio, the engine restarts it instead of leaving the transport showing playback with a playhead that never moves and no sound.
+- Audio device start, stop and error events are now recorded in the log, so a device that drops out is visible rather than silent.
+- A clip's original tempo is now resolved the same way everywhere, so stems, saved clips and samples agree with the timeline, the beat grid and playback.
+- A saved sample or clip now keeps the tempo of the track it was cut from instead of detecting one from its own few seconds of audio.
+- A clip cut to a number of bars now stays that number of bars however its tempo is later re-detected.
+- A music sample dropped on the timeline now auto-warps to the project tempo like any other musical clip.
+- The Warp dialog and Clip Editor now offer a music sample Follow project BPM and Pin rather than only a stretch percentage.
+- The first clip dropped into a project that already has a tempo now auto-warps to it.
+- A clip whose tempo only just misses the project tempo now warps on drop, shows the WARP badge and draws its beat markers on the warped grid.
+- Changing the project tempo now keeps the arrangement's musical shape, so a clip on bar 9 stays on bar 9.
+- Changing the project tempo now brings already-placed clips onto the new tempo when Auto-warp clips to project tempo is on.
+- An active timeline selection, the timeline markers and the playhead now keep their place in the bars when the project tempo changes.
+- A hand-set project tempo is no longer seeded over by the next clip analysed.
+- A warped clip now plays and exports its full stretched length, however the warp was applied.
+- Changing a clip's stretch during playback now takes effect straight away.
+- The warp stretch percentage now always reads to two decimal places, and the stretch applied is exactly the figure shown.
+- Reanalysing a track now brings the clips already using it onto the new tempo, leaving any clip pinned to a fixed stretch alone.
+- A warped clip's beat markers now sit exactly on the project's beat lines.
+- A clip dropped, dragged or nudged against the very start of the timeline now keeps its first beat on a grid line.
+- Reanalysing a sample, stem or saved clip no longer reclassifies it as a plain imported source.
+- The Clip Editor now lets you correct the beat grid of a stem or saved clip that takes its tempo from the track it came from.
+- A simple sample no longer carries a BPM or a beat grid anywhere, and Chop to Grid is no longer offered on one.
+- Chop to Grid is now offered on any clip whose beat markers are drawn.
+- A stem or sample created from a saved clip now inherits its beat grid instead of arriving without one.
+- Opening a project saved before this release repairs library items stored with the wrong type or carrying a tempo they should not have, without changing how anything sounds.
+
+## 1.5.1
+
+### Fixed
+
+- Adding a clip no longer applies its track gain twice in the audio engine.
+- Undoing an edit no longer stalls the timeline re-reading library waveforms, artwork and track details that have not changed.
+- Undoing or redoing a large edit now shows a busy cursor while it completes, instead of appearing to do nothing.
+- Chopping a clip to the grid now settles as soon as it looks finished, rather than continuing to work for a second afterwards.
+- Splitting a clip now carries its reverse, turntable and volume-shape settings to the correct half.
+
+## 1.5.0
+
+### Added
+
+- Edit ▸ Clear All Markers removes every marker in the project in one step.
+- A grid control in the status bar sets the timeline grid to Bar, Beat, Half beat, Quarter beat or Free, and is saved with the project.
+
+### Changed
+
+- Pressing `Enter` in a dialog now accepts it, activating the blue button in its footer.
+- Markers are now placed at the exact playhead position instead of snapping to the nearest beat.
+- Hot-cue marker pads on a MIDI deck now toggle the marker at the playhead, matching the `M` key.
+- Holding `Alt` while dragging a marker now moves it to any position rather than only to grid points.
+- Dropdowns throughout the app now match the surrounding controls instead of using the oversized Windows style.
+- Opening a project now draws the timeline immediately instead of leaving the track headers on screen for around a second before the clips appear.
+- Updated the graphics library to its latest release.
+
+### Fixed
+
+- An unplugged audio device no longer makes its driver look missing too.
+- A MIDI jog on a Free snap grid no longer pulls the playhead onto the beat grid.
+- Dropping a stem on the timeline now lands its first beat on the grid.
+- Clips now snap to the same beat grid as the markers drawn on them, including stem clips and one-shot samples.
+- Chop to Grid, the Clip Editor grid and the Scratch Editor grid now work on a stem, which previously showed beat markers but had nothing to chop or snap to.
+- A clip no longer draws a stray beat marker on the very first pixel of the clip that follows it.
+- Beat markers on zoomed-out clips now thin out in musical steps (every 2, 4, 8 beats and so on) so the remaining markers stay on meaningful beats.
+- The REPEAT badge now appears on the clip a Beat Repeat region actually plays over, instead of on the neighbouring clip whose tail crossed the region's start beat by a few milliseconds.
+- Clip Editor loop playback no longer glitches at the loop point.
+- Adding a track — including the tracks created by stem separation and channel split — no longer stretches a trimmed project back to the 5-minute default length.
+- Pressing `M` on a marker that no longer sits on the beat grid after a tempo change now removes that marker instead of adding a second one on the nearest beat.
+- Starting playback now smoothly scrolls the timeline to the playhead when zooming or scrolling has left it off screen, instead of continuing to play out of view.
+
+## 1.4.2
+
+### Added
+
+- An automated end-to-end test suite now exercises Stemcel's main workflows before each release, guarding against regressions in everyday use.
+
+### Fixed
+
+- Choosing Open Project on the start screen now works even when clicked the instant the buttons appear, instead of doing nothing.
+- Starting a new project the instant the start screen appears now applies the correct default master volume instead of leaving it at full.
+- Saving a new project now stores the name it was saved under, so it reopens with that name instead of "Untitled".
+- The Import from Project picker now always lists projects by their file name.
+- Importing audio is now a single undo step. Importing onto a track previously recorded the library item and the clip as separate steps, so the first Undo appeared to do nothing, and importing several files at once needed one Undo per file.
+- Saving a clip to the library is now a single undo step instead of three.
+- Exporting a mixdown or separating stems while the audio engine is unavailable now reports the problem, instead of leaving a progress dialog stuck at 0% that could only be cleared by restarting.
+- Preferences are no longer lost if Stemcel stops unexpectedly while saving them.
+- The Clip Editor no longer opens blank until Stemcel is restarted, which could happen after closing it again very quickly.
+- Restarting playback shortly after stopping no longer begins with a brief silence and a stalled playhead.
+- Closing the timeline part-way through dragging a group of clips no longer collapses every later edit into a single undo step.
+- The end of a scratch performance is now always reported to the timeline, instead of occasionally being missed.
+- Starting playback of a timeline selection no longer briefly stalls on the first beat.
+
+## 1.4.1
+
+### Added
+
+- The timeline range's Loop Selection can now be toggled with the `L` shortcut key.
+
+### Fixed
+
+- An automation lane's parameter dropdown no longer swallows the Space transport shortcut after being used.
+- Long automation parameter names now show an ellipsis and a hover tooltip when the track header is too narrow for them.
+- Track headers can no longer be resized narrower than their own controls, which previously squashed the header buttons.
+- Looping a timeline range now restarts seamlessly instead of gapping at the loop point.
+- The `Ctrl + ←/→` marker shortcuts now step to the start of a timeline range selection, matching the transport skip buttons.
+- Dragging a timeline range to the edge of the view now scrolls the timeline, so a range can be longer than the visible area, and finishing the drag brings the playhead back into view.
+- Playing a timeline range now stops exactly on the range end, and playing again replays the range from its start instead of resuming past the end.
+- The spacebar now plays a timeline range from its start, matching the Play button.
+- The installed audio engine now reports the correct Stemcel version in its file details.
+
+## 1.4.0
+
+### Added
+
+- Track automation can now show multiple distinct parameter lanes on the same track.
+- Dragging the timeline ruler now creates a playable and loopable range selection that persists with projects.
+- Project stems, samples, and scratch samples can now be imported into another project.
+
+### Changed
+
+- Waveform rulers now keep minute-and-second labels at every zoom level.
+
+### Fixed
+
+- Copying automation between effects now preserves the curve shape.
+- Automation lane layouts now persist with their projects.
+- Playback transitions and automated effects no longer introduce click artifacts.
+
+## 1.3.0
+
+### Added
+
+- Explorer audio files can now be dropped directly onto the timeline.
+- The Library can now be filtered by track name, artist, or BPM.
+- Beat Repeat adds tempo-aligned per-track repeat regions from the timeline Effects menu.
+- Bit Crusher track effect adds per-track lo-fi digital reduction controls.
+- Punch track effect adds per-track transient enhancement controls.
+- Saturation track effect adds Drive and Mix controls for per-track soft clipping.
+- Glue Compressor project effect adds one-control project-bus compression before the master output.
+- Safety Limiter project effect adds an enabled-by-default fixed -1 dBFS final-output guard.
+
+### Changed
+
+- Project Delay Time now uses direct beat-division buttons.
+- Effect racks now provide hover explanations for each effect.
+- Project FX racks now wrap within the effects panel, keeping overflow vertical instead of adding a horizontal scrollbar.
+- Track FX keeps its five responsive effect columns within the effects panel.
+
+### Fixed
+
+- Stem exports now preserve an existing file when replacement fails.
+- Project saves and mixdown metadata rewrites now preserve the previous file if replacement fails.
+- Mixdown no longer publishes a partial export when writing final silence fails.
+- The main window no longer shows a vertical scrollbar when resized.
+- Window controls now remain visible and usable in restored windows.
+- Long Delay feedback tails now preserve audible repeats in playback and mixdown.
+- Mixdown now reuses output buffers to avoid repeated allocations during resampling.
+- Mixdown now retires completed clips in batches for faster exports with many clips.
+- Clearing track automation now restores saved effect and mixer settings.
+- Deleted tracks now release cached effect settings.
+
+## 1.2.0
+
+### Added
+
+- Supported MIDI deck controllers can control transport, timeline navigation, markers, selected-track mixing, controller feedback, and vinyl-style platter holding and scratching.
+- The Scratch Editor records editable vinyl-style scratches from audio and saves them as reusable samples.
+- Scratch realism adds adjustable vinyl character to held-platter scratching.
+
+### Changed
+
+- Splitting, duplicating, and pasting clips now reuse loaded waveform data for faster editing.
+- Startup now defers timeline graphics until they are needed and connects to the audio engine sooner.
+- Fast launches no longer pause on startup steps that have already completed.
+- Recovery checks now run alongside audio-engine startup for a faster project picker.
+- Stem separation is now faster, more reliable, and clearer about progress and saved cleanup settings.
+- Music with a detected variable tempo now auto-warps on drop when tempo matching is enabled.
+- The Clip Editor and the Clip Preview now overlay their zoom controls in the bottom-right corner of the waveform, freeing the space they previously occupied.
+
+### Fixed
+
+- Audio output startup failures now show a clear message and recover when you choose an available device.
+- Dragging controls no longer accidentally selects interface text.
+- Warp playback performance is improved.
+- Tracks with neutral Tone controls now skip inactive filtering during playback.
+- Shared room and echo effects now stop processing once their tails are silent.
+- Muted and solo-excluded tracks now skip playback and effects processing.
+- Audio playback now remains uninterrupted while clips or automation are changed.
+- Repeated brake and backspin edits now release superseded audio state when playback stops.
+- Recent projects now show an opening indicator while the audio engine finishes starting.
+- Manual BPM edits in the Clip Editor now commit reliably.
+- Keyboard shortcuts no longer affect the project while a dialog is open.
+- Mouse-wheel scrolling no longer reaches the library or other background panels while a dialog is open.
+
+## 1.1.0
+
+### Added
+
+- **Remove reverb & echo from vocals** — an optional per-run tick (Light / Medium / Strong) in the Separate Stems dialog, nested under Vocals, that cleans room reverb and slap-back echo off the vocals stem as it's separated, then restores its presence and level. A fresh choice each run, not a saved setting, and non-destructive.
+- **Split Stereo Channels…** on a stereo clip's right-click menu opens a picker to split out its Left and/or Right channel. Each chosen channel lands on its own new track as a stereo clip carrying only that channel (copied to both sides) — non-destructive, and it inherits the source's grid and warps just like a stem.
+- Select multiple clips on the timeline: **Shift-click** selects a range on the same track, **Ctrl-click** toggles individual clips across tracks.
+- Drag any selected clip to move the whole multi-selection as a group, preserving relative positions and track offsets, blocked only where it wouldn't fit; **Shift + ←/→** nudges the group.
+- A dedicated right-click menu offers Copy, Cut, Lock, Colour, Duplicate and Delete for the whole selection, and **Delete**, **Ctrl + L** (lock) and **Duplicate** act on every selected clip.
+- **Copy / Cut / Paste** carry the whole multi-selection — paste drops it at the playhead starting on the selected track, keeps each clip's relative timing and track offset, and is rejected as a whole if it wouldn't fit.
+- Each multi-clip edit (move, nudge, lock, colour, duplicate, delete, cut, paste) is a single undo step.
+- **File ▸ Import to Library…** (`Ctrl` + `I`) opens the audio-file picker and imports the chosen files into the library — the same flow as the panel's Import button.
+- The word "Import" in the empty library panel's hint is now a clickable shortcut to the Import button.
+- Dragging a library item onto the empty area below the tracks now shows a "new track" drop lane (with a ＋ badge) and drops the clip onto a freshly created track — undoable as one step.
+- `Ctrl` + `J` (and **View ▸ Toggle Library / FX Panel**) opens and collapses the bottom Library / FX panel.
+- `Ctrl` + `1`–`8` jump the timeline to 100%–800% zoom; the matching Zoom Presets show these accelerators.
+- **Help ▸ Keyboard Shortcuts** opens the keyboard-shortcuts reference for your version of the docs.
+- **Ctrl-click a track's Solo button** to switch the solo straight to that track when another track is already soloed — it solos the clicked track and unsolos the other in one step, so you no longer have to unsolo then re-solo.
+- **`Escape`** now steps through the selection: with a track and clip(s) selected, the first press clears the clip(s) (and any selected automation point) while keeping the track selected, and a second press clears the track.
+
+### Changed
+
+- Help ▸ **Give Feedback** is renamed **Submit Feedback**.
+- The waveform display now defaults to **Left and right channels** (stacked stereo lanes) instead of a single summary waveform. Existing preferences are untouched; change it any time in Preferences ▸ General.
+- The Separate Stems dialog now opens with **no stems selected**, so you tick just the parts you want (Start stays disabled until at least one is chosen) instead of un-ticking from a full set.
+
+### Fixed
+
+- Stem separation is more robust and lighter on memory: it now recovers cleanly from any unexpected error instead of a rare hard failure, can't be wedged by an accidental double-start, gives a clear "ran out of memory" message with advice when a long song exceeds available RAM, and uses roughly half the working memory on long tracks — cutting the intermittent failures some longer separations could hit.
+- Stems separated from a section partway through a track now show their beat markers again — previously they inherited the tempo but lost their beat grid when the section started beyond the track's detected beats. Re-separate affected stems to restore their markers.
+- The Clip Editor's tempo fields (beat-grid BPM and Warp "pin to" BPM) now always display two decimals (e.g. 120.00).
+- Scrolling the mouse wheel over a BPM field (the project tempo, and the Clip Editor's beat-grid tempo and Warp "pin to" tempo) now changes it by 1 BPM (hold Alt for 0.01) instead of always stepping by a hard-to-control 0.01; the project-tempo spinner and ↑/↓ keys gain the same Alt fine-step.
+- Undoing or redoing a track's tone, leveler, reverb/delay send, pan or automation back to its default now resets it in the audio engine instead of leaving the previous value playing.
+- Undo and redo of a clip edit are dramatically faster on large projects — they now update just the changed clip in the audio engine instead of rebuilding every clip, so undo no longer slows down as you add more clips.
+- Manual-tempo / beat-grid edits in the Clip Editor are now undoable as one step and mark the project dirty (automatic tempo detection stays silent, as before).
+- On Save, an edited clip snaps the least distance to the nearest beat when "align to grid" is on and it has room, otherwise it's left put with a note to move it manually.
+- The Clip Editor's Slide-to-Align toggle now resets when the editor opens, and Save no longer shows a confirmation toast.
+- Editing a clip in the Clip Editor now redraws it and its linked copies on the timeline immediately, not just after the next scroll.
+- Clicking the timeline on a marker moves the playhead there, and markers are now dragged with Shift held so a plain drag always moves the playhead.
+- Clicking the timeline no longer scrolls the view to the playhead, and dragging the playhead only scrolls at the view edges (follow-scroll is reserved for playback).
+- The startup screen and pre-mount splash now have minimise / maximise / close controls, a draggable top edge, and a flash-free hand-off to the loading screen.
+- Recent Projects entries on the startup screen are now clickable across the whole row (not just the text), and clicking one immediately after launch reliably opens it instead of occasionally being ignored while the engine was still starting.
+- Dragging a clip from the library onto an existing track now auto-scrolls the timeline when the pointer nears the left or right edge, so you can drop it at the very start (or anywhere), matching the drop-on-empty-area behaviour.
+- Undo now walks all the way back to a clean project after saving a clip to the library: a library-clip window-reconciliation step was wrongly re-running on every undo/redo, re-linking clips and churning the undo stack so it never converged. It now runs only when opening a saved project, and only for unambiguous matches — so a saved library clip is no longer shown as "used" by a track it isn't on.
+
+## 1.0.3
+
+### Added
+
+- The Home and End keys now jump the playhead to the start and end of the timeline (scrolling the view there), matching Ctrl+Shift+Left / Right.
+- New keyboard shortcuts: Ctrl+F (zoom to fit), Escape (deselect clip/track), K (toggle metronome), Shift+M / Shift+S (mute / solo the selected track), Ctrl+Shift+T (trim project to last clip), plus Ctrl+D and Backspace as aliases for Duplicate and Delete.
+- The K key now also toggles the Clip Editor's own metronome while that dialog is open, leaving the main timeline metronome setting unchanged.
+- The Clip Editor now supports the Home / End keys (jump the preview playhead to the start / end of the active playback range) and Ctrl+F (fit the working view back into the canvas).
+- Clips now automatically align to the timeline bar grid once their tempo is detected, so their bars line up with the project's bars (even when the clip starts with silence) and splitting and marker placement stay on the beat. Clips with no detected beats (such as simple samples) are left where you placed them. This can be turned off in Preferences ▸ Timeline.
+
+### Changed
+
+- Adding a track now automatically selects it, so clip paste, mute / solo shortcuts, and the FX rack target the new track immediately.
+- A selected track's highlight border now extends across its header panel with the same thickness and track colour as the timeline row, so the selection outline reads as one continuous box.
+- New projects now default to a 5-minute timeline (down from 10). Adding a first clip that runs longer automatically extends the project duration to fit the whole clip.
+- The audio processing panel header no longer shows a redundant in-progress count.
+- The transport's previous / next buttons now step through timeline markers by default (instead of jumping to the project start / end); you can switch back in Preferences ▸ Timeline.
+- The timeline ruler now shows a grab cursor over the playhead, and a single click places the playhead while click-and-drag moves it. Double-clicking the ruler no longer does anything — add or remove a marker at the playhead with the M key.
+- Tempo detection now gives up after 120 seconds and shows a notification instead of running indefinitely; the file can be reanalysed manually from the library.
+
+### Fixed
+
+- Stem separation that runs out of GPU memory (or hits a GPU driver reset) mid-inference no longer floods the diagnostics log with an alarming raw ONNX Runtime error. The job already transparently retries on the CPU; ONNX Runtime's own logging is now routed into the structured backend log at a proportionate level instead of the process error stream.
+- Editing a clip's position/trim during live playback can no longer momentarily glitch on the rare occasion the audio thread reads the clip's window mid-update: it now falls back to the last consistent window instead of a possibly torn (mismatched offset/length) read.
+- Moving a clip along the timeline while playback is stopped and then pressing play no longer briefly bursts the clip's audio from its previous position. The per-track read-ahead buffer is now fully rebuilt after a stopped edit instead of relying on an unreliable seek that could leave stale buffered audio to play on the next start. (Also fixes the same stale-buffer class for stopped trim / fade / reverse / warp edits.)
+- The Clip Editor and library preview window now wake a sleep-prone (USB) DAC before playback, using the same audio-thread wake pre-roll as the main timeline, so the first play into a cold amp no longer loses its opening to silence. The wake burst only fires when the endpoint is actually cold, so auditioning clips back-to-back stays clean (no start-of-play hiss on an already-awake device).
+- Importing AAC/M4A files no longer hangs on "Analysing tempo…", and the import now always completes even when a file has no detectable tempo.
+- Tempo detection no longer intermittently reports "no tempo" on import — concurrent decode jobs for the same file could collide on the shared decoded-audio cache, causing detection to give up. Decoding is now serialised per file, so the grid is detected on the first import instead of only after a manual reanalyse.
+- Timeline beat markers now render reliably, including on imported AAC/M4A tracks.
+- Project Properties no longer rejects a duration set to the exact length of the last clip — the length field (whole seconds) is now validated against the second-rounded clip end, so the displayed minimum can be saved.
+- The transport's next button, when set to jump to the timeline ends, now scrolls the timeline view to the end of the project (matching how the previous button scrolls back to the start).
+- The Preferences ▸ Stems tab now recognises already-downloaded separation models on open, instead of showing them as not downloaded when they are already present on disk.
+
+## 1.0.2
+
+### Added
+
+- A Clip Editor metronome that clicks to the clip's tempo, saved with the project.
+- Detailed startup diagnostics log to help diagnose slow or failed starts.
+
+### Changed
+
+- Library items now carry a distinct type badge — Track, Stem, or Sample — so their type reads at a glance.
+- Opening a library track/stem/sample is now labelled "Preview" (effects are edited per clip on the timeline) in a right-sized dialog, instead of the full editor.
+- Feedback is now submitted through Featurebase.
+- Sliders now snap to their centre when dragged near it, and reset on double-click.
+- Pitch semitone and cent values can be double-clicked to type an exact amount.
+- Clip Editor Beat grid panel reorganised into clear Tempo and Position sections, with the tempo set by typing (Enter to apply) and an Original/Restore affordance; it now sits next to the Warp panel.
+- Clip Editor and right-click Warp now label tempo as "Playback", drop the duplicate source BPM, and add a Stretch % option so non-beat material (like vocals) can be fitted even without a detected tempo.
+- Clip Editor waveform zoom now uses Ctrl + mouse wheel, matching the main timeline.
+- Faster project loading for projects with many clips.
+- Faster waveform drawing for clips that share the same audio.
+- Faster startup, especially the first launch: the window appears immediately while the audio engine starts in the background.
+- New preference (on by default) to set the project tempo from the first clip added to a new project; turn it off to keep the project tempo fixed.
+- The stem separation Cancel button now shows a spinning "Cancelling…" state the moment it's clicked, so it's clear the request registered while the engine unwinds.
+- Much faster, more reliable stem separation on hybrid CPUs: inference now uses one thread per physical core (skipping the hyperthread siblings that were slowing it down) instead of oversubscribing every logical processor.
+- Cancelling a stem separation now stops almost immediately instead of waiting for the current chunk to finish.
+- The stem separation progress bar now advances in proportion to the work actually happening and at the real observed pace, so it no longer looks stuck on drums or stalls partway on slower machines. The drums+bass rhythm pass is labelled "Drums & Bass", and the per-stem cleanup passes now carry their own progress, so bass and the residual "other" stem no longer appear to make no progress while they're being processed.
+
+### Fixed
+
+- GPU acceleration for stem separation is no longer wrongly greyed out on machines with a capable GPU (such as Intel Arc integrated graphics); it now enables whenever a usable adapter is present.
+- GPU stem separation now automatically falls back to the CPU (rather than failing) when the GPU runs out of memory — common on integrated GPUs that share system memory.
+- The Warp/Clip Editor now offers the Stretch % control for samples (committed, free-form audio), which previously left it greyed out; the standalone Warp dialog and the Clip Editor also now agree on when Stretch is available.
+- Diagnostic and startup logs now default to a discoverable `Stemcel` folder in your user folder, instead of a hidden location the installed app couldn't write to as shown.
+- Downloaded stem-separation models now live in a discoverable `Stemcel\Models` folder in your user folder (existing downloads are moved there automatically); you can still point Stemcel at models elsewhere.
+- New projects now default to a `Stemcel\Projects` folder in your user folder, keeping projects, models, logs, and diagnostics together in one easy-to-find place.
+- Trimming the view to the selection did nothing when previewing a library item.
+- Clip Editor pitch sliders showing a browser focus outline, and the Warp tempo fields showing number spinners.
+- "Unable to connect to audio engine" on some freshly installed machines.
+- Sleep-prone USB output devices staying silent on the first play.
+- The saved output device not being selected when slow to appear on startup.
+- Silence on the first play right after switching output device from the transport bar.
+- Clips with a variable-tempo source silently not being tempo-matched; a brief note now explains why.
+- Dragging the playhead left not scrolling the timeline.
+- The cursor not staying a grabbing hand while dragging the playhead.
+- The metronome on/off state not being remembered between sessions.
+
+## 1.0.1
+
+### Added
+
+- A link to the Stemcel website in the About dialog.
+- Always-on startup diagnostics: every launch writes a small startup log — and a crash report if the backend faults — to a fixed `diagnostics` folder in the app's data directory, independent of the diagnostic-logging preference, to help diagnose a failure to start. These files are overwritten each launch and are not used for ongoing session logging.
+
+### Changed
+
+- First-use stem separation now shows the model download prompt before the stem picker, so the models are downloaded first and the stems are chosen once they're ready.
+- The backup separation model is now grouped with the quality models in Preferences ▸ Stems, with a note that it is only used as a fallback.
+- The stem separation progress dialog now stays open (showing "Writing files…") until the stems have been placed on the timeline, instead of closing a few seconds before the new clips appear.
+
+### Fixed
+
+- A crash when opening the Stems tab in Preferences on installed builds.
+- First-use stem separation downloaded the backup model instead of the higher-quality RoFormer models (vocals + drums/bass); it now downloads the RoFormer models together by default.
+- Stem separation failing with a "Model directory not found" error when only the RoFormer models are installed; the backup model is no longer required for a fully pack-covered separation.
+- The recent projects list showing a project's old name after it was renamed and saved.
+- The Clip Editor waveform looking blocky and pixelated on short or deeply zoomed-in clips; it now draws a smooth envelope.
+- The Split at Playhead menu item and S shortcut silently doing nothing on a saved clip; they now show the same informational "linked clips must be edited in the Clip Editor" message as the right-click menu.
+- The stem separation progress bar appearing frozen (and the interface unresponsive) while separating on the CPU; inference now leaves one processor core free for the interface so the progress bar keeps updating throughout.
+- Stem separation failing with a "Library item not found" error when run on a clip that was itself an already-separated stem (or any clip derived from a source no longer in the library); a clip now separates its own audio rather than the original source, so re-separating a stem works.
+
+## 1.0.0
+
+- Initial release

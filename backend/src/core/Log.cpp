@@ -1,0 +1,173 @@
+#include "Log.h"
+
+#include <chrono>
+#include <ctime>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <mutex>
+#include <regex>
+#include <sstream>
+
+namespace stemcel::log
+{
+
+namespace
+{
+
+std::mutex g_mutex;
+std::ofstream g_file;
+bool g_initialised = false;
+Level g_minLevel = Level::Debug;
+bool g_startupOnly = false;
+
+const char* levelName(Level level)
+{
+    switch (level)
+    {
+    case Level::Debug:
+        return "DEBUG";
+    case Level::Info:
+        return "INFO ";
+    case Level::Warn:
+        return "WARN ";
+    case Level::Error:
+        return "ERROR";
+    }
+    return "INFO ";
+}
+
+std::string currentIso8601Ms()
+{
+    using namespace std::chrono;
+    const auto now = system_clock::now();
+    const auto ms = duration_cast<milliseconds>(now.time_since_epoch()) % 1000;
+    const auto seconds = system_clock::to_time_t(now);
+    std::tm tm{};
+#ifdef _WIN32
+    gmtime_s(&tm, &seconds);
+#else
+    gmtime_r(&seconds, &tm);
+#endif
+    std::ostringstream out;
+    out << std::put_time(&tm, "%Y-%m-%dT%H:%M:%S") << '.' << std::setfill('0') << std::setw(3) << ms.count() << 'Z';
+    return out.str();
+}
+
+// Strip the Windows account name out of any `C:\Users\<name>\…` path before it is
+// written, so the diagnostic logs never carry personally-identifiable information.
+// The logs are full of profile paths (projects, the decoded cache, AppData), each of
+// which embeds the username; this replaces just the owner segment with `<user>` while
+// keeping the rest of the path intact for debugging. Case-insensitive and slash-style
+// agnostic. macOS home folders (`/Users/<name>/…`) get the same treatment.
+// Applied at the single sink so every log line is covered.
+std::string redactUserPaths(const std::string& s)
+{
+    static const std::regex re(R"(([A-Za-z]:[\\/]Users[\\/])[^\\/\r\n"']+)",
+                               std::regex::icase | std::regex::optimize);
+    static const std::regex macRe(R"((/Users/)[^/\r\n"']+)", std::regex::optimize);
+    return std::regex_replace(std::regex_replace(s, re, "$1<user>"), macRe, "$1<user>");
+}
+
+// Electron passes the log dir; standalone runs fall back under `.logs`.
+juce::File resolveLogDirectory(const juce::String& override)
+{
+    if (override.isNotEmpty())
+    {
+        juce::File dir(override);
+        dir.createDirectory();
+        return dir;
+    }
+    const auto exe = juce::File::getSpecialLocation(juce::File::currentExecutableFile);
+    const auto repoRoot = exe.getParentDirectory().getParentDirectory().getParentDirectory().getParentDirectory();
+    const auto fallback =
+        repoRoot.getChildFile(".logs").getChildFile("standalone-" + juce::String(currentIso8601Ms()).replace(":", "-"));
+    fallback.createDirectory();
+    return fallback;
+}
+
+} // namespace
+
+void initialise(const juce::String& logDirOverride, Level minLevel, bool truncate, bool startupOnly)
+{
+    std::scoped_lock lock(g_mutex);
+    if (g_initialised)
+    {
+        return;
+    }
+    g_minLevel = minLevel;
+    g_startupOnly = startupOnly;
+    const auto dir = resolveLogDirectory(logDirOverride);
+    const auto file = dir.getChildFile("backend.log");
+    const auto mode = std::ios::out | (truncate ? std::ios::trunc : std::ios::app);
+    g_file.open(file.getFullPathName().toStdString(), mode);
+    if (!g_file.is_open())
+    {
+        // Logger startup failures can only go to stderr.
+        std::cerr << "[log] failed to open backend.log at " << file.getFullPathName().toStdString() << '\n';
+        return;
+    }
+    g_initialised = true;
+    // Mark session boundaries in append-mode logs.
+    g_file << currentIso8601Ms() << " INFO  [log] backend logger initialised; logDir="
+           << redactUserPaths(dir.getFullPathName().toStdString()) << '\n';
+    g_file.flush();
+}
+
+void markStartupComplete()
+{
+    std::scoped_lock lock(g_mutex);
+    // Only the always-on diagnostics sink is startup-scoped; the verbose sink keeps
+    // logging the whole session. Closing here stops the diagnostics log from ever
+    // accumulating runtime chatter — it exists solely to catch a failed startup.
+    if (!g_initialised || !g_startupOnly)
+    {
+        return;
+    }
+    g_file << currentIso8601Ms()
+           << " INFO  [log] startup complete; closing always-on diagnostics log "
+              "(enable Preferences > Developer > diagnostic logging for full session logs)\n";
+    g_file.flush();
+    g_file.close();
+    g_initialised = false;
+}
+
+void shutdown()
+{
+    std::scoped_lock lock(g_mutex);
+    if (!g_initialised)
+    {
+        return;
+    }
+    g_file << currentIso8601Ms() << " INFO  [log] backend logger shutdown\n";
+    g_file.flush();
+    g_file.close();
+    g_initialised = false;
+}
+
+void write(Level level, const char* tag, const juce::String& message)
+{
+    std::scoped_lock lock(g_mutex);
+    const auto redacted = redactUserPaths(message.toStdString());
+    // Mirror ERRORs to stderr unconditionally — even when the file sink is closed
+    // (verbose logging off, the default). The Electron supervisor pipes the backend's
+    // stderr into the always-on diagnostics log, so a runtime failure (e.g. a stem
+    // separation that runs out of memory) is never invisible just because the user
+    // hadn't opted into verbose logging. Kept ERROR-only so this stays low-volume, and
+    // it writes the already-redacted message so it carries nothing identifying.
+    if (level == Level::Error)
+    {
+        std::cerr << currentIso8601Ms() << " ERROR [" << (tag != nullptr ? tag : "?") << "] " << redacted
+                  << '\n';
+        std::cerr.flush();
+    }
+    if (!g_initialised || level < g_minLevel)
+    {
+        return;
+    }
+    g_file << currentIso8601Ms() << ' ' << levelName(level) << " [" << (tag != nullptr ? tag : "?") << "] "
+           << redacted << '\n';
+    g_file.flush();
+}
+
+} // namespace stemcel::log

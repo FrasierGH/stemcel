@@ -1,0 +1,381 @@
+// BusGraph lifecycle and message-thread setters.
+// Audio-callback and hazard-protocol helpers live in BusGraphRender.cpp.
+
+#include "BusGraph.h"
+
+namespace stemcel
+{
+
+BusGraph::BusGraph()
+    : currentRenderSnapshot(std::make_unique<RenderSnapshot>())
+{
+    publishedRenderSnapshot.store(currentRenderSnapshot.get(), std::memory_order_relaxed);
+}
+
+void BusGraph::prepareToPlay(int samplesPerBlockExpected, double sampleRate)
+{
+    const juce::ScopedLock sl(lock);
+    preparedMax = juce::jmax(1, samplesPerBlockExpected);
+    preparedRate = sampleRate;
+    scratch.setSize(/*numChannels*/ 2, preparedMax, /*keepExisting*/ false,
+                    /*clearExtra*/ true, /*avoidReallocating*/ false);
+    scratch.clear();
+    reverbSendBuf.setSize(2, preparedMax, false, true, false);
+    delaySendBuf.setSize(2, preparedMax, false, true, false);
+    reverbSendBuf.clear();
+    delaySendBuf.clear();
+    sharedFx.prepare(preparedRate, preparedMax);
+    for (auto& kv : trackPlugins)
+        kv.second->prepare(preparedRate, preparedMax);
+    for (auto& kv : runtimes)
+        kv.second->prepareToPlay(preparedMax, preparedRate);
+    updateLatencyCompensation();
+}
+
+void BusGraph::releaseResources()
+{
+    const juce::ScopedLock sl(lock);
+    for (auto& kv : runtimes)
+        kv.second->releaseResources();
+    for (auto& kv : trackPlugins)
+        kv.second->release();
+}
+
+void BusGraph::attachClip(const juce::String& trackId,
+                          const juce::String& clipId,
+                          juce::AudioSource* clipTransport,
+                          bool trackRenderingEnabled,
+                          bool prepareSource)
+{
+    if (clipTransport == nullptr || trackId.isEmpty() || clipId.isEmpty()) return;
+    const juce::ScopedLock sl(lock);
+
+    auto rIt = runtimes.find(trackId);
+    bool createdRuntime = false;
+    if (rIt == runtimes.end())
+    {
+        auto rt = std::make_unique<TrackRuntime>();
+        rt->trackId = trackId;
+        if (preparedMax > 0)
+            rt->prepareToPlay(preparedMax, preparedRate);
+        rIt = runtimes.emplace(trackId, std::move(rt)).first;
+        createdRuntime = true;
+    }
+    auto* rt = rIt->second.get();
+    if (createdRuntime)
+    {
+        rt->renderEnabled = trackRenderingEnabled;
+        rt->bypassRequested.store(false, std::memory_order_release);
+        rt->bypassReady.store(false, std::memory_order_release);
+    }
+    bool sourcePrepared = false;
+    bool clipAdded = false;
+    try
+    {
+        if (prepareSource && preparedMax > 0)
+        {
+            clipTransport->prepareToPlay(preparedMax, preparedRate);
+            sourcePrepared = true;
+        }
+        rt->clips.push_back(clipTransport);
+        clipAdded = true;
+        clipToTrack[clipId] = rt;
+
+        auto automationIt = pendingAutomation.find(trackId);
+        if (createdRuntime && automationIt != pendingAutomation.end())
+            rt->publishedAutomation = automationIt->second;
+        auto beatRepeatIt = pendingBeatRepeats.find(trackId);
+        if (createdRuntime && beatRepeatIt != pendingBeatRepeats.end())
+            rt->publishedBeatRepeat = beatRepeatIt->second;
+
+        applyPendingTrackFx(*rt);
+        updateLatencyCompensation();
+
+        publishRenderSnapshot();
+    }
+    catch (...)
+    {
+        clipToTrack.erase(clipId);
+        if (clipAdded)
+        {
+            rt->clips.erase(std::remove(rt->clips.begin(), rt->clips.end(), clipTransport),
+                            rt->clips.end());
+        }
+        if (sourcePrepared) clipTransport->releaseResources();
+        if (createdRuntime) runtimes.erase(trackId);
+        throw;
+    }
+}
+
+void BusGraph::detachClip(const juce::String& clipId,
+                          juce::AudioSource* clipTransport,
+                          bool releaseSource)
+{
+    if (clipTransport == nullptr || clipId.isEmpty()) return;
+    const juce::ScopedLock sl(lock);
+    auto it = clipToTrack.find(clipId);
+    if (it == clipToTrack.end() || it->second == nullptr) return;
+    auto* rt = it->second;
+    const bool removeRuntime =
+        rt->clips.size() == 1 && rt->clips.front() == clipTransport;
+    const std::vector<const juce::AudioSource*> excluded{clipTransport};
+    auto nextRenderSnapshot = buildRenderSnapshotExcluding(excluded);
+
+    // Publish before mutating bookkeeping. If snapshot construction throws,
+    // the existing graph and clip lookup remain intact for a safe retry.
+    publishRenderSnapshot(std::move(nextRenderSnapshot));
+    rt->clips.erase(std::remove(rt->clips.begin(), rt->clips.end(), clipTransport),
+                    rt->clips.end());
+    clipToTrack.erase(it);
+
+    if (releaseSource)
+        clipTransport->releaseResources();
+
+    if (removeRuntime || rt->clips.empty())
+    {
+        rt->chain.reset();
+        runtimes.erase(rt->trackId);
+    }
+}
+
+void BusGraph::detachClips(const std::vector<ClipDetachment>& clips,
+                           bool releaseSources)
+{
+    if (clips.empty()) return;
+    const juce::ScopedLock sl(lock);
+
+    std::vector<const juce::AudioSource*> excluded;
+    excluded.reserve(clips.size());
+    for (const auto& clip : clips)
+    {
+        if (clip.clipId.isEmpty() || clip.clipTransport == nullptr) continue;
+        const auto it = clipToTrack.find(clip.clipId);
+        if (it == clipToTrack.end() || it->second == nullptr) continue;
+        if (std::find(it->second->clips.begin(), it->second->clips.end(),
+                      clip.clipTransport) == it->second->clips.end())
+            continue;
+        if (std::find(excluded.begin(), excluded.end(), clip.clipTransport) == excluded.end())
+            excluded.push_back(clip.clipTransport);
+    }
+    if (excluded.empty()) return;
+
+    auto nextRenderSnapshot = buildRenderSnapshotExcluding(excluded);
+
+    // Publish before releasing any source so an in-flight callback can only see
+    // a complete snapshot that retains its source.
+    publishRenderSnapshot(std::move(nextRenderSnapshot));
+
+    std::vector<TrackRuntime*> emptyRuntimes;
+    emptyRuntimes.reserve(clips.size());
+    for (const auto& clip : clips)
+    {
+        const auto it = clipToTrack.find(clip.clipId);
+        if (it == clipToTrack.end() || it->second == nullptr
+            || clip.clipTransport == nullptr)
+            continue;
+
+        auto* rt = it->second;
+        const auto source = std::find(rt->clips.begin(), rt->clips.end(), clip.clipTransport);
+        if (source == rt->clips.end()) continue;
+
+        rt->clips.erase(source);
+        clipToTrack.erase(it);
+        if (releaseSources)
+            clip.clipTransport->releaseResources();
+        if (rt->clips.empty()
+            && std::find(emptyRuntimes.begin(), emptyRuntimes.end(), rt)
+                   == emptyRuntimes.end())
+            emptyRuntimes.push_back(rt);
+    }
+
+    for (auto* rt : emptyRuntimes)
+    {
+        rt->chain.reset();
+        runtimes.erase(rt->trackId);
+    }
+}
+
+bool BusGraph::consumeTrackPeaks(const juce::String& trackId,
+                                 float& outL, float& outR) noexcept
+{
+    // Lock-free: the map is only ever mutated on this (message) thread, and
+    // peaks are atomic, so this read cannot race the audio thread.
+    auto it = runtimes.find(trackId);
+    if (it == runtimes.end())
+    {
+        outL = 0.0F;
+        outR = 0.0F;
+        return false;
+    }
+    it->second->consumePeaks(outL, outR);
+    return true;
+}
+
+void BusGraph::requestTrackBypass(const juce::String& trackId)
+{
+    const juce::ScopedLock sl(lock);
+    auto it = runtimes.find(trackId);
+    if (it == runtimes.end() || !it->second->renderEnabled) return;
+    it->second->bypassReady.store(false, std::memory_order_relaxed);
+    it->second->bypassRequested.store(true, std::memory_order_release);
+}
+
+bool BusGraph::finalizeTrackBypass(const juce::String& trackId)
+{
+    const juce::ScopedLock sl(lock);
+    auto it = runtimes.find(trackId);
+    if (it == runtimes.end() || !it->second->renderEnabled) return true;
+    if (!it->second->bypassReady.load(std::memory_order_acquire)) return false;
+
+    it->second->renderEnabled = false;
+    publishRenderSnapshot();
+    it->second->chain.reset();
+    it->second->peakL.store(0.0F, std::memory_order_relaxed);
+    it->second->peakR.store(0.0F, std::memory_order_relaxed);
+    it->second->bypassReady.store(false, std::memory_order_relaxed);
+    return true;
+}
+
+void BusGraph::setTrackRenderingEnabled(const juce::String& trackId, bool enabled)
+{
+    const juce::ScopedLock sl(lock);
+    auto it = runtimes.find(trackId);
+    if (it == runtimes.end()) return;
+    auto& runtime = *it->second;
+    runtime.bypassRequested.store(false, std::memory_order_release);
+    runtime.bypassReady.store(false, std::memory_order_relaxed);
+    if (runtime.renderEnabled == enabled) return;
+
+    runtime.renderEnabled = enabled;
+    publishRenderSnapshot();
+    if (!enabled)
+    {
+        runtime.chain.reset();
+        runtime.peakL.store(0.0F, std::memory_order_relaxed);
+        runtime.peakR.store(0.0F, std::memory_order_relaxed);
+    }
+}
+
+void BusGraph::setProjectReverb(float size, float decay, float tone, float mix, bool snap)
+{
+    // Lock-free: `SharedFx` publishes targets + a deferred snap flag atomically; the
+    // persistent target atomics are re-snapped by `sharedFx.prepare` after device changes.
+    sharedFx.setReverbParams(size, decay, tone, mix, snap);
+}
+
+void BusGraph::setProjectDelay(double delayMs, float feedback, float tone, float mix, bool snap,
+                               bool applyTimeNow)
+{
+    // Lock-free: see `setProjectReverb`.
+    sharedFx.setDelayParams(delayMs, feedback, tone, mix, snap, applyTimeNow);
+}
+
+void BusGraph::resetSharedFx()
+{
+    // Lock-free: schedules the reset for the next audio block instead of mutating
+    // decay state from the message thread.
+    sharedFx.requestReset();
+}
+
+void BusGraph::snapAutomationCursors() noexcept
+{
+    const juce::ScopedLock sl(lock);
+    for (auto& kv : runtimes)
+        kv.second->automationResetRequested.store(true, std::memory_order_release);
+}
+
+void BusGraph::setTrackAutomationPtr(const juce::String& trackId,
+                                     const TrackAutomationSnapshot* snap)
+{
+    if (trackId.isEmpty()) return;
+    const juce::ScopedLock sl(lock);
+    if (trackId == plugins::kMasterChainId)
+    {
+        // The master has no track runtime: its automation rides on the render snapshot.
+        masterAutomation = snap;
+        publishRenderSnapshot();
+        return;
+    }
+    if (snap == nullptr)
+    {
+        pendingAutomation.erase(trackId);
+    }
+    else
+    {
+        pendingAutomation[trackId] = snap;
+    }
+
+    auto it = runtimes.find(trackId);
+    if (it != runtimes.end())
+    {
+        it->second->publishedAutomation = snap;
+        // Automation lifetime follows the same hazard handshake as clip/runtime
+        // pointers, so the caller may retire the old snapshot when this returns.
+        publishRenderSnapshot();
+    }
+}
+
+void BusGraph::setTrackBeatRepeatPtr(const juce::String& trackId,
+                                     const BeatRepeatSnapshot* snap)
+{
+    if (trackId.isEmpty()) return;
+    const juce::ScopedLock sl(lock);
+    if (snap == nullptr)
+        pendingBeatRepeats.erase(trackId);
+    else
+        pendingBeatRepeats[trackId] = snap;
+
+    auto it = runtimes.find(trackId);
+    if (it != runtimes.end())
+    {
+        it->second->publishedBeatRepeat = snap;
+        it->second->beatRepeatResetRequested.store(true, std::memory_order_release);
+        publishRenderSnapshot();
+    }
+}
+
+void BusGraph::resetBeatRepeats() noexcept
+{
+    const juce::ScopedLock sl(lock);
+    for (auto& [trackId, runtime] : runtimes)
+        runtime->beatRepeatResetRequested.store(true, std::memory_order_release);
+}
+
+void BusGraph::synchronizeRenderThread()
+{
+    const juce::ScopedLock sl(lock);
+    publishRenderSnapshot();
+}
+
+void BusGraph::drainAllTrackPeaks(std::vector<TrackPeakSnapshot>& out)
+{
+    // Lock-free: message-thread-only map iteration; peaks are atomic.
+    out.clear();
+    out.reserve(runtimes.size());
+    for (auto& kv : runtimes)
+    {
+        float l = 0.0F;
+        float r = 0.0F;
+        kv.second->consumePeaks(l, r);
+        out.push_back({kv.first, l, r});
+    }
+}
+
+void BusGraph::clear()
+{
+    const juce::ScopedLock sl(lock);
+    publishEmptyRenderSnapshot();
+    for (auto& kv : runtimes)
+        kv.second->releaseResources();
+    runtimes.clear();
+    clipToTrack.clear();
+    masterInserts.store(nullptr, std::memory_order_release);
+    masterAutomation = nullptr;
+    trackPlugins.clear();
+    clearPendingTrackFx();
+    pendingAutomation.clear();
+    pendingBeatRepeats.clear();
+    sharedFx.reset();
+}
+
+} // namespace stemcel

@@ -1,0 +1,816 @@
+#pragma once
+
+#include "AudioEngineGraphState.h"
+#include "AudioEnginePlaybackState.h"
+#include "AudioEngineScratchState.h"
+#include "ProjectStateTypes.h"
+#include "scratch/ScratchProtocol.h"
+
+#include <functional>
+#include <optional>
+#include <unordered_set>
+#include <utility>
+#include <vector>
+
+namespace stemcel
+{
+
+class ProjectState;
+
+class AudioEngine : private AudioEngineGraphState,
+                    private AudioEnginePlaybackState,
+                    private AudioEngineScratchState
+{
+  public:
+    AudioEngine();
+    ~AudioEngine();
+
+    AudioEngine(const AudioEngine&) = delete;
+    AudioEngine& operator=(const AudioEngine&) = delete;
+
+    juce::String initialise(const juce::String& preferredTypeName = {},
+                            const juce::String& preferredDeviceName = {},
+                            bool* outFellBackToDefault = nullptr);
+
+    // Fast, device-independent graph setup (formats, read-ahead, source wiring). Lets the
+    // bridge start and accept project/graph commands before the (possibly slow) device open.
+    void initialiseGraph();
+
+    // Blocking device open + audio-callback/listener attach + snapshot. Split from
+    // initialiseGraph so the caller can open the device after the bridge is already serving.
+    juce::String openAudioDevice(const juce::String& preferredTypeName = {},
+                                 const juce::String& preferredDeviceName = {},
+                                 bool* outFellBackToDefault = nullptr);
+
+    // True once the audio device is open and the engine is safe to play through. Reads are
+    // valid from any thread (e.g. the bridge I/O thread and message-thread command handlers).
+    bool isAudioReady() const noexcept { return audioReady.load(std::memory_order_acquire); }
+
+    void shutdown();
+
+    // `initialGain` is applied to the clip's transport as part of the attach, before it can be
+    // heard, so a caller passing the track's effective (mute/solo-folded) gain must NOT follow up
+    // with setClipGain: that is a duplicate write of the same value.
+    bool addClip(const juce::String& trackId, const juce::String& clipId,
+                 const juce::File& filePath, double initialOffsetMs = 0.0,
+                 double inMs = 0.0, double clipDurationMs = 0.0, float initialGain = 1.0F,
+                 juce::String* outError = nullptr);
+
+    // Overload that consumes a reader opened ahead of time (e.g. in parallel across many clips
+    // during project load) so the serial attach path never pays per-clip file-open I/O. Ownership
+    // of the reader transfers in. A null reader is treated as an open failure.
+    bool addClip(const juce::String& trackId, const juce::String& clipId,
+                 std::unique_ptr<juce::AudioFormatReader> reader, const juce::File& filePath,
+                 double initialOffsetMs = 0.0, double inMs = 0.0, double clipDurationMs = 0.0,
+                 float initialGain = 1.0F, juce::String* outError = nullptr);
+
+    // Open an audio reader for a clip source (WAV/compressed), with the same MediaFoundation
+    // stream fallback as addClip. Thread-safe against the shared format manager, so callers may
+    // run this concurrently on a worker pool to overlap the (I/O-bound) opens. Returns null if the
+    // file cannot be read.
+    std::unique_ptr<juce::AudioFormatReader> createReaderForClip(const juce::File& filePath);
+
+    bool removeClip(const juce::String& clipId);
+    bool moveClipToTrack(const juce::String& clipId, const juce::String& trackId);
+    bool setClipGain(const juce::String& clipId, float gain);
+
+    /** Excludes inaudible tracks from clip, warp, pitch, DSP, send, and meter rendering. */
+    void setTrackAudible(const juce::String& trackId, bool audible);
+    void setTracksAudible(
+        const std::vector<std::pair<juce::String, bool>>& audibility);
+
+    /** Starts the transport. Returns false if priming could not complete inside the
+     *  budget and the gate was therefore kept closed, or if the call only cancelled a
+     *  pending fade rather than beginning a new play. */
+    bool play();
+
+    /**
+     * Starts the transport at `anchorMs` for a recording, guaranteeing a genuine
+     * stopped->playing transition.
+     *
+     * Ordinary `play()` cannot be used: a seek requested while the transport is rolling
+     * is deferred behind an output fade, and `play()` then merely cancels that fade and
+     * returns without seeking, priming, or starting a new play. A take begun that way
+     * captures whatever region happened to be playing and has no start stamp to trim
+     * against. Recording is a deliberate, modal action, so it parks the transport
+     * outright instead of waiting out the fade.
+     */
+    bool playFromAnchorForRecording(double anchorMs);
+
+    /** Stops the transport immediately (no fade) and parks the playhead on `ms`.
+     *  Recording needs the playhead to actually be where it asked before a count-in
+     *  starts clicking; the ordinary seek defers behind a fade when rolling. */
+    void parkTransportAt(double ms);
+
+    // Deep read-ahead priming avoids JUCE BufferingAudioSource dropping cold samples at play
+    // start.
+    bool primeTracksForPlayback(int totalBudgetMs);
+
+    void pause();
+
+    void stop();
+
+    void setMasterGain(float gain);
+    /** The record dialog's software monitor, fed by the capture callback and
+     *  summed alongside the arrangement. Silent until a session enables it. */
+    recording::InputMonitorSource& getInputMonitor() noexcept { return inputMonitorSource; }
+    /** Monitor-only trim on the arrangement (0..1), used by the record dialog to
+     *  set the backing level. Applied ahead of master gain, the click and the
+     *  preview voice, so it lowers what the performer plays along to and nothing
+     *  else. Never persisted and never part of a bounce. */
+    void setArrangementMonitorGain(float gain);
+    void setSafetyLimiterEnabled(bool enabled, bool snap);
+    void setProjectMixGlue(float amount, bool snap);
+
+    // Metronome monitoring click (post master gain). Enable/disable and keep the click in time with
+    // the project tempo. Both publish to the audio thread via atomics.
+    void setMetronomeEnabled(bool enabled);
+    void setMetronomeBpm(double bpm);
+
+    // Recording count-in click. Clicks for `beats` at the current metronome tempo with the
+    // transport left exactly where it is, so the performer is counted in *to* the anchor rather
+    // than carried past it (ADR 0030, Amendment 11). The count-in runs on the audio thread and
+    // expires on its own; the caller polls `isCountInClickActive()` to know when to roll.
+    void startCountInClick(double beats);
+    void cancelCountInClick();
+    bool isCountInClickActive() const;
+    double getCountInClickRemainingMs() const;
+
+    // Latency calibration bursts (ADR 0030). Emitted outside the transport so a calibration
+    // needs no project, and stamped as they are written so the round trip can be measured
+    // against the same reference point the arrangement is generated from.
+    void startCalibrationClicks(int count, double spacingMs, float amplitude);
+    void cancelCalibrationClicks();
+    bool isCalibrationClickActive() const;
+    int getCalibrationClicksEmitted() const;
+    juce::int64 getCalibrationEmitTick(int index) const;
+
+    void consumeMasterPeaks(float& outL, float& outR);
+
+    bool consumeTrackPeaks(const juce::String& trackId, float& outL, float& outR);
+
+    void setTrackTone(const juce::String& trackId,
+                      float bassDb, float midDb, float trebleDb, float filter,
+                      bool snap);
+
+    void setTrackLeveler(const juce::String& trackId, float amount, bool snap);
+    void setTrackPunch(const juce::String& trackId, float amount, bool snap);
+    void setTrackSaturation(const juce::String& trackId, float drive, float mix, bool snap);
+    void setTrackBitCrusher(const juce::String& trackId, float rate, int bits,
+                            float boost, float mix, bool snap);
+
+    void setTrackSends(const juce::String& trackId, float reverbSend, float delaySend);
+
+    void setTrackPan(const juce::String& trackId, float pan);
+    void retireTrackFxState(const juce::String& trackId);
+
+    // ── VST3 plugin inserts (ADR 0025) ──────────────────────────────────
+    // All of these are message-thread only. The audio thread never sees a plugin except
+    // through the chain snapshot BusGraph publishes for it.
+
+    /** The scanned plugin catalogue, created on first use. */
+    plugins::PluginCatalogue& pluginCatalogue();
+
+    /** Appends an insert to `trackId` and returns its new slot id, or an empty string when
+     *  the track id is invalid. A plugin that cannot be instantiated still produces a slot:
+     *  it becomes an unresolved pass-through that keeps `state`, so opening a project on a
+     *  machine without the plugin can never silently discard the user's settings (ADR 0019).
+     *  `errorMessage` is set when that happens. */
+    juce::String addTrackPlugin(const juce::String& trackId,
+                                const juce::PluginDescription& description,
+                                const juce::MemoryBlock& state, bool bypassed,
+                                juce::String& errorMessage);
+
+    bool removeTrackPlugin(const juce::String& trackId, const juce::String& slotId);
+    bool moveTrackPlugin(const juce::String& trackId, const juce::String& slotId, int newIndex);
+    bool setTrackPluginBypassed(const juce::String& trackId, const juce::String& slotId,
+                                bool bypassed);
+
+    std::vector<plugins::PluginSlotDescriptor> getTrackPluginSlots(const juce::String& trackId);
+
+    /** Message thread. What the slot's plugin negotiated, for the advisory shown when a
+     *  plugin asks for inputs or MIDI that Stemcel does not send (ADR 0025). */
+    plugins::PluginSlotIo getTrackPluginIo(const juce::String& trackId,
+                                           const juce::String& slotId);
+
+    /** The slot's live state chunk, for saving. Empty when the slot is unknown. */
+    juce::MemoryBlock getTrackPluginState(const juce::String& trackId,
+                                          const juce::String& slotId);
+    /** Message thread: an insert's parameter names, in index order (for automation lanes). */
+    juce::StringArray getTrackPluginParameterNames(const juce::String& trackId, const juce::String& slotId);
+
+    /** Replaces a track's whole insert chain from persisted slots. Idempotent, so load,
+     *  undo/redo, and a full engine rebuild can all share it. Slots whose plugin is not in
+     *  the catalogue become unresolved pass-throughs that keep their saved state. */
+    void setTrackPluginsFromState(const juce::String& trackId,
+                                  const std::vector<TrackPluginSlot>& slots);
+
+    /** Opens (or refocuses) the plugin's own native editor window, which the backend owns.
+     *  False when the slot is unknown or unresolved. */
+    bool openTrackPluginEditor(const juce::String& trackId, const juce::String& slotId,
+                               const juce::String& windowTitle);
+
+    /** Closes an open editor window. Called before a slot's instance is destroyed. */
+    void closeTrackPluginEditor(const juce::String& slotId);
+
+    // Per-track effect automation: builds an immutable snapshot for `trackId`
+    // (merging this param's curve with the track's other lanes), publishes it to
+    // the BusGraph lock-free, and retires the previous snapshot. `points` is the
+    // normalised `{ timeMs, value }` array; fewer than two points clears the lane.
+    void setTrackAutomation(const juce::String& trackId, const juce::String& paramId,
+                            const juce::Array<juce::var>& points);
+
+    // Drop every automation lane on `trackId`, snapping each automated parameter back to its
+    // neutral default. Used when rebuilding the engine from project state so a lane removed by
+    // undo/redo can't leave its last automated value stuck live in the chain. No-op when the
+    // track has no automation.
+    void clearAllTrackAutomation(const juce::String& trackId);
+
+    void setTrackBeatRepeatRegions(const juce::String& trackId,
+                                   const std::vector<BeatRepeatRegion>& regions,
+                                   double bpm, const TempoCurve& tempoCurve = {});
+    void clearTrackBeatRepeatRegions(const juce::String& trackId);
+    void retainBeatRepeatRegionsForTracks(const juce::StringArray& trackIds);
+
+    void setProjectReverb(float size, float decay, float tone, float mix, bool snap);
+    // Re-applies the project reverb and echo settings (a master lane on them was cleared).
+    void restoreProjectFx();
+
+    // Delay time is staged while playing; feedback, tone, and mix apply live.
+    void setProjectDelay(double delayMs, float feedback, float tone, float mix, bool snap);
+
+    void drainAllTrackPeaks(std::vector<BusGraph::TrackPeakSnapshot>& out);
+
+    // Total audio blocks the bus graph dropped under message-thread contention.
+    juce::uint64 busGraphSkippedBlocks() const noexcept { return busGraph.audioBlocksSkipped(); }
+
+    /** Number of superseded render snapshots awaiting a safe reclamation point. */
+    std::size_t retiredPlaybackSnapshotCount() const noexcept;
+
+    // Drains audio-thread block-timing for non-RT perf logging.
+    MasterClockSource::AudioPerfSnapshot drainAudioPerf() noexcept { return master.drainAudioPerf(); }
+
+    void setPositionMs(double ms, bool resetEffects = true);
+    bool scrubPositionMs(double positionMs, double deltaMs);
+
+    struct LoopRange
+    {
+        double startMs{0.0};
+        double endMs{0.0};
+    };
+
+    /** Arms (or, with nullopt, disarms) a timeline range the transport loops while playing.
+     *  Owning the wrap here — rather than having the renderer watch the playhead and send a
+     *  seek — is what makes the restart seamless: the engine reacts on its own uncompensated
+     *  clock and reuses the immediate seek path, so there is no round trip and no output fade. */
+    void setTimelineLoop(std::optional<LoopRange> range);
+
+    /** True while a timeline loop range is armed. Mirrors `isPreviewLoopArmed` and lets a
+     *  caller confirm a project change disarmed the previous project's range — an armed
+     *  loop is otherwise invisible from outside the engine, which is how one survived
+     *  PROJECT_NEW and silently wrapped playback in the next project. */
+    bool isTimelineLoopArmed() const noexcept { return timelineLoop.has_value(); }
+
+    /** Holds the armed loop off without disarming it. A recording session borrows this so a
+     *  take over a looped range stops at the range end instead of wrapping forever (ADR 0030);
+     *  the range itself is left alone, so releasing the hold restores exactly what the project
+     *  asked for without the borrower having to remember and replay it. */
+    void setTimelineLoopSuspended(bool suspended);
+
+    /** True while the armed loop is held off. */
+    bool isTimelineLoopSuspended() const noexcept { return timelineLoopSuspended; }
+
+    bool setClipOffsetMs(const juce::String& clipId, double offsetMs);
+    bool commitClipOffset(const juce::String& clipId);
+
+    bool setClipTrim(const juce::String& clipId, double startMs, double inMs, double clipDurationMs);
+
+    bool setClipWarp(const juce::String& clipId, std::optional<bool> enabled, const std::optional<juce::String>& mode,
+                     std::optional<double> tempoRatio, std::optional<double> semitones, std::optional<double> cents);
+    bool canWarpClip(const juce::String& clipId) const noexcept;
+
+    /** The project's tempo map (empty: the constant tempo, and no clip follows a curve).
+     *  Returns whether it changed. */
+    bool setTempoMap(const std::vector<TempoPoint>& points, double baseBpm);
+    /** A warped clip follows the tempo map when `sourceBpm` > 0 (its source's tempo), and
+     *  plays at its warp ratio when 0. No-op when unchanged. */
+    bool setClipTempoFollow(const juce::String& clipId, double sourceBpm);
+
+    bool setClipEnvelope(const juce::String& clipId, const juce::Array<juce::var>& points);
+
+    /** Play a clip's window backwards (non-destructive); applied upstream of warp/pitch. */
+    bool setClipReversed(const juce::String& clipId, bool reversed);
+
+    bool setClipEdgeFade(const juce::String& clipId,
+                         bool hasFadeIn, double fadeInStartMs, double fadeInEndMs,
+                         bool hasFadeOut, double fadeOutStartMs, double fadeOutEndMs,
+                         EdgeFadeCurve fadeInCurve = EdgeFadeCurve::equalPower,
+                         EdgeFadeCurve fadeOutCurve = EdgeFadeCurve::equalPower);
+
+    /** Apply a turntable brake (record-stop) over the last `brakeSeconds` of the clip.
+     *  `brakeSeconds <= 0` clears it. Non-destructive; applied upstream of the read-ahead
+     *  buffer like reverse/edge fades. v1 affects forward, non-warped clips only. */
+    bool setClipBrake(const juce::String& clipId, double brakeSeconds,
+                      double curvePower = BrakeSnapshot::kDefaultCurvePower);
+    double getBrakeDefaultSeconds() const { return brakeDefaultSeconds; }
+    double getBrakeDefaultCurve() const { return brakeDefaultCurve; }
+    void setBrakeDefaults(double seconds, double curve);
+    bool setClipBackspin(const juce::String& clipId, double backspinSeconds,
+                         double spinSpeed = BackspinSnapshot::kDefaultSpinSpeed,
+                         double curvePower = BackspinSnapshot::kDefaultCurvePower);
+    double getBackspinDefaultSeconds() const { return backspinDefaultSeconds; }
+    double getBackspinDefaultSpeed() const { return backspinDefaultSpeed; }
+    double getBackspinDefaultCurve() const { return backspinDefaultCurve; }
+    void setBackspinDefaults(double seconds, double speed, double curve);
+
+    bool isPlaying() const;
+
+    bool isContentLoaded() const;
+
+    double getPositionMs() const;
+
+    double getClipDurationMs(const juce::String& clipId) const;
+
+    bool loadPreview(const juce::File& filePath, double inMs, double durationMs, juce::String* outError = nullptr,
+                     std::optional<bool> initialWarpEnabled = std::nullopt,
+                     const std::optional<juce::String>& initialWarpMode = std::nullopt,
+                     std::optional<double> initialTempoRatio = std::nullopt,
+                     std::optional<double> initialSemitones = std::nullopt,
+                     std::optional<double> initialCents = std::nullopt);
+
+    void unloadPreview();
+
+    // Release any open reader the engine holds on `file` (currently the preview voice)
+    // so the file can be deleted cleanly — a lingering JUCE reader keeps a deleted WAV
+    // in Windows delete-pending limbo, which blocks removing its per-source folder.
+    void releaseReadersForFile(const juce::File& file);
+
+    void playPreview();
+
+    void pausePreview();
+
+    void stopPreview();
+
+    void setPreviewPositionMs(double ms);
+
+    /** Arms (or, with nullopt, disarms) a window the preview voice loops while playing.
+     *  Positions are preview-relative ms, the same domain as `setPreviewPositionMs`.
+     *  As with `setTimelineLoop`, owning the wrap here is what makes it seamless: the
+     *  renderer would have to wait for a `PREVIEW_POSITION` and send a seek back, which
+     *  can only ever land after audio past the loop end has been rendered (ADR 0023). */
+    void setPreviewLoop(std::optional<LoopRange> range);
+
+    /** True while a preview loop window is armed. The playhead emitter uses this to leave
+     *  the window end to the wrap instead of stopping the voice and raising `PREVIEW_ENDED`. */
+    bool isPreviewLoopArmed() const noexcept { return previewLoop.has_value(); }
+
+    double getPreviewPositionMs() const;
+
+    double getPreviewDurationMs() const;
+
+    bool isPreviewPlaying() const;
+
+    /** True once the preview transport has played to the end of its source and
+     *  auto-stopped (JUCE's stream-finished signal). A full-file sample preview
+     *  reaches true EOF at exactly `durationMs`, so `isPreviewPlaying()` flips
+     *  false before the position-based end check can observe it; this exposes the
+     *  canonical EOF flag so the emitter can still raise `PREVIEW_ENDED`. */
+    bool isPreviewFinished() const;
+
+    bool isPreviewLoaded() const;
+
+    bool setPreviewWarp(std::optional<bool> enabled,
+                        std::optional<juce::String> mode,
+                        std::optional<double> tempoRatio,
+                        std::optional<double> semitones,
+                        std::optional<double> cents);
+
+    bool setPreviewEnvelope(const juce::Array<juce::var>& points);
+
+    bool setPreviewReversed(bool reversed);
+
+    // Clip Editor metronome: clicks on the clip's own beat grid (source BPM + phase anchor) during
+    // preview playback, independent of the main-timeline metronome.
+    void setPreviewMetronomeEnabled(bool enabled);
+    void setPreviewMetronomeGrid(double bpm, double beatAnchorSec);
+
+    /** Apply a turntable brake to the clip-editor preview (record-stop at clip end). */
+    bool setPreviewBrake(double brakeSeconds,
+                         double curvePower = BrakeSnapshot::kDefaultCurvePower);
+    bool setPreviewBackspin(double backspinSeconds,
+                            double spinSpeed = BackspinSnapshot::kDefaultSpinSpeed,
+                            double curvePower = BackspinSnapshot::kDefaultCurvePower);
+
+    juce::int64 getPreviewGeneration() const;
+
+    using ScratchSessionSnapshot = scratch::ScratchSessionController::Snapshot;
+
+    juce::String beginScratchSession(const juce::String& clipId);
+    bool completeScratchSession(
+        const juce::String& sessionId,
+        std::shared_ptr<const juce::AudioBuffer<float>> preparedAudio,
+        double preparedSampleRate);
+    bool failScratchSession(const juce::String& sessionId, const juce::String& error);
+    bool setScratchPreparationProgress(const juce::String& sessionId, double progress);
+    bool closeScratchSession(const juce::String& sessionId);
+    // Backing accompaniment monitor (ADR 0021, Amendment 1).
+    bool beginScratchBackingPreparation(const juce::String& sessionId);
+    bool completeScratchBacking(
+        const juce::String& sessionId,
+        std::shared_ptr<const juce::AudioBuffer<float>> preparedAudio,
+        double preparedSampleRate);
+    bool failScratchBacking(const juce::String& sessionId, const juce::String& error);
+    bool clearScratchBacking(const juce::String& sessionId);
+    bool controlScratchSession(const scratch::SessionControlPayload& control);
+    bool scratchMidiRecordToggle();
+    bool scratchMidiSetTouch(const juce::String& deviceIdentifier,
+                             scratch::DeckSide deck,
+                             bool touched);
+    bool scratchMidiMovePlatter(const juce::String& deviceIdentifier,
+                                scratch::DeckSide deck,
+                                double deltaTurns,
+                                double timestampMs);
+    bool scratchMidiSetCrossfader(const juce::String& deviceIdentifier,
+                                  double directedValue, double displayValue = -1.0,
+                                  bool reverseCrossfader = false);
+    bool setScratchMidiCrossfaderDirection(const juce::String& deviceIdentifier,
+                                           bool reverseCrossfader);
+    void setScratchRealismLevel(scratch::ScratchRealismLevel level) noexcept;
+    bool hasActiveScratchSession() const;
+    void setScratchMidiSelectedDeck(const juce::String& deviceIdentifier,
+                                    scratch::DeckSide deck,
+                                    bool reverseCrossfader);
+    bool releaseScratchMidiOwner(const juce::String& deviceIdentifier,
+                                 std::optional<scratch::DeckSide> deck = std::nullopt);
+    std::optional<ScratchSessionSnapshot> getScratchSessionSnapshot() const;
+    bool reconcileScratchSessionSourceEnd();
+
+    // Retrieve completed recording pattern (moves ownership). Returns nullopt if none ready.
+    std::optional<scratch::Pattern> takeScratchRecordingPattern();
+
+    // Immutable prepared source audio for offline baking of a saved scratch.
+    // Message-thread only; null when no source is prepared.
+    std::shared_ptr<const juce::AudioBuffer<float>> getScratchPreparedSource() const;
+    double getScratchPreparedSourceSampleRate() const;
+
+    // Pattern replay audition (plays a saved pattern through the scratch audio source).
+    bool startScratchPatternReplay(const scratch::Pattern& pattern);
+    void stopScratchPatternReplay();
+    bool isScratchPatternReplaying() const noexcept;
+
+    // Unconditional scratch teardown for project replacement (PROJECT_NEW,
+    // PROJECT_LOAD, PROJECT_LOAD_RECOVERY). Stops any active pattern replay
+    // (and its backing) first, then closes the session, so no scratch
+    // source/backing/replay state survives into the new project.
+    void clearScratchSession();
+
+    // Clip-level pattern snapshot management for timeline playback.
+    void rebuildClipPatternSnapshot(const juce::String& clipId, const ProjectState& projectState);
+    void clearClipPatternSnapshot(const juce::String& clipId);
+    void rebuildAllClipPatternSnapshots(const ProjectState& projectState);
+
+    // Test-only: direct access to the scratch audio source for render verification.
+    scratch::ScratchAudioSource& scratchSourceForTest() { return scratchSource; }
+    // Test-only: direct access to the backing monitor source for verifying
+    // clearScratchSession() and replay-backing teardown.
+    scratch::BackingMonitorSource& backingSourceForTest() { return backingSource; }
+    // Test-only: whether a clip currently has a live WarpProcessor. The engine is
+    // the only place that fact exists, and a clip that project state calls warped
+    // while this is false is the "drawn stretched, plays dry" defect.
+    bool clipHasWarpForTest(const juce::String& clipId) const noexcept;
+    // The live stretcher's tempo ratio (project/source), or 0 when the clip plays dry.
+    double clipWarpRatioForTest(const juce::String& clipId) const noexcept;
+    // Whether the clip follows the tempo map, and the tempo map's points.
+    bool clipFollowsTempoMapForTest(const juce::String& clipId) const noexcept;
+
+    // Windows under-reports Bluetooth endpoint latency, so known headset names get a
+    // conservative visual offset.
+    double getOutputLatencyMs() const;
+
+    double getHeuristicExtraLatencyMs() const;
+
+    // Plugin delay compensation makes the whole mix uniformly late, so the reported
+    // playhead subtracts it alongside device latency (ADR 0026). Kept separate from
+    // getOutputLatencyMs, which reports a device property to the UI.
+    double getPluginLatencyMs() const;
+
+    /** The output device's measured frame rate — the rate the arrangement genuinely
+     *  advances at, which is what a recorded take must be resampled against rather than
+     *  the nominal rate (ADR 0030). Accumulated continuously since the device started. */
+    ClockRateEstimator::Estimate getMeasuredOutputRate() const
+    {
+        return master.outputRateEstimator().estimate();
+    }
+
+    /** The output device's nominal rate, or 0 before a device is open. Message thread. */
+    double getOutputSampleRate() const noexcept { return devicesSnapshot.currentSampleRate; }
+
+    /** Wall-clock tick stamp of the first block the current play actually advanced
+     *  the transport on, or 0 if it has not started rolling. See
+     *  `MasterClockSource::getTransportStartTicks`. */
+    juce::int64 getTransportStartTicks(std::uint32_t* outEpoch = nullptr) const noexcept
+    {
+        return master.getTransportStartTicks(outEpoch);
+    }
+
+    /** Identifies the current play, so a recording can tie its start stamp to one. */
+    std::uint32_t getPlayEpoch() const noexcept { return master.getPlayEpoch(); }
+
+    juce::AudioFormatManager& getFormatManager() noexcept
+    {
+        return formatManager;
+    }
+
+    // Avoid full device scans on startup; ASIO probing can block for hundreds of ms.
+    struct DeviceTypeListing
+    {
+        juce::String typeName;
+        juce::StringArray deviceNames;
+    };
+
+    struct AudioDevicesSnapshot
+    {
+        juce::Array<DeviceTypeListing> types;
+        juce::String currentTypeName;
+        juce::String currentDeviceName;
+        double currentSampleRate = 0.0;
+        int currentBufferSize = 0;
+        int currentOutputChannels = 0;
+        int currentBitDepth = 0;
+        double outputLatencyMs = 0.0;
+        double heuristicExtraLatencyMs = 0.0;
+        bool fellBackToDefault = false;
+    };
+
+    AudioDevicesSnapshot getAudioDevicesSnapshot() const
+    {
+        return devicesSnapshot;
+    }
+
+    void clearFellBackToDefault() noexcept
+    {
+        devicesSnapshot.fellBackToDefault = false;
+    }
+
+    void refreshAudioDevices();
+
+    bool hasScannedAllDevices() const noexcept
+    {
+        return hasFullyScanned;
+    }
+
+    juce::String selectOutputDevice(const juce::String& typeName, const juce::String& deviceName);
+
+    // Explicit per-device keep-awake toggle (default off). When enabled, the keep-alive tone +
+    // one-time first-play wake keep a sleep-prone USB output from clipping the first beat. The
+    // renderer resolves the open device's setting and pushes it. Message-thread only.
+    void setKeepAwakeEnabled(bool enabled);
+
+    using DeviceListChangedCallback = std::function<void()>;
+    void setDeviceListChangedCallback(DeviceListChangedCallback cb)
+    {
+        deviceListChangedCallback = std::move(cb);
+    }
+
+  private:
+    double trackSeekSecondsFor(const Track& track, juce::int64 masterSamples) const;
+
+    void recreateTrackPrefetch(Track& track, double positionSeconds);
+
+    void rebuildTrackPrefetch(Track& track);
+
+    // Schedules the post-edit prefetch rebuild: immediately if playing (must drain stale
+    // read-ahead at once), or marks dirty + starts the debounce timer if stopped.
+    void scheduleTrackPrefetchAfterEdit(Track& track);
+
+    void reclaimRetiredPlaybackSnapshots();
+
+    // Reports how often the warped clips in this run could not be fed fast enough. The
+    // offline render pulls the same processors with no deadline, so a count that appears
+    // here and not there points at read-ahead starvation rather than at Rubber Band.
+    void logWarpShortfalls();
+
+    void setPositionMsNow(double ms, bool resetEffects);
+    void completePendingTransportFade();
+
+    // Rebuilds the preview transport's read-ahead buffer so a changed envelope/gain is heard from
+    // the first played block. JUCE's BufferingAudioSource won't invalidate an already-cached region
+    // in place, so re-setting the source is the only reliable flush when the transport is stopped.
+    void rebuildPreviewReadAhead();
+
+    // Releases preview processors/snapshots only after the stopped transport has flushed its
+    // read-ahead buffer, so no audio callback can retain a superseded pointer.
+    void reclaimRetiredPreviewSnapshots();
+
+    // Push the preview's current in-point + warp ratio to the metronome wrapper so its clicks track
+    // the clip's beat grid through any time-warp.
+    void updatePreviewMetronomeMapping();
+
+    void flushAllDirtyRebuildsSync();
+
+    void flushDirtyRebuilds();
+
+    void flushPendingTrackBypasses();
+    void setTrackAudibleUntil(const juce::String& trackId, bool audible,
+                              double prefetchDeadlineMs,
+                              juce::AudioBuffer<float>& prefetchScratch);
+    bool isTrackAudible(const juce::String& trackId) const noexcept;
+    static bool waitForTrackPrefetch(Track& track, double deadlineMs, juce::AudioBuffer<float>& scratch);
+
+    /** Message thread, master gated. Pushes the compensation alignment through every chain
+     *  and discards it, so play and seek stay responsive instead of opening with silence
+     *  the size of the alignment (ADR 0026). */
+    void primePluginPipeline();
+
+    class RebuildTimer : public juce::Timer
+    {
+      public:
+        explicit RebuildTimer(AudioEngine& e) : engine(e) {}
+        void timerCallback() override
+        {
+            stopTimer();
+            engine.flushDirtyRebuilds();
+        }
+
+      private:
+        AudioEngine& engine;
+    };
+    RebuildTimer rebuildTimer{*this};
+    static constexpr int kRebuildDebounceMs = 150;
+
+    // Detects an audio callback that has stopped running while the device is still
+    // nominally open, and attempts a bounded recovery. Without it a stalled endpoint
+    // leaves the engine reporting a rolling transport with a frozen playhead.
+    class DeviceWatchdogTimer : public juce::Timer
+    {
+      public:
+        explicit DeviceWatchdogTimer(AudioEngine& e) : engine(e) {}
+        void timerCallback() override { engine.checkAudioDeviceHealth(); }
+
+      private:
+        AudioEngine& engine;
+    };
+    DeviceWatchdogTimer deviceWatchdogTimer{*this};
+    std::uint64_t lastWatchdogCallbackCount = 0;
+    int watchdogStalledTicks = 0;
+    int deviceRecoveryAttempts = 0;
+
+    void checkAudioDeviceHealth();
+
+    enum class PendingTransportAction
+    {
+        none,
+        pause,
+        stop,
+        seek
+    };
+
+    class TransportFadeTimer : public juce::Timer
+    {
+      public:
+        explicit TransportFadeTimer(AudioEngine& e) : engine(e) {}
+        void timerCallback() override { engine.completePendingTransportFade(); }
+
+      private:
+        AudioEngine& engine;
+    };
+    TransportFadeTimer transportFadeTimer{*this};
+    PendingTransportAction pendingTransportAction = PendingTransportAction::none;
+    double pendingTransportPositionMs = 0.0;
+    bool pendingTransportResetEffects = true;
+    // A seek asked for while a pause fade is still in flight. It cannot be applied as a
+    // normal pending seek: that would replace the pause and fade the transport back in,
+    // resurrecting playback the caller just stopped. Applied once the pause lands instead.
+    std::optional<double> pendingSeekAfterPauseMs;
+    static constexpr int kTransportFadePollMs = 1;
+
+    void wrapTimelineLoopIfDue();
+    /** Runs the loop poll only while a range is armed, unsuspended, and the transport moves. */
+    void updateTimelineLoopTimer();
+
+    class TimelineLoopTimer : public juce::Timer
+    {
+      public:
+        explicit TimelineLoopTimer(AudioEngine& e) : engine(e) {}
+        void timerCallback() override { engine.wrapTimelineLoopIfDue(); }
+
+      private:
+        AudioEngine& engine;
+    };
+    TimelineLoopTimer timelineLoopTimer{*this};
+    std::optional<LoopRange> timelineLoop;
+    // Held off rather than disarmed, so whoever armed the range stays its only owner.
+    bool timelineLoopSuspended = false;
+    // Overshoot past the loop end is this poll plus the block still being rendered, so a
+    // tighter poll than a block period (~10 ms at 512 frames) would only add message-thread
+    // wakeups for no audible gain.
+    static constexpr int kTimelineLoopPollMs = 2;
+
+    void wrapPreviewLoopIfDue();
+    /** Runs the preview loop poll only while a window is armed and the voice is moving. */
+    void updatePreviewLoopTimer();
+
+    class PreviewLoopTimer : public juce::Timer
+    {
+      public:
+        explicit PreviewLoopTimer(AudioEngine& e) : engine(e) {}
+        void timerCallback() override { engine.wrapPreviewLoopIfDue(); }
+
+      private:
+        AudioEngine& engine;
+    };
+    PreviewLoopTimer previewLoopTimer{*this};
+    std::optional<LoopRange> previewLoop;
+    /** Whether the user currently wants the preview to run. The loop wrap has to
+     *  restart a voice that JUCE auto-stopped at EOF, so it cannot infer intent from
+     *  the transport alone — pausing exactly at EOF would otherwise resume itself. */
+    bool previewPlayIntent = false;
+    static constexpr int kPreviewLoopPollMs = kTimelineLoopPollMs;
+
+    class TrackBypassTimer : public juce::Timer
+    {
+      public:
+        explicit TrackBypassTimer(AudioEngine& e) : engine(e) {}
+        void timerCallback() override { engine.flushPendingTrackBypasses(); }
+
+      private:
+        AudioEngine& engine;
+    };
+    TrackBypassTimer trackBypassTimer{*this};
+    std::unordered_set<juce::String> pendingTrackBypasses;
+    std::unordered_map<juce::String, bool> trackAudibility;
+    static constexpr int kTrackBypassPollMs = 5;
+
+    double brakeDefaultSeconds = BrakeSnapshot::kPlatterStopSeconds;
+    double brakeDefaultCurve = BrakeSnapshot::kDefaultCurvePower;
+    double backspinDefaultSeconds = BackspinSnapshot::kDefaultSpinSeconds;
+    double backspinDefaultSpeed = BackspinSnapshot::kDefaultSpinSpeed;
+    double backspinDefaultCurve = BackspinSnapshot::kDefaultCurvePower;
+    bool pendingSeekPrewarm = false;
+
+    void rebuildBeatRepeatSnapshotsForCurrentSampleRate();
+    void rebuildDevicesSnapshot(bool rescan);
+
+    // Opens the default OUTPUT endpoint only (no capture). The engine never records, and
+    // opening the default input endpoint can stall for tens of seconds on a bad default
+    // mic (e.g. a Bluetooth HFP headset) — the cold-start hang. Returns any JUCE error.
+    juce::String openDefaultOutputOnly();
+
+    // The blocking half of openAudioDevice(): opens the pinned/default output device and
+    // logs the elapsed time. Safe to run off the message thread. Returns any JUCE error.
+    juce::String openAudioDeviceBlocking(const juce::String& preferredTypeName,
+                                         const juce::String& preferredDeviceName,
+                                         bool& outFellBack);
+    juce::String selectOutputDeviceBlocking(const juce::String& typeName,
+                                            const juce::String& deviceName);
+
+    // The message-thread half of openAudioDevice(): attaches the audio callback + device
+    // change listener, rebuilds the device snapshot, logs the inventory, and flips audioReady.
+    void finaliseAudioDevice(bool fellBack);
+
+    void onDeviceListChanged();
+
+    AudioDevicesSnapshot devicesSnapshot;
+    DeviceListChangedCallback deviceListChangedCallback;
+    bool hasFullyScanned = false;
+    // The output the user actually chose, remembered so a device-list change can
+    // put it back. JUCE re-initialises to the system default when it decides the
+    // open endpoint went away, and a capture device opening is enough to make it
+    // look that way — which silently moves playback to the laptop speakers.
+    juce::String chosenOutputTypeName;
+    juce::String chosenOutputDeviceName;
+    bool restoringChosenOutput = false;
+    /** Set when a restore attempt failed, so a device that cannot be reopened is
+     *  not retried on every subsequent list change. Cleared by an explicit
+     *  selection. */
+    juce::String failedRestoreDeviceName;
+
+    class DeviceChangeListener : public juce::ChangeListener
+    {
+      public:
+        explicit DeviceChangeListener(AudioEngine& e) : engine(e) {}
+        void changeListenerCallback(juce::ChangeBroadcaster* /*source*/) override
+        {
+            engine.onDeviceListChanged();
+        }
+
+      private:
+        AudioEngine& engine;
+    };
+    DeviceChangeListener deviceChangeListener{*this};
+
+
+    // The project reverb and echo as last set, for when master automation lets go of them.
+    struct ReverbSettings
+    {
+        float size = 0.5F, decay = 0.5F, tone = 1.0F, mix = 0.0F;
+    } projectReverb;
+    struct DelaySettings
+    {
+        double delayMs = 250.0;
+        float feedback = 0.3F, tone = 1.0F, mix = 0.0F;
+    } projectDelay;
+    void restoreAutomated(const juce::String& trackId, AutomationParam param);
+};
+
+} // namespace stemcel

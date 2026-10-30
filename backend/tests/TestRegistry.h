@@ -1,0 +1,55 @@
+#pragma once
+
+// Per-domain test registration. Each translation unit owns one domain's test
+// functions (in its own anonymous namespace) and exposes a single add function
+// that appends its TestCases to the shared registry assembled in main().
+
+#include "TestSupport.h"
+
+#include <vector>
+
+namespace stemcel::tests
+{
+
+void addProjectStateTests(std::vector<TestCase>& tests);
+void addProjectStateFxTests(std::vector<TestCase>& tests);
+void addProjectStateTrackPluginTests(std::vector<TestCase>& tests);
+void addPersistenceTests(std::vector<TestCase>& tests);
+void addBridgeTests(std::vector<TestCase>& tests);
+void addMidiControllerMappingTests(std::vector<TestCase>& tests);
+void addWarpTests(std::vector<TestCase>& tests);
+void addTempoMapTests(std::vector<TestCase>& tests);
+void addScratchDspTests(std::vector<TestCase>& tests);
+void addBackingMonitorSourceTests(std::vector<TestCase>& tests);
+void addScratchProtocolTests(std::vector<TestCase>& tests);
+void addScratchSessionTests(std::vector<TestCase>& tests);
+void addScratchRecorderTests(std::vector<TestCase>& tests);
+void addAudioEngineTests(std::vector<TestCase>& tests);
+void addFxDspTests(std::vector<TestCase>& tests);
+void addLoudnessTests(std::vector<TestCase>& tests);
+void addEnvelopeFadeTests(std::vector<TestCase>& tests);
+void addAutomationTests(std::vector<TestCase>& tests);
+void addBeatRepeatTests(std::vector<TestCase>& tests);
+void addMixdownRenderTests(std::vector<TestCase>& tests);
+void addStemSeparationTests(std::vector<TestCase>& tests);
+void addBpmDetectorTests(std::vector<TestCase>& tests);
+void addVocalEnhancerTests(std::vector<TestCase>& tests);
+void addVocalDenoiserTests(std::vector<TestCase>& tests);
+void addDereverberatorTests(std::vector<TestCase>& tests);
+void addVocalRestorerTests(std::vector<TestCase>& tests);
+void addDrumEnhancerTests(std::vector<TestCase>& tests);
+void addBassEnhancerTests(std::vector<TestCase>& tests);
+void addOtherEnhancerTests(std::vector<TestCase>& tests);
+void addMelRoformerSpectralTests(std::vector<TestCase>& tests);
+void addBsRoformerSpectralTests(std::vector<TestCase>& tests);
+void addLibraryCleanupTests(std::vector<TestCase>& tests);
+void addDecodedCacheTests(std::vector<TestCase>& tests);
+void addScratchPatternPersistenceTests(std::vector<TestCase>& tests);
+void addScratchPatternEvaluatorTests(std::vector<TestCase>& tests);
+void addScratchPatternReplayProjectStateTests(std::vector<TestCase>& tests);
+void addPluginCatalogueTests(std::vector<TestCase>& tests);
+void addPluginChainTests(std::vector<TestCase>& tests);
+void addPluginLatencyTests(std::vector<TestCase>& tests);
+void addRecordingTests(std::vector<TestCase>& tests);
+
+} // namespace stemcel::tests

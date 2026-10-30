@@ -1,0 +1,809 @@
+#include "MidiDeviceCommands.h"
+
+#include "BridgeServer.h"
+#include "AudioEngine.h"
+#include "Log.h"
+#include "ScratchSessionCommands.h"
+#include "midi/MidiControllerMapping.h"
+#include "midi/MidiScratchRouting.h"
+
+#include <juce_audio_devices/juce_audio_devices.h>
+
+#include <array>
+#include <atomic>
+#include <memory>
+#include <optional>
+#include <vector>
+
+namespace stemcel
+{
+namespace
+{
+constexpr int relativeControlCount = 5;
+
+// Jog/relative UI-feedback broadcasts (MIDI_CONTROL) are throttled to ~30 Hz.
+// The scratch audio path runs per message and is unaffected; this only coalesces
+// the visual echo so heavy scratching can't flood the bridge at the 60 Hz timer
+// rate.
+constexpr juce::int64 relativeBroadcastIntervalMs = 33;
+
+// Controllers can be mid power-on animation or demo/standby light show when we
+// open the output port, and a freshly opened Windows MIDI OUT port may drop the
+// first messages. A single connect-time blank burst is therefore unreliable. For
+// this window after connect the playhead emitter re-asserts authoritative LED
+// state every tick (bypassing the per-value dedupe guard), so the controller
+// receives a sustained host-output stream that wakes it out of demo mode and
+// lands the blank/authoritative state once its port is ready.
+constexpr int kFeedbackWarmupMs = 2000;
+
+struct QueuedMidiMessage
+{
+    juce::int64 timestampMs = 0;
+    int statusByte = 0;
+    int data1 = -1;
+    int data2 = -1;
+};
+
+std::unique_ptr<juce::MidiOutput> openMatchingMidiOutput(const juce::String& inputName)
+{
+    const auto outputs = juce::MidiOutput::getAvailableDevices();
+    for (const auto& output : outputs)
+    {
+        if (output.name.equalsIgnoreCase(inputName))
+            return juce::MidiOutput::openDevice(output.identifier);
+    }
+
+    std::optional<juce::MidiDeviceInfo> candidate;
+    for (const auto& output : outputs)
+    {
+        if (output.name.containsIgnoreCase(inputName) || inputName.containsIgnoreCase(output.name))
+        {
+            if (candidate.has_value()) return nullptr;
+            candidate = output;
+        }
+    }
+    return candidate.has_value() ? juce::MidiOutput::openDevice(candidate->identifier) : nullptr;
+}
+
+bool isMidiInputConnected(const juce::String& identifier)
+{
+    for (const auto& device : juce::MidiInput::getAvailableDevices())
+        if (device.identifier == identifier) return true;
+    return false;
+}
+
+template <std::size_t Size>
+void sendControllerMessages(
+    juce::MidiOutput* output,
+    const std::array<MidiControllerOutputMessage, Size>& messages)
+{
+    if (output == nullptr) return;
+    for (const auto& message : messages)
+    {
+        if (message.statusByte == 0) continue;
+        output->sendMessageNow(
+            juce::MidiMessage(message.statusByte, message.data1, message.data2));
+    }
+}
+
+// Sends the profile's raw connect-time init frames (short messages and/or
+// SysEx) verbatim. Each frame is already a complete, validated MIDI message.
+void sendInitMessages(juce::MidiOutput* output,
+                      const std::vector<std::vector<juce::uint8>>& frames)
+{
+    if (output == nullptr) return;
+    for (const auto& frame : frames)
+    {
+        if (frame.empty()) continue;
+        output->sendMessageNow(
+            juce::MidiMessage(frame.data(), static_cast<int>(frame.size())));
+    }
+}
+
+class ActiveMidiInput final : public juce::MidiInputCallback
+{
+public:
+    ActiveMidiInput(juce::String deviceName, juce::String deviceIdentifier)
+        : name(std::move(deviceName)),
+          identifier(std::move(deviceIdentifier)),
+          hasControllerMapping(supportsMidiControllerMapping(name)),
+          controllerMapper(name)
+    {
+    }
+
+    ~ActiveMidiInput() override
+    {
+        sendControllerMessages(output.get(), controllerMapper.selectedTrackMeterMessages(0, 0));
+        sendControllerMessages(output.get(), controllerMapper.transportPlayMessages(false));
+        sendControllerMessages(output.get(), controllerMapper.cueLightMessages(false));
+        sendControllerMessages(
+            output.get(), controllerMapper.deckSelectionLightMessages(false, false));
+        sendControllerMessages(output.get(), controllerMapper.hotCueLightMessages(0));
+    }
+
+    // Blanks every controller LED the moment the device connects and opens a
+    // warm-up window (see kFeedbackWarmupMs). Sending host output also wakes
+    // controllers out of their idle demo/standby light show. Cue and hot-cue
+    // lights are left dark here; the playhead emitter re-lights them from project
+    // marker state once a project is loaded. The per-value dedupe caches are left
+    // invalidated (-1) rather than seeded to 0 so that a dropped connect-time
+    // burst is still re-sent by the emitter on its next tick.
+    void resetControllerFeedback()
+    {
+        if (output == nullptr) return;
+        sendControllerMessages(output.get(), controllerMapper.selectedTrackMeterMessages(0, 0));
+        sendControllerMessages(output.get(), controllerMapper.transportPlayMessages(false));
+        sendControllerMessages(output.get(), controllerMapper.cueLightMessages(false));
+        sendControllerMessages(output.get(), controllerMapper.hotCueLightMessages(0));
+        sendControllerMessages(
+            output.get(), controllerMapper.deckSelectionLightMessages(
+                              deckActivation.isEnabled(1), deckActivation.isEnabled(2)));
+        feedbackForceUntilMs = juce::Time::currentTimeMillis() + kFeedbackWarmupMs;
+    }
+
+    // True while the post-connect warm-up window is open, during which LED sends
+    // must bypass their per-value dedupe guard and re-assert state every tick.
+    bool shouldForceFeedback(juce::int64 nowMs) const
+    {
+        return nowMs < feedbackForceUntilMs;
+    }
+
+    // Sends the controller's connect-time init frames (from its Mixxx-sourced
+    // profile) to wake it out of demo/standby and request the current positions
+    // of physical controls. A no-op when the profile defines none.
+    void sendControllerInit() const
+    {
+        const auto& frames = controllerMapper.initMessages();
+        for (const auto& frame : frames)
+        {
+            juce::String hex;
+            for (const auto byte : frame)
+                hex << juce::String::toHexString(&byte, 1) << " ";
+            stemcel::log::info("midi", "init frame -> '" + name + "': " + hex.trim() +
+                                             (output == nullptr ? " (NO OUTPUT)" : ""));
+        }
+        sendInitMessages(output.get(), frames);
+    }
+
+    void handleIncomingMidiMessage(juce::MidiInput* /*source*/, const juce::MidiMessage& message) override
+    {
+        const auto* raw = message.getRawData();
+        const auto size = message.getRawDataSize();
+        const auto timestamp = juce::Time::currentTimeMillis();
+        lastActivityMs.store(timestamp, std::memory_order_relaxed);
+
+        int start1 = 0;
+        int size1 = 0;
+        int start2 = 0;
+        int size2 = 0;
+        fifo.prepareToWrite(1, start1, size1, start2, size2);
+        if (size1 == 0)
+        {
+            droppedMessageCount.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+
+        queue[static_cast<size_t>(start1)] = {
+            timestamp,
+            size > 0 ? static_cast<unsigned char>(raw[0]) : 0,
+            size > 1 ? static_cast<unsigned char>(raw[1]) : -1,
+            size > 2 ? static_cast<unsigned char>(raw[2]) : -1};
+        fifo.finishedWrite(1);
+    }
+
+    bool pop(QueuedMidiMessage& message)
+    {
+        int start1 = 0;
+        int size1 = 0;
+        int start2 = 0;
+        int size2 = 0;
+        fifo.prepareToRead(1, start1, size1, start2, size2);
+        if (size1 == 0) return false;
+        message = queue[static_cast<size_t>(start1)];
+        fifo.finishedRead(1);
+        return true;
+    }
+
+    void sendDeckSelectionLights() const
+    {
+        sendControllerMessages(
+            output.get(), controllerMapper.deckSelectionLightMessages(
+                              deckActivation.isEnabled(1), deckActivation.isEnabled(2)));
+    }
+
+    static constexpr int queueCapacity = 512;
+    juce::String name;
+    juce::String identifier;
+    bool hasControllerMapping = false;
+    MidiControllerMapper controllerMapper;
+    MidiDeckActivationState deckActivation;
+    MidiScratchDeviceState scratchState;
+    bool cuePressed[2]{false, false};
+    std::atomic<juce::int64> lastActivityMs{0};
+    std::atomic<int> droppedMessageCount{0};
+    std::array<QueuedMidiMessage, queueCapacity> queue{};
+    juce::AbstractFifo fifo{queueCapacity};
+    juce::int64 lastMonitorBroadcastMs = 0;
+    // Persistent accumulator for throttled jog/relative UI broadcasts (~30 Hz).
+    std::array<std::array<double, relativeControlCount>, 2> pendingRelativeDeltas{};
+    std::array<std::array<juce::int64, relativeControlCount>, 2> pendingRelativeTimestamps{};
+    juce::int64 lastRelativeBroadcastMs = 0;
+    std::unique_ptr<juce::MidiInput> input;
+    std::unique_ptr<juce::MidiOutput> output;
+    int lastMeterValue = -1;
+    int lastPlayingValue = -1;
+    int lastCueValue = -1;
+    int lastHotCueCount = -1;
+    juce::int64 feedbackForceUntilMs = 0;
+};
+
+class MidiInputMonitor final : private juce::Timer
+{
+public:
+    juce::var buildEnvelope() const
+    {
+        auto* obj = new juce::DynamicObject();
+        juce::Array<juce::var> inputs;
+        for (const auto& device : juce::MidiInput::getAvailableDevices())
+        {
+            const auto manufacturer = midiControllerManufacturerName(device.name);
+            auto* inputObj = new juce::DynamicObject();
+            inputObj->setProperty("name", device.name);
+            inputObj->setProperty("identifier", device.identifier);
+            inputObj->setProperty("connected", true);
+            inputObj->setProperty("manufacturer",
+                                  manufacturer.has_value()
+                                      ? juce::var(*manufacturer)
+                                      : juce::var());
+            inputObj->setProperty("controllerProfile",
+                                  manufacturer.has_value()
+                                      ? juce::var("MIDI deck")
+                                      : juce::var());
+
+            const auto* active = findActive(device.identifier);
+            inputObj->setProperty("enabled", active != nullptr && active->input != nullptr);
+            juce::var lastActivity;
+            if (active != nullptr)
+            {
+                const auto activity = active->lastActivityMs.load(std::memory_order_relaxed);
+                if (activity > 0)
+                    lastActivity = static_cast<double>(activity);
+            }
+            inputObj->setProperty("lastActivityMs", lastActivity);
+            inputs.add(juce::var(inputObj));
+        }
+        obj->setProperty("inputs", juce::var(inputs));
+        return {obj};
+    }
+
+    // Flushes each input's ~30 Hz relative-control accumulator immediately
+    // (ignoring the broadcast interval). Called on the message thread before
+    // `activeInputs` is torn down so a partially-accumulated jog delta is not
+    // silently dropped; `ActiveMidiInput`'s destructor cannot do this itself, as
+    // it does not own the bridge/monitor context the broadcast needs.
+    void flushPendingRelativeControls()
+    {
+        for (const auto& active : activeInputs)
+        {
+            broadcastRelativeControls(*active, active->pendingRelativeDeltas,
+                                      active->pendingRelativeTimestamps);
+            active->pendingRelativeDeltas = {};
+        }
+    }
+
+    void setEnabledInputs(const juce::StringArray& identifiers, BridgeServer& targetBridge)
+    {
+        flushPendingRelativeControls();
+        bridge = &targetBridge;
+        activeInputs.clear();
+
+        for (const auto& device : juce::MidiInput::getAvailableDevices())
+        {
+            if (!identifiers.contains(device.identifier)) continue;
+            if (!supportsMidiControllerMapping(device.name))
+            {
+                stemcel::log::warn("midi", "ignoring unsupported MIDI input enable request: " +
+                                              device.name);
+                continue;
+            }
+
+            auto active = std::make_unique<ActiveMidiInput>(device.name, device.identifier);
+            active->scratchState.reverseCrossfader =
+                scratchRouter.lookupReverseCrossfader(device.identifier);
+            active->scratchState.scratchTicksPerTurn =
+                active->controllerMapper.scratchTicksPerTurn();
+            active->scratchState.hasJogTouch =
+                active->controllerMapper.hasJogTouchBinding();
+            active->input = juce::MidiInput::openDevice(device.identifier, active.get());
+            if (active->input != nullptr)
+            {
+                if (supportsMidiControllerOutput(active->name))
+                    active->output = openMatchingMidiOutput(active->name);
+                stemcel::log::info(
+                    "midi", "enabled '" + active->name + "' output=" +
+                                (active->output != nullptr ? juce::String("open")
+                                                           : juce::String("none")) +
+                                " initFrames=" +
+                                juce::String(static_cast<int>(
+                                    active->controllerMapper.initMessages().size())));
+                active->resetControllerFeedback();
+                active->input->start();
+                // Sent after the input starts so the controller's position-report
+                // replies to the init request are captured rather than dropped.
+                active->sendControllerInit();
+                activeInputs.push_back(std::move(active));
+            }
+            else
+            {
+                stemcel::log::warn("midi", "could not open MIDI input " + device.name);
+            }
+        }
+
+        if (!activeInputs.empty()) startTimerHz(60);
+        else stopTimer();
+    }
+
+    void setBridge(BridgeServer& targetBridge)
+    {
+        bridge = &targetBridge;
+    }
+
+    void setScratchEngine(AudioEngine& engine)
+    {
+        scratchRouter.setEngine(engine);
+    }
+
+    void setScratchSettings(const juce::String& identifier, bool reverseCrossfader)
+    {
+        scratchRouter.setSetting(identifier, reverseCrossfader);
+        for (const auto& active : activeInputs)
+        {
+            if (active->identifier == identifier)
+            {
+                active->scratchState.reverseCrossfader = reverseCrossfader;
+                if (scratchRouter.engine() != nullptr)
+                {
+                    scratchRouter.engine()->setScratchMidiCrossfaderDirection(
+                        identifier, reverseCrossfader);
+                }
+            }
+        }
+    }
+
+    void setDeckSelection(const juce::String& identifier, bool deck1Enabled, bool deck2Enabled)
+    {
+        for (const auto& active : activeInputs)
+        {
+            if (active->identifier != identifier) continue;
+            active->deckActivation.setEnabled(1, deck1Enabled);
+            active->deckActivation.setEnabled(2, deck2Enabled);
+            active->cuePressed[0] = false;
+            active->cuePressed[1] = false;
+            active->sendDeckSelectionLights();
+            broadcastDeckSelection(*active);
+            return;
+        }
+        if (!isMidiInputConnected(identifier)) return;
+        stemcel::log::warn("midi", "deck selection target is not an enabled input: " +
+                                          identifier);
+    }
+
+    void sendSelectedTrackMeter(float peakL, float peakR, bool playing)
+    {
+        const auto nowMs = juce::Time::currentTimeMillis();
+        for (const auto& active : activeInputs)
+        {
+            const auto messages = active->controllerMapper.selectedTrackMeterMessages(
+                playing ? peakL : 0.0F, playing ? peakR : 0.0F);
+            const auto value = messages[0].data2;
+            if (active->output == nullptr) continue;
+            if (active->lastMeterValue == value && !active->shouldForceFeedback(nowMs)) continue;
+            active->lastMeterValue = value;
+            sendControllerMessages(active->output.get(), messages);
+        }
+    }
+
+    void sendTransportPlaying(bool playing)
+    {
+        const auto value = playing ? 1 : 0;
+        const auto nowMs = juce::Time::currentTimeMillis();
+        for (const auto& active : activeInputs)
+        {
+            if (active->output == nullptr) continue;
+            if (active->lastPlayingValue == value && !active->shouldForceFeedback(nowMs)) continue;
+            active->lastPlayingValue = value;
+            sendControllerMessages(
+                active->output.get(), active->controllerMapper.transportPlayMessages(playing));
+        }
+    }
+
+    void sendMarkerLights(bool cueActive, int markerCount)
+    {
+        const auto cueValue = cueActive ? 1 : 0;
+        const auto clampedMarkerCount = juce::jlimit(0, 8, markerCount);
+        const auto nowMs = juce::Time::currentTimeMillis();
+        for (const auto& active : activeInputs)
+        {
+            if (active->output == nullptr) continue;
+            const bool force = active->shouldForceFeedback(nowMs);
+            if (active->lastCueValue != cueValue || force)
+            {
+                active->lastCueValue = cueValue;
+                sendControllerMessages(
+                    active->output.get(), active->controllerMapper.cueLightMessages(cueActive));
+            }
+            if (active->lastHotCueCount != clampedMarkerCount || force)
+            {
+                active->lastHotCueCount = clampedMarkerCount;
+                sendControllerMessages(
+                    active->output.get(),
+                    active->controllerMapper.hotCueLightMessages(clampedMarkerCount));
+            }
+        }
+    }
+
+private:
+    const ActiveMidiInput* findActive(const juce::String& identifier) const
+    {
+        for (const auto& active : activeInputs)
+            if (active->identifier == identifier) return active.get();
+        return nullptr;
+    }
+
+    void timerCallback() override
+    {
+        bool activityChanged = false;
+        for (const auto& active : activeInputs)
+        {
+            // Deck-selection LEDs are reset-only (not emitter-driven), so
+            // re-assert them each tick during the warm-up window too.
+            if (active->shouldForceFeedback(juce::Time::currentTimeMillis()))
+                active->sendDeckSelectionLights();
+
+            std::array<std::array<double, relativeControlCount>, 2> relativeDeltas{};
+            std::array<std::array<juce::int64, relativeControlCount>, 2> relativeTimestamps{};
+            std::optional<MidiControllerEvent> latestCrossfaderControl;
+            juce::int64 latestCrossfaderTimestamp = 0;
+            const auto dropped = active->droppedMessageCount.exchange(0, std::memory_order_relaxed);
+            if (dropped > 0)
+            {
+                stemcel::log::warn("midi", "dropped " + juce::String(dropped) +
+                                                  " queued message(s) from " + active->name);
+            }
+
+            QueuedMidiMessage raw;
+            QueuedMidiMessage latest;
+            bool received = false;
+            while (active->pop(raw))
+            {
+                latest = raw;
+                received = true;
+                if (active->hasControllerMapping)
+                {
+                    const auto mapped =
+                        active->controllerMapper.mapMessage(raw.statusByte, raw.data1, raw.data2);
+                    if (mapped.has_value())
+                    {
+                        if (mapped->action == MidiControllerAction::deckToggle)
+                        {
+                            if (mapped->deck < 1 || mapped->deck > 2)
+                            {
+                                stemcel::log::warn(
+                                    "midi", active->name +
+                                                " produced an invalid deck-toggle index");
+                                continue;
+                            }
+                            const auto deckIndex = static_cast<size_t>(mapped->deck - 1);
+                            const auto pressed = mapped->value > 0.5;
+                            if (!pressed)
+                            {
+                                active->cuePressed[deckIndex] = false;
+                            }
+                            else if (!active->cuePressed[deckIndex])
+                            {
+                                active->cuePressed[deckIndex] = true;
+                                const auto scratchSessionOpen =
+                                    scratchRouter.engine() != nullptr
+                                    && scratchRouter.engine()->hasActiveScratchSession();
+                                if (scratchSessionOpen)
+                                {
+                                    active->deckActivation.selectExclusive(mapped->deck);
+                                    scratchRouter.engine()->setScratchMidiSelectedDeck(
+                                        active->identifier,
+                                        static_cast<scratch::DeckSide>(mapped->deck),
+                                        active->scratchState.reverseCrossfader);
+                                    scratchRouter.releaseDeckOwner(
+                                        active->identifier,
+                                        static_cast<scratch::DeckSide>(2 - deckIndex));
+                                    if (bridge != nullptr)
+                                    {
+                                        broadcastScratchSessionState(
+                                            *scratchRouter.engine(), *bridge);
+                                    }
+                                }
+                                else
+                                {
+                                    active->deckActivation.toggle(mapped->deck);
+                                }
+                                active->sendDeckSelectionLights();
+                                broadcastDeckSelection(*active);
+                                stemcel::log::info(
+                                    "midi",
+                                    active->name + " deck " + juce::String(mapped->deck) +
+                                        (active->deckActivation.isEnabled(mapped->deck)
+                                             ? " enabled"
+                                             : " disabled"));
+                            }
+                            continue;
+                        }
+                        if (!active->deckActivation.allows(*mapped)) continue;
+                        scratchRouter.routeImmediate(
+                            active->identifier, active->scratchState, raw.timestampMs,
+                            *mapped, bridge);
+
+                        const auto relativeIndex = relativeControlIndex(mapped->action);
+                        if (mapped->kind == MidiControllerValueKind::relative &&
+                            relativeIndex.has_value() && mapped->deck >= 1 && mapped->deck <= 2)
+                        {
+                            const auto deckIndex = static_cast<size_t>(mapped->deck - 1);
+                            const auto controlIndex = static_cast<size_t>(*relativeIndex);
+                            relativeDeltas[deckIndex][controlIndex] += mapped->value;
+                            relativeTimestamps[deckIndex][controlIndex] = raw.timestampMs;
+                            scratchRouter.routeRelative(
+                                active->identifier, active->scratchState, raw.timestampMs,
+                                *mapped);
+                        }
+                        else if (mapped->kind == MidiControllerValueKind::absolute
+                                 && mapped->action == MidiControllerAction::crossfader)
+                        {
+                            latestCrossfaderControl = *mapped;
+                            latestCrossfaderTimestamp = raw.timestampMs;
+                        }
+                        else
+                        {
+                            broadcastMappedControl(*active, raw.timestampMs, *mapped);
+                        }
+                    }
+                }
+            }
+            if (latestCrossfaderControl)
+            {
+                broadcastMappedControl(
+                    *active, latestCrossfaderTimestamp, *latestCrossfaderControl);
+            }
+            const auto nowMs = juce::Time::currentTimeMillis();
+            // Coalesce this tick's jog deltas into the persistent accumulator and
+            // flush the UI-feedback broadcast at ~30 Hz. routeRelative already
+            // applied the audio motion per message, so this throttle only affects
+            // the visual echo, not scratch responsiveness.
+            for (int deckIndex = 0; deckIndex < 2; ++deckIndex)
+            {
+                for (int controlIndex = 0; controlIndex < relativeControlCount; ++controlIndex)
+                {
+                    const auto delta = relativeDeltas[static_cast<size_t>(deckIndex)]
+                                                     [static_cast<size_t>(controlIndex)];
+                    if (delta == 0.0) continue;
+                    active->pendingRelativeDeltas[static_cast<size_t>(deckIndex)]
+                                                 [static_cast<size_t>(controlIndex)] += delta;
+                    active->pendingRelativeTimestamps[static_cast<size_t>(deckIndex)]
+                                                     [static_cast<size_t>(controlIndex)] =
+                        relativeTimestamps[static_cast<size_t>(deckIndex)]
+                                          [static_cast<size_t>(controlIndex)];
+                }
+            }
+            if (nowMs - active->lastRelativeBroadcastMs >= relativeBroadcastIntervalMs)
+            {
+                broadcastRelativeControls(*active, active->pendingRelativeDeltas,
+                                          active->pendingRelativeTimestamps);
+                active->pendingRelativeDeltas = {};
+                active->lastRelativeBroadcastMs = nowMs;
+            }
+            scratchRouter.checkExpiredOwners(
+                active->identifier, active->scratchState,
+                nowMs, bridge);
+            if (!received) continue;
+
+            activityChanged = true;
+            if (latest.timestampMs - active->lastMonitorBroadcastMs >= 250)
+            {
+                active->lastMonitorBroadcastMs = latest.timestampMs;
+                broadcastMonitorMessage(*active, latest);
+            }
+        }
+
+        const auto now = juce::Time::currentTimeMillis();
+        if (activityChanged && bridge != nullptr && now - lastDeviceListBroadcastMs >= 250)
+        {
+            lastDeviceListBroadcastMs = now;
+            bridge->broadcast("MIDI_DEVICES_LIST", buildEnvelope());
+        }
+    }
+
+    void broadcastMonitorMessage(const ActiveMidiInput& active, const QueuedMidiMessage& raw) const
+    {
+        if (bridge == nullptr) return;
+        auto* message = new juce::DynamicObject();
+        message->setProperty("deviceIdentifier", active.identifier);
+        message->setProperty("timestampMs", static_cast<double>(raw.timestampMs));
+        message->setProperty("statusByte", raw.statusByte);
+        message->setProperty("data1", raw.data1 >= 0 ? juce::var(raw.data1) : juce::var());
+        message->setProperty("data2", raw.data2 >= 0 ? juce::var(raw.data2) : juce::var());
+        bridge->broadcast("MIDI_MESSAGE", juce::var(message));
+    }
+
+    void broadcastDeckSelection(const ActiveMidiInput& active) const
+    {
+        if (bridge == nullptr) return;
+        auto* payload = new juce::DynamicObject();
+        payload->setProperty("deviceIdentifier", active.identifier);
+        payload->setProperty("deck1Enabled", active.deckActivation.isEnabled(1));
+        payload->setProperty("deck2Enabled", active.deckActivation.isEnabled(2));
+        bridge->broadcast("MIDI_DECK_SELECTION", juce::var(payload));
+    }
+
+    static std::optional<int> relativeControlIndex(MidiControllerAction action)
+    {
+        // Browse/zoom remain per-event so one encoder message always means one UI step.
+        switch (action)
+        {
+            case MidiControllerAction::jogScratch: return 0;
+            case MidiControllerAction::jogPitchBend: return 1;
+            case MidiControllerAction::jogSearch: return 2;
+            case MidiControllerAction::wheelPitchBend: return 3;
+            case MidiControllerAction::wheelSearch: return 4;
+            default: return std::nullopt;
+        }
+    }
+
+    static MidiControllerAction relativeControlAt(int index)
+    {
+        constexpr std::array<MidiControllerAction, relativeControlCount> controls{
+            MidiControllerAction::jogScratch, MidiControllerAction::jogPitchBend,
+            MidiControllerAction::jogSearch, MidiControllerAction::wheelPitchBend,
+            MidiControllerAction::wheelSearch};
+        return controls[static_cast<size_t>(index)];
+    }
+
+    void broadcastRelativeControls(
+        const ActiveMidiInput& active,
+        const std::array<std::array<double, relativeControlCount>, 2>& deltas,
+        const std::array<std::array<juce::int64, relativeControlCount>, 2>& timestamps) const
+    {
+        for (int deckIndex = 0; deckIndex < 2; ++deckIndex)
+        {
+            for (int controlIndex = 0; controlIndex < relativeControlCount; ++controlIndex)
+            {
+                const auto delta = deltas[static_cast<size_t>(deckIndex)]
+                                         [static_cast<size_t>(controlIndex)];
+                if (delta == 0.0 || !active.deckActivation.isEnabled(deckIndex + 1)) continue;
+                const MidiControllerEvent event{
+                    relativeControlAt(controlIndex), MidiControllerValueKind::relative,
+                    deckIndex + 1, delta};
+                broadcastMappedControl(
+                    active,
+                    timestamps[static_cast<size_t>(deckIndex)][static_cast<size_t>(controlIndex)],
+                    event);
+            }
+        }
+    }
+
+    void broadcastMappedControl(const ActiveMidiInput& active, juce::int64 timestampMs,
+                                const MidiControllerEvent& event) const
+    {
+        if (bridge == nullptr) return;
+        auto* message = new juce::DynamicObject();
+        message->setProperty("deviceIdentifier", active.identifier);
+        message->setProperty("timestampMs", static_cast<double>(timestampMs));
+        message->setProperty("kind", midiControllerValueKindName(event.kind));
+        message->setProperty("control", midiControllerActionName(event.action));
+        if (event.deck > 0) message->setProperty("deck", event.deck);
+        else message->setProperty("deck", juce::var());
+        if (event.pad > 0) message->setProperty("pad", event.pad);
+        if (event.kind == MidiControllerValueKind::button)
+            message->setProperty("pressed", event.value > 0.5);
+        else
+            message->setProperty("value", event.value);
+        bridge->broadcast("MIDI_CONTROL", juce::var(message));
+    }
+
+    BridgeServer* bridge = nullptr;
+    std::vector<std::unique_ptr<ActiveMidiInput>> activeInputs;
+    juce::int64 lastDeviceListBroadcastMs = 0;
+    MidiScratchRouter scratchRouter;
+};
+
+MidiInputMonitor& midiInputMonitor()
+{
+    static MidiInputMonitor instance;
+    return instance;
+}
+} // namespace
+
+juce::var buildMidiDevicesListEnvelope()
+{
+    return midiInputMonitor().buildEnvelope();
+}
+
+void handleMidiDevicesRequest(stemcel::BridgeServer& bridge)
+{
+    midiInputMonitor().setBridge(bridge);
+    const auto envelope = buildMidiDevicesListEnvelope();
+    stemcel::log::info("midi",
+                         "enumerated " +
+                             juce::String(envelope["inputs"].getArray()->size()) +
+                             " MIDI input device(s)");
+    bridge.broadcast("MIDI_DEVICES_LIST", envelope);
+}
+
+void handleMidiInputsSet(const juce::var& payload, stemcel::BridgeServer& bridge)
+{
+    juce::StringArray identifiers;
+    const auto values = payload.getProperty("identifiers", juce::var());
+    if (!values.isArray())
+    {
+        stemcel::log::warn("midi", "MIDI_INPUTS_SET missing identifiers array");
+        return;
+    }
+    for (const auto& value : *values.getArray())
+    {
+        if (value.isString() && value.toString().isNotEmpty())
+            identifiers.addIfNotAlreadyThere(value.toString());
+    }
+
+    midiInputMonitor().setEnabledInputs(identifiers, bridge);
+    bridge.broadcast("MIDI_DEVICES_LIST", buildMidiDevicesListEnvelope());
+}
+
+void handleMidiDeckSelectionSet(const juce::var& payload, stemcel::BridgeServer& bridge)
+{
+    const auto identifier = payload.getProperty("deviceIdentifier", juce::var());
+    const auto deck1Enabled = payload.getProperty("deck1Enabled", juce::var());
+    const auto deck2Enabled = payload.getProperty("deck2Enabled", juce::var());
+    if (!identifier.isString() || identifier.toString().isEmpty() ||
+        !deck1Enabled.isBool() || !deck2Enabled.isBool())
+    {
+        stemcel::log::warn("midi", "MIDI_DECK_SELECTION_SET has invalid payload");
+        return;
+    }
+    midiInputMonitor().setBridge(bridge);
+    midiInputMonitor().setDeckSelection(
+        identifier.toString(), static_cast<bool>(deck1Enabled), static_cast<bool>(deck2Enabled));
+}
+
+void handleMidiScratchSettingsSet(const juce::var& payload)
+{
+    const auto identifier = payload.getProperty("deviceIdentifier", juce::var());
+    const auto direction = payload.getProperty("crossfaderDirection", juce::var());
+    if (!identifier.isString() || identifier.toString().isEmpty()
+        || !direction.isString()
+        || (direction.toString() != "leftToRight"
+            && direction.toString() != "rightToLeft"))
+    {
+        stemcel::log::warn("midi", "MIDI_SCRATCH_SETTINGS_SET has invalid payload");
+        return;
+    }
+    midiInputMonitor().setScratchSettings(
+        identifier.toString(), direction.toString() == "rightToLeft");
+}
+
+void setMidiScratchEngine(AudioEngine& engine)
+{
+    midiInputMonitor().setScratchEngine(engine);
+}
+
+void sendMidiSelectedTrackMeter(float peakL, float peakR, bool playing)
+{
+    midiInputMonitor().sendSelectedTrackMeter(peakL, peakR, playing);
+}
+
+void sendMidiTransportPlaying(bool playing)
+{
+    midiInputMonitor().sendTransportPlaying(playing);
+}
+
+void sendMidiMarkerLights(bool cueActive, int markerCount)
+{
+    midiInputMonitor().sendMarkerLights(cueActive, markerCount);
+}
+
+} // namespace stemcel

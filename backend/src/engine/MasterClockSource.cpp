@@ -1,0 +1,181 @@
+#include "MasterClockSource.h"
+
+#include <algorithm>
+
+namespace stemcel
+{
+
+void MasterClockSource::getNextAudioBlock(const juce::AudioSourceChannelInfo& info)
+{
+    const juce::ScopedNoDenormals scopedNoDenormals;
+    const auto startTicks = juce::Time::getHighResolutionTicks();
+    callbackCount.fetch_add(1, std::memory_order_relaxed);
+    // Before any early return: the device consumes these frames whatever the transport is
+    // doing, and it is the device's own rate — the rate the arrangement really advances at —
+    // that a recorded take has to be resampled against (ADR 0026, ADR 0030).
+    if (info.numSamples > 0)
+    {
+        outputRate.addBlock(deviceFrames, startTicks);
+        deviceFrames += static_cast<juce::int64>(info.numSamples);
+    }
+    const bool playing = keepAlive.isPlaying();
+    // Latched with `playing` so a block that began under a previous play cannot stamp a
+    // start that a stop/restart has since cleared.
+    const auto observedEpoch = playEpoch.load(std::memory_order_relaxed);
+    const auto requestedGeneration = scrubGeneration.load(std::memory_order_acquire);
+    if (requestedGeneration != activeScrubGeneration)
+    {
+        activeScrubGeneration = requestedGeneration;
+        scrubRendered = scrubRemaining > 0 ? kScrubEdgeFadeSamples : 0;
+        scrubRemaining = scrubRequestedSamples.load(std::memory_order_relaxed);
+    }
+    if (!playing && scrubRemaining <= 0)
+    {
+        wakePrerollRemaining = 0;
+        info.clearActiveBufferRegion();
+        publishAudioPerf(startTicks, info.numSamples);
+        return;
+    }
+
+    if (!playing)
+    {
+        info.clearActiveBufferRegion();
+        const int renderSamples = juce::jmin(info.numSamples, scrubRemaining);
+        if (renderSamples <= 0)
+        {
+            publishAudioPerf(startTicks, info.numSamples);
+            return;
+        }
+
+        juce::AudioSourceChannelInfo scrubInfo(info.buffer, info.startSample, renderSamples);
+        child.getNextAudioBlock(scrubInfo);
+        mixGlue.process(*info.buffer, info.startSample, renderSamples);
+        applyMonitorTrim(*info.buffer, info.startSample, renderSamples);
+        if (scrubDirection.load(std::memory_order_relaxed) < 0)
+        {
+            for (int ch = 0; ch < info.buffer->getNumChannels(); ++ch)
+            {
+                auto* samples = info.buffer->getWritePointer(ch, info.startSample);
+                std::reverse(samples, samples + renderSamples);
+            }
+        }
+
+        for (int i = 0; i < renderSamples; ++i)
+        {
+            const float fadeIn = juce::jlimit(
+                0.0F, 1.0F,
+                static_cast<float>(scrubRendered + i + 1)
+                    / static_cast<float>(kScrubEdgeFadeSamples));
+            const float fadeOut = juce::jlimit(
+                0.0F, 1.0F,
+                static_cast<float>(scrubRemaining - i)
+                    / static_cast<float>(kScrubEdgeFadeSamples));
+            const float gain = juce::jmin(fadeIn, fadeOut);
+            for (int ch = 0; ch < info.buffer->getNumChannels(); ++ch)
+                info.buffer->getWritePointer(ch, info.startSample)[i] *= gain;
+        }
+        scrubRendered += renderSamples;
+        scrubRemaining -= renderSamples;
+        publishAudioPerf(startTicks, info.numSamples);
+        return;
+    }
+
+    if (playStartPending.exchange(false, std::memory_order_acq_rel))
+    {
+        // Only rouse a genuinely cold endpoint. A warm amp (real audio played within the
+        // warm window) is already awake, so bursting into it just adds an audible
+        // start-of-play hiss and needlessly delays the downbeat by the pre-roll. Mirrors
+        // PreviewMetronomeSource, which already applies this rule.
+        if (keepAlive.isKeepAwakeEnabled() && ! keepAlive.isWarm())
+        {
+            wakePrerollRemaining = prerollSamples;
+            keepAlive.armWakeBurst();
+        }
+        else
+        {
+            wakePrerollRemaining = 0;
+        }
+    }
+
+    if (wakePrerollRemaining > 0)
+    {
+        info.clearActiveBufferRegion();
+        wakePrerollRemaining = juce::jmax(0, wakePrerollRemaining - info.numSamples);
+        publishAudioPerf(startTicks, info.numSamples);
+        return;
+    }
+
+    const float transportTarget = transportGainTarget.load(std::memory_order_acquire);
+    if (holdOutputSilence && transportTarget > 0.0F)
+    {
+        holdOutputSilence = false;
+        outputFadeOutComplete.store(false, std::memory_order_release);
+    }
+    if (holdOutputSilence && transportTarget == 0.0F)
+    {
+        info.clearActiveBufferRegion();
+        publishAudioPerf(startTicks, info.numSamples);
+        return;
+    }
+
+    child.getNextAudioBlock(info);
+    mixGlue.process(*info.buffer, info.startSample, info.numSamples);
+    applyMonitorTrim(*info.buffer, info.startSample, info.numSamples);
+    applyTransportFade(*info.buffer, info.startSample, info.numSamples, transportTarget);
+
+    // First block of this play that actually moves the playhead: everything above
+    // returns early without advancing, so this is the instant the arrangement
+    // genuinely starts. A recording trims its head against it. Refused if a
+    // stop/restart overtook this block, so the stamp always belongs to one play.
+    if (playEpoch.load(std::memory_order_relaxed) == observedEpoch)
+    {
+        juce::int64 unset = 0;
+        transportStartTicks.compare_exchange_strong(unset, startTicks, std::memory_order_release,
+                                                    std::memory_order_relaxed);
+    }
+
+    positionSamples.fetch_add(static_cast<juce::int64>(info.numSamples), std::memory_order_relaxed);
+    publishAudioPerf(startTicks, info.numSamples);
+}
+
+void MasterClockSource::applyTransportFade(juce::AudioBuffer<float>& buffer, int startSample,
+                                           int numSamples, float target) noexcept
+{
+    const int channels = buffer.getNumChannels();
+    for (int i = 0; i < numSamples; ++i)
+    {
+        transportGain += juce::jlimit(-kTransportFadeStep, kTransportFadeStep,
+                                       target - transportGain);
+        if (transportGain != 1.0F)
+        {
+            for (int ch = 0; ch < channels; ++ch)
+                buffer.getWritePointer(ch, startSample)[i] *= transportGain;
+        }
+        if (target == 0.0F && transportGain == 0.0F)
+        {
+            holdOutputSilence = true;
+            outputFadeOutComplete.store(true, std::memory_order_release);
+            for (int ch = 0; ch < channels; ++ch)
+                buffer.clear(ch, startSample + i + 1, numSamples - i - 1);
+            break;
+        }
+    }
+}
+
+/** Apply the recording session's backing trim, ramped across the block so a
+ *  fader move is inaudible. Unity is the overwhelmingly common case and costs
+ *  nothing but the compare. */
+void MasterClockSource::applyMonitorTrim(juce::AudioBuffer<float>& buffer, int startSample,
+                                         int numSamples) noexcept
+{
+    monitorTrim.setTargetValue(monitorTrimTarget.load(std::memory_order_acquire));
+    const float startGain = monitorTrim.getNextValue();
+    if (numSamples > 1) monitorTrim.skip(numSamples - 1);
+    const float endGain = monitorTrim.getCurrentValue();
+    if (startGain == 1.0F && endGain == 1.0F) return;
+
+    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+        buffer.applyGainRamp(ch, startSample, numSamples, startGain, endGain);
+}
+
+} // namespace stemcel

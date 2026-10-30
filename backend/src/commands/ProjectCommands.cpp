@@ -1,0 +1,400 @@
+#include "ProjectCommands.h"
+
+#include "AudioConstants.h"
+#include "AudioEngine.h"
+#include "BridgeServer.h"
+#include "DecodedCache.h"
+#include "Log.h"
+#include "PayloadHelpers.h"
+#include "PluginCommands.h"
+#include "ProjectFile.h"
+#include "ProjectState.h"
+
+namespace stemcel
+{
+
+using stemcel::bridge::tryGetNumber;
+using stemcel::bridge::tryGetRequiredString;
+
+void handleProjectNew(stemcel::AudioEngine& engine, stemcel::ProjectState& projectState,
+                      stemcel::BridgeServer& bridge, stemcel::ProjectSession& session)
+{
+    // Capture old clip ids before replacing the tree to avoid leaking sources.
+    const auto previousClipIds = stemcel::collectClipIds(projectState);
+
+    engine.stop();
+    // PROJECT_NEW always clears any scratch session/backing/replay — a fresh
+    // project has nothing for it to reference.
+    engine.clearScratchSession();
+    for (const auto& id : previousClipIds)
+    {
+        engine.removeClip(id);
+    }
+
+    juce::ValueTree fresh(juce::Identifier{"PROJECT"});
+    fresh.setProperty(juce::Identifier{"name"}, stemcel::ProjectState::kDefaultName, nullptr);
+    // A brand-new empty project opens slightly below unity so a first mix has
+    // headroom; opened/loaded projects keep their own stored master volume.
+    fresh.setProperty(juce::Identifier{"masterVolume"},
+                      stemcel::ProjectState::kDefaultMasterVolume, nullptr);
+    projectState.replaceTree(fresh);
+    session.currentPath.clear();
+
+    // A new project abandons any unsaved session's generated artifacts; clear the
+    // temp workspace so stray stems/samples never leak into the next save.
+    stemcel::tempArtifactsRoot().deleteRecursively();
+
+    // replaceTree does not touch the live engine, so realign every project-scoped
+    // setting with the new project's defaults. Shared with load/undo rather than
+    // listed again here, so a setting added to one path can never be missed on the
+    // other (rebuildEngineFromProject itself only runs on load/clip ops).
+    stemcel::syncEngineProjectSettings(engine, projectState);
+
+    bridge.broadcast("PROJECT_STATE", stemcel::buildProjectStateEnvelope(session, projectState, true));
+}
+
+void handleProjectLoad(const juce::var& payload, stemcel::AudioEngine& engine,
+                       stemcel::ProjectState& projectState, stemcel::BridgeServer& bridge,
+                       stemcel::ProjectSession& session, juce::ThreadPool& peakPool,
+                       const stemcel::DecodedCache& decodedCache)
+{
+    const juce::String filePath = tryGetRequiredString(payload, "filePath").value_or(juce::String{});
+    if (filePath.isEmpty())
+    {
+        auto* p = new juce::DynamicObject();
+        p->setProperty("filePath", filePath);
+        p->setProperty("error", juce::String("Missing filePath"));
+        bridge.broadcast("PROJECT_LOAD_FAILED", juce::var(p));
+        return;
+    }
+
+    // Capture old clip ids before load so failures leave the engine intact.
+    const auto previousClipIds = stemcel::collectClipIds(projectState);
+
+    const auto result = stemcel::ProjectFile::load(juce::File(filePath), projectState);
+    if (!result.ok)
+    {
+        auto* p = new juce::DynamicObject();
+        p->setProperty("filePath", filePath);
+        p->setProperty("error", result.error);
+        bridge.broadcast("PROJECT_LOAD_FAILED", juce::var(p));
+        stemcel::log::warn("project", "PROJECT_LOAD failed: " + result.error);
+        return;
+    }
+
+    engine.stop();
+    // Load succeeded — clear any prior scratch session/backing/replay before
+    // replacing the engine's tracks. A failed load above returns early and
+    // never reaches here, so the existing session survives a failed load.
+    engine.clearScratchSession();
+    for (const auto& id : previousClipIds)
+    {
+        engine.removeClip(id);
+    }
+    stemcel::rebuildEngineFromProject(engine, projectState, peakPool, decodedCache);
+    // Legacy projects predate the bpmSeeded flag; if the loaded project already
+    // has on-track content its tempo is established, so don't let a later clip
+    // re-seed (and override) it. Empty loaded projects stay unseeded so the
+    // first dropped clip can still establish the tempo.
+    if (!projectState.isBpmSeeded() && !stemcel::collectClipIds(projectState).isEmpty())
+    {
+        projectState.setBpmSeeded(true);
+    }
+    // Restore the persisted playhead after `engine.stop()` resets to 0.
+    const double persistedPlayhead = projectState.getPlayheadMs();
+    if (persistedPlayhead > 0.0)
+    {
+        engine.setPositionMs(persistedPlayhead);
+    }
+    // Prime read-ahead at the restored playhead to avoid first-play gaps.
+    engine.primeTracksForPlayback(stemcel::kLoadPrimeBudgetMs);
+    session.currentPath = filePath;
+
+    bridge.broadcast("PROJECT_STATE", stemcel::buildProjectStateEnvelope(session, projectState, true));
+    // After the snapshot, so the notice lands on a project the user can already see.
+    stemcel::notifyUnresolvedTrackPlugins(engine, projectState, bridge);
+    stemcel::log::info("project", "PROJECT_LOAD ok path=" + filePath);
+}
+
+void handleProjectSave(const juce::var& payload, stemcel::AudioEngine& engine,
+                       stemcel::ProjectState& projectState, stemcel::BridgeServer& bridge,
+                       stemcel::ProjectSession& session, bool isSaveAs, juce::ThreadPool& peakPool,
+                       const stemcel::DecodedCache& decodedCache)
+{
+    // An empty current path means this is the project's first save: its generated
+    // artifacts still live in the temp workspace and must be relocated into the
+    // saved project folder before serialising.
+    const bool wasUnsaved = session.currentPath.isEmpty();
+
+    juce::String filePath = tryGetRequiredString(payload, "filePath").value_or(juce::String{});
+    if (filePath.isEmpty())
+    {
+        // Defensively fall back to the current project path.
+        filePath = session.currentPath;
+    }
+    if (filePath.isEmpty())
+    {
+        auto* p = new juce::DynamicObject();
+        p->setProperty("filePath", filePath);
+        p->setProperty("ok", false);
+        p->setProperty("error", juce::String("No project path; use Save As first"));
+        bridge.broadcast("PROJECT_SAVED", juce::var(p));
+        return;
+    }
+
+    const auto scrollX = tryGetNumber(payload, "viewScrollX");
+    if (scrollX.has_value())
+    {
+        projectState.setViewScrollX(juce::jmax(0.0, *scrollX));
+    }
+    const auto pxPerSecond = tryGetNumber(payload, "viewPxPerSecond");
+    if (pxPerSecond.has_value())
+    {
+        projectState.setViewPxPerSecond(*pxPerSecond);
+    }
+
+    // Capture playhead on save without marking it as a user edit.
+    const double playheadMs = engine.getPositionMs();
+    projectState.setPlayheadMs(playheadMs);
+
+    if (wasUnsaved)
+    {
+        // Moves temp Stems/Samples beside the project, rebases paths, and rebuilds
+        // the engine (which resets the transport); restore the user's playhead after.
+        stemcel::migrateTempArtifactsIntoProject(filePath, engine, projectState, peakPool, decodedCache);
+        if (playheadMs > 0.0)
+        {
+            engine.setPositionMs(playheadMs);
+        }
+    }
+
+    // Adopt the chosen file's basename BEFORE serialising, so the name the user
+    // picked is the name that reaches disk. Renaming after the write left the file
+    // holding "Untitled" while the session showed the new name, and the markClean()
+    // below then settled that mismatch permanently — the project reopened as
+    // "Untitled" and the chosen name was lost for good.
+    //
+    // Only a first save or an explicit Save As may do this, because only those put
+    // the user in front of a dialog naming the file. A plain Ctrl+S must never
+    // rename an existing project: projects saved before 1.4.2 all carry the default
+    // name, and rewriting those on an ordinary save would silently relabel a user's
+    // back catalogue.
+    const auto previousName = projectState.getName();
+    if ((wasUnsaved || isSaveAs) && previousName == stemcel::ProjectState::kDefaultName)
+    {
+        // Only the default project name follows the chosen file basename.
+        const auto stem = juce::File(filePath).getFileNameWithoutExtension();
+        if (stem.isNotEmpty())
+        {
+            projectState.setName(stem);
+        }
+    }
+
+    stemcel::captureTrackPluginStates(engine, projectState);
+    const auto result = stemcel::ProjectFile::save(juce::File(filePath), projectState);
+    auto* p = new juce::DynamicObject();
+    p->setProperty("filePath", filePath);
+    p->setProperty("ok", result.wasOk());
+    if (!result.wasOk())
+    {
+        p->setProperty("error", result.getErrorMessage());
+    }
+    if (result.wasOk())
+    {
+        session.currentPath = filePath;
+        // markClean emits PROJECT_DIRTY(false).
+        projectState.markClean();
+    }
+    else if (projectState.getName() != previousName)
+    {
+        // A failed save must not leave the project named after a file it is not in.
+        projectState.setName(previousName);
+    }
+    bridge.broadcast("PROJECT_SAVED", juce::var(p));
+    stemcel::log::info("project",
+                         juce::String("PROJECT_SAVE ") + (isSaveAs ? "(as) " : "") +
+                             (result.wasOk() ? "ok" : "fail: " + result.getErrorMessage()) + " path=" + filePath);
+    if (result.wasOk() && isSaveAs)
+    {
+        // Save As changes filePath/name without a separate rename ack.
+        bridge.broadcast("PROJECT_STATE", stemcel::buildProjectStateEnvelope(session, projectState, false));
+    }
+}
+
+void handleProjectSaveViewState(const juce::var& payload, stemcel::AudioEngine& engine,
+                                stemcel::ProjectState& projectState, stemcel::BridgeServer& bridge,
+                                const stemcel::ProjectSession& session)
+{
+    juce::String filePath = tryGetRequiredString(payload, "filePath").value_or(juce::String{});
+    if (filePath.isEmpty())
+    {
+        filePath = session.currentPath;
+    }
+
+    auto* p = new juce::DynamicObject();
+    p->setProperty("filePath", filePath);
+    if (filePath.isEmpty())
+    {
+        p->setProperty("ok", false);
+        p->setProperty("error", juce::String("No project path for view-state save"));
+        bridge.broadcast("PROJECT_VIEW_STATE_SAVED", juce::var(p));
+        return;
+    }
+
+    const double scrollX = juce::jmax(0.0, tryGetNumber(payload, "viewScrollX").value_or(projectState.getViewScrollX()));
+    const double playheadMs = juce::jmax(0.0, engine.getPositionMs());
+    projectState.setViewScrollX(scrollX);
+    projectState.setPlayheadMs(playheadMs);
+
+    // Renderer sends the live zoom; fall back to in-memory state for older clients.
+    const double pxPerSecond = tryGetNumber(payload, "viewPxPerSecond").value_or(projectState.getViewPxPerSecond());
+    projectState.setViewPxPerSecond(pxPerSecond);
+
+    // PROJECT_SET_VIEW already keeps selection and panel state current.
+    const juce::String selectedTrackId = projectState.getViewSelectedTrack();
+    const bool fxPanelOpen = projectState.getViewFxPanelOpen();
+    const auto timelineSelection = projectState.getViewTimelineSelection();
+
+    const auto result = stemcel::ProjectFile::saveViewState(juce::File(filePath), scrollX,
+                                                              projectState.getViewPxPerSecond(), playheadMs,
+                                                              selectedTrackId, fxPanelOpen,
+                                                              projectState.getMetronomeEnabled(),
+                                                              projectState.getClipEditorMetronomeEnabled(),
+                                                              timelineSelection,
+                                                              projectState.getViewSnapGrid(),
+                                                              projectState.getViewFxTab());
+    p->setProperty("ok", result.wasOk());
+    if (!result.wasOk())
+    {
+        p->setProperty("error", result.getErrorMessage());
+    }
+    bridge.broadcast("PROJECT_VIEW_STATE_SAVED", juce::var(p));
+    stemcel::log::info("project",
+                         juce::String("PROJECT_SAVE_VIEW_STATE ") +
+                             (result.wasOk() ? "ok" : "fail: " + result.getErrorMessage()) + " path=" + filePath);
+}
+
+void handleProjectRename(const juce::var& payload, stemcel::ProjectState& projectState,
+                         stemcel::BridgeServer& bridge)
+{
+    const juce::String name = tryGetRequiredString(payload, "name").value_or(juce::String{});
+    projectState.setName(name);
+    auto* p = new juce::DynamicObject();
+    p->setProperty("name", projectState.getName());
+    p->setProperty("ok", true);
+    bridge.broadcast("PROJECT_RENAMED", juce::var(p));
+}
+
+// Autosave must not touch currentPath or clear dirty state.
+void handleProjectAutosave(const juce::var& payload, stemcel::AudioEngine& engine,
+                           stemcel::ProjectState& projectState, stemcel::BridgeServer& bridge)
+{
+    const juce::String filePath = tryGetRequiredString(payload, "filePath").value_or(juce::String{});
+    auto* p = new juce::DynamicObject();
+    p->setProperty("filePath", filePath);
+    if (filePath.isEmpty())
+    {
+        p->setProperty("ok", false);
+        p->setProperty("error", juce::String("Missing filePath"));
+        bridge.broadcast("PROJECT_AUTOSAVED", juce::var(p));
+        return;
+    }
+
+    // Dirty-suppressed playhead/scroll capture avoids autosave feedback loops.
+    const auto scrollX = tryGetNumber(payload, "viewScrollX");
+    if (scrollX.has_value())
+    {
+        projectState.setViewScrollX(juce::jmax(0.0, *scrollX));
+    }
+    const auto pxPerSecond = tryGetNumber(payload, "viewPxPerSecond");
+    if (pxPerSecond.has_value())
+    {
+        projectState.setViewPxPerSecond(*pxPerSecond);
+    }
+    projectState.setPlayheadMs(juce::jmax(0.0, engine.getPositionMs()));
+
+    stemcel::captureTrackPluginStates(engine, projectState);
+    const auto result = stemcel::ProjectFile::save(juce::File(filePath), projectState);
+    p->setProperty("ok", result.wasOk());
+    if (!result.wasOk())
+    {
+        p->setProperty("error", result.getErrorMessage());
+    }
+    bridge.broadcast("PROJECT_AUTOSAVED", juce::var(p));
+    stemcel::log::debug("project",
+                         juce::String("PROJECT_AUTOSAVE ") +
+                             (result.wasOk() ? "ok" : "fail: " + result.getErrorMessage()) + " path=" + filePath);
+}
+
+// Recovery points Save back at the original path and forces a deliberate save.
+void handleProjectLoadRecovery(const juce::var& payload, stemcel::AudioEngine& engine,
+                               stemcel::ProjectState& projectState, stemcel::BridgeServer& bridge,
+                               stemcel::ProjectSession& session, juce::ThreadPool& peakPool,
+                               const stemcel::DecodedCache& decodedCache)
+{
+    const juce::String autosavePath = tryGetRequiredString(payload, "autosavePath").value_or(juce::String{});
+    const juce::var originalVar = payload.getProperty("originalPath", juce::var());
+    const juce::String originalPath = originalVar.isString() ? originalVar.toString() : juce::String();
+
+    if (autosavePath.isEmpty())
+    {
+        auto* p = new juce::DynamicObject();
+        p->setProperty("filePath", autosavePath);
+        p->setProperty("error", juce::String("Missing autosavePath"));
+        bridge.broadcast("PROJECT_LOAD_FAILED", juce::var(p));
+        return;
+    }
+
+    const auto previousClipIds = stemcel::collectClipIds(projectState);
+
+    const auto result = stemcel::ProjectFile::load(juce::File(autosavePath), projectState);
+    if (!result.ok)
+    {
+        auto* p = new juce::DynamicObject();
+        p->setProperty("filePath", autosavePath);
+        p->setProperty("error", result.error);
+        bridge.broadcast("PROJECT_LOAD_FAILED", juce::var(p));
+        stemcel::log::warn("project", "PROJECT_LOAD_RECOVERY failed: " + result.error);
+        return;
+    }
+
+    engine.stop();
+    // Recovery load succeeded — clear any prior scratch session/backing/replay
+    // before replacing the engine's tracks (see PROJECT_LOAD).
+    engine.clearScratchSession();
+    for (const auto& id : previousClipIds)
+    {
+        engine.removeClip(id);
+    }
+    stemcel::rebuildEngineFromProject(engine, projectState, peakPool, decodedCache);
+    // Recovered legacy autosaves: treat existing on-track content as an
+    // established tempo so a later clip add cannot override it (see PROJECT_LOAD).
+    if (!projectState.isBpmSeeded() && !stemcel::collectClipIds(projectState).isEmpty())
+    {
+        projectState.setBpmSeeded(true);
+    }
+
+    const double persistedPlayhead = projectState.getPlayheadMs();
+    if (persistedPlayhead > 0.0)
+    {
+        engine.setPositionMs(persistedPlayhead);
+    }
+    // Prime read-ahead at the restored playhead; see PROJECT_LOAD.
+    engine.primeTracksForPlayback(stemcel::kLoadPrimeBudgetMs);
+
+    // Never expose the autosave path as the user's working file.
+    session.currentPath = originalPath;
+
+    bridge.broadcast("PROJECT_STATE", stemcel::buildProjectStateEnvelope(session, projectState, true));
+    // After the snapshot, so the notice lands on a project the user can already see.
+    stemcel::notifyUnresolvedTrackPlugins(engine, projectState, bridge);
+
+    // ProjectFile::load marks clean, so re-dirty recovered projects explicitly.
+    projectState.markDirty();
+
+    stemcel::log::info("project",
+                         juce::String("PROJECT_LOAD_RECOVERY ok autosavePath=") + autosavePath +
+                             " originalPath=" + originalPath);
+}
+
+} // namespace stemcel

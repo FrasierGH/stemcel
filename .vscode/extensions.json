@@ -1,0 +1,17 @@
+{
+  // Extensions this workspace's settings.json / tasks.json actively configure.
+  // VS Code offers to install these on first open.
+  "recommendations": [
+    // Backend: CTest integration for the Testing panel, plus configure/build.
+    "ms-vscode.cmake-tools",
+    // C++ IntelliSense (cpptools is disabled in settings; kept for debugging).
+    "llvm-vs-code-extensions.vscode-clangd",
+    "ms-vscode.cpptools",
+
+    // macOS debugging (Stemcel (macOS) launch config).
+    "vadimcn.vscode-lldb",
+
+    // Docs.
+    "yzhang.markdown-all-in-one"
+  ]
+}

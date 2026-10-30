@@ -1,0 +1,66 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    // ─── Native app (default F5 path) ────────────────────────────────────
+    // One process: the JUCE UI and the engine. Builds StemcelNative first.
+    {
+      "name": "Stemcel",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/backend/build/StemcelNative_artefacts/Debug/Stemcel.exe",
+      "cwd": "${workspaceFolder}/backend/build/StemcelNative_artefacts/Debug",
+      "console": "integratedTerminal",
+      "preLaunchTask": "native: build",
+      "presentation": { "group": "1_app", "order": 1 }
+    },
+    {
+      "name": "Stemcel (macOS)",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/backend/build/StemcelNative_artefacts/Debug/Stemcel.app/Contents/MacOS/Stemcel",
+      "presentation": { "group": "1_app", "order": 2 }
+    },
+    {
+      "name": "Stemcel smoke test",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/backend/build/StemcelNative_artefacts/Debug/Stemcel.exe",
+      "args": ["--smoke-test", "${workspaceFolder}/backend/build/native-smoke"],
+      "cwd": "${workspaceFolder}/backend/build/StemcelNative_artefacts/Debug",
+      "console": "integratedTerminal",
+      "preLaunchTask": "native: build",
+      "presentation": { "group": "1_app", "order": 3 }
+    },
+
+    // ─── JUCE backend (C++ / MSVC) ───────────────────────────────────────
+    // Standalone headless engine (the console backend) for attaching a C++
+    // debugger or driving the WebSocket protocol from a manual client. The
+    // `--token` arg passes a fixed dev value so hand-made clients can AUTH.
+    {
+      "name": "Backend only (Debug, no renderer)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/backend/build/StemcelBackend_artefacts/Debug/StemcelBackend.exe",
+      "args": ["--token", "dev-standalone-token"],
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}/backend/build/StemcelBackend_artefacts/Debug",
+      "environment": [],
+      "console": "integratedTerminal",
+      "preLaunchTask": "backend: build",
+      "presentation": {
+        "group": "2_advanced",
+        "order": 3
+      }
+    },
+    {
+      "name": "Backend: Attach to running process",
+      "type": "cppvsdbg",
+      "request": "attach",
+      "processId": "${command:pickProcess}",
+      "presentation": {
+        "group": "2_advanced",
+        "order": 4
+      }
+    }
+  ]
+}

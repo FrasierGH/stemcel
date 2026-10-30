@@ -1,0 +1,39 @@
+#include "MixdownEngine.h"
+
+#include "MixdownRender.h"
+
+#include <utility>
+
+#include <juce_core/juce_core.h>
+
+namespace stemcel
+{
+
+const char* mixdownFailureCodeToString(MixdownFailureCode code) noexcept
+{
+    switch (code)
+    {
+        case MixdownFailureCode::Cancelled: return "cancelled";
+        case MixdownFailureCode::Io:        return "io";
+        case MixdownFailureCode::Decode:    return "decode";
+        case MixdownFailureCode::Encode:    return "encode";
+        case MixdownFailureCode::Invalid:   return "invalid";
+    }
+    return "invalid";
+}
+
+void renderMixdownAsync(MixdownSnapshot snapshot,
+                        MixdownOptions options,
+                        juce::ThreadPool& pool,
+                        BridgeServer& bridge,
+                        std::atomic<bool>& cancelFlag,
+                        std::atomic<bool>& busyFlag)
+{
+    busyFlag.store(true);
+    cancelFlag.store(false);
+
+    pool.addJob([snapshot = std::move(snapshot), options = std::move(options), &bridge, &cancelFlag,
+                 &busyFlag]() mutable { runMixdownJob(snapshot, std::move(options), bridge, cancelFlag, busyFlag); });
+}
+
+} // namespace stemcel

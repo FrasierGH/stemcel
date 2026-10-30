@@ -1,0 +1,68 @@
+#pragma once
+
+#include <juce_core/juce_core.h>
+
+namespace stemcel
+{
+
+class AudioEngine;
+class ProjectState;
+class DecodedCache;
+
+// Per-process project path state; empty means the project has never been saved.
+struct ProjectSession
+{
+    juce::String currentPath;
+};
+
+juce::StringArray collectClipIds(const ProjectState& projectState);
+
+// Root of the per-session temporary workspace for an unsaved project's generated
+// artifacts (separated stems, exported samples). Everything beneath it is
+// discarded when the project is saved or a new project is started.
+juce::File tempArtifactsRoot();
+
+// Base directory for a generated-artifact category (e.g. "stems", "samples"):
+// <projectDir>/<subdir> once the project is saved, else the temp workspace so
+// unsaved work never lands outside the disposable temp area.
+juce::File projectArtifactsBaseDir(const juce::String& projectPath, const juce::String& subdir);
+
+// Relocate an unsaved project's temporary generated artifacts into its newly
+// saved folder: move the temp Stems/Samples trees beside the project file,
+// rewrite the project's absolute paths to the new locations, rebuild the engine
+// from those paths, and purge the temp workspace. No-op when the temp workspace
+// holds no artifacts. Call before serialising on the first save.
+void migrateTempArtifactsIntoProject(const juce::String& projectFilePath, AudioEngine& engine,
+                                     ProjectState& projectState, juce::ThreadPool& peakPool,
+                                     const DecodedCache& decodedCache);
+
+// `reset` tells the renderer to discard optimistic local state before applying this snapshot.
+juce::var buildProjectStateEnvelope(const ProjectSession& session, const ProjectState& projectState, bool reset);
+
+// Undo/redo uses softReplace to reconcile removed entities without resetting renderer-local state.
+juce::var buildSoftReplaceProjectStateEnvelope(const ProjectSession& session, ProjectState& projectState);
+
+// Realigns every project-scoped engine setting that does not depend on clips (master gain,
+// safety limiter, mix glue, metronome, beat repeat, timeline loop, shared reverb/delay).
+// Shared by load/undo/redo and by PROJECT_NEW so the two can never drift apart.
+void syncEngineProjectSettings(AudioEngine& engine, ProjectState& projectState);
+
+// Caller must drop existing engine clips before rebuilding from project state.
+void rebuildEngineFromProject(AudioEngine& engine, ProjectState& projectState,
+                              juce::ThreadPool& peakPool, const DecodedCache& decodedCache);
+
+// Copies every hosted plugin's live state chunk back into the project tree, so a save writes
+// what the plugins currently sound like rather than what they sounded like when loaded
+// (ADR 0025). Call immediately before serialising.
+void captureTrackPluginStates(AudioEngine& engine, ProjectState& projectState);
+
+// Incremental undo/redo fast path: reconcile only the touched clips' engine state (position,
+// trim, gain, warp, envelope, reverse, brake, backspin) in place, without tearing down and
+// re-adding every clip (which re-opens a reader per clip). Returns false if any touched clip is
+// no longer in the project — i.e. the transaction was structural after all — so the caller must
+// fall back to a full rebuild. Only valid for non-structural, clip-only changes
+// (see ProjectState::UndoChangeSet).
+bool applyUndoClipChangesIncremental(AudioEngine& engine, ProjectState& projectState,
+                                     const juce::StringArray& clipIds);
+
+} // namespace stemcel

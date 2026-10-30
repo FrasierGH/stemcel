@@ -1,0 +1,38 @@
+[package]
+name = "stemcel_rekordbox"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+license = "AGPL-3.0-or-later"
+description = "Read-only rekordbox library access for Stemcel, behind a C ABI."
+publish = false
+
+# Built as a shared library the app loads at runtime: the engine links the C runtime
+# statically on Windows, and keeping SQLCipher/OpenSSL in their own module avoids
+# mixing runtimes (and makes rekordbox support optional when the library is absent).
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# rbxport by Chris Le (GPL-2.0-or-later), pinned to a reviewed revision.
+rbl-db = { git = "https://github.com/chrisle/rbxport", rev = "b739d369665b492534dc2eae0733322c040a26d5" }
+rbl-index = { git = "https://github.com/chrisle/rbxport", rev = "b739d369665b492534dc2eae0733322c040a26d5" }
+rbl-anlz = { git = "https://github.com/chrisle/rbxport", rev = "b739d369665b492534dc2eae0733322c040a26d5" }
+lofty = { version = "0.22", default-features = false }
+serde_json = "1"
+# Decoding what JUCE cannot read on every platform (m4a/aac/alac, ogg/vorbis) to a WAV.
+symphonia = { version = "0.5", default-features = false, features = ["aac", "isomp4", "alac", "ogg", "vorbis"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+panic = "unwind"
+strip = "symbols"
+
+[profile.dev.package."*"]
+# SQLCipher is unusably slow unoptimised.
+opt-level = 2
