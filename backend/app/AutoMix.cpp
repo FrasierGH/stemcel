@@ -127,8 +127,24 @@ juce::StringArray styles()
     return {"Auto", "Smooth", "Club", "Party"};
 }
 
+std::optional<double> windowEnergyDb(WaveformStore& waveforms, const LibraryItemModel& item, double fromMs, double toMs)
+{
+    const auto peaks = waveforms.get(item.audioPath());
+    if (peaks == nullptr || peaks->bucketsPerLane() == 0 || peaks->peaksPerSecond <= 0) return std::nullopt;
+    const int buckets = peaks->bucketsPerLane();
+    const int first = juce::jlimit(0, buckets, static_cast<int>(fromMs / 1000.0 * peaks->peaksPerSecond));
+    const int last = juce::jlimit(0, buckets, static_cast<int>(toMs / 1000.0 * peaks->peaksPerSecond));
+    if (last - first < 4) return std::nullopt;
+    double sum = 0.0;
+    for (int i = first; i < last; ++i)
+        sum += 0.5 * std::abs(peaks->peaks[static_cast<size_t>(2 * i + 1)] - peaks->peaks[static_cast<size_t>(2 * i)]);
+    const double mean = sum / (last - first);
+    return mean > 1.0e-6 ? 20.0 * std::log10(mean) : -120.0;
+}
+
 Choice choose(const ProjectModel& model, WaveformStore& waveforms, const LibraryItemModel* out, const LibraryItemModel* in,
-              const juce::String& previous, const juce::String& style, int outShift, int inShift)
+              const juce::String& previous, const juce::String& style, int outShift, int inShift, const ClipModel* outClip,
+              const ClipModel* inClip)
 {
     const auto ko = camelot(transposeKey(keyOf(model, out), outShift));
     const auto ki = camelot(transposeKey(keyOf(model, in), inShift));
@@ -136,7 +152,21 @@ Choice choose(const ProjectModel& model, WaveformStore& waveforms, const Library
     const double bo = sourceBpm(model, out), bi = sourceBpm(model, in);
     const double tempoGap = bo > 0.0 && bi > 0.0 ? std::abs(bo - bi) / bo : -1.0;
     std::optional<double> energyStep;
-    if (out != nullptr && in != nullptr)
+    bool atTheJoin = false;
+    // Where the clips meet: the outgoing clip's last 8 s against the incoming one's first 8 s.
+    constexpr double kEdgeMs = 8000.0;
+    if (out != nullptr && in != nullptr && outClip != nullptr && inClip != nullptr)
+    {
+        const double outEnd = outClip->inMs + outClip->durationMs;
+        if (const auto eo = windowEnergyDb(waveforms, *out, juce::jmax(outClip->inMs, outEnd - kEdgeMs), outEnd),
+            ei = windowEnergyDb(waveforms, *in, inClip->inMs, inClip->inMs + juce::jmin(kEdgeMs, inClip->durationMs));
+            eo && ei)
+        {
+            energyStep = *ei - *eo;
+            atTheJoin = true;
+        }
+    }
+    if (!energyStep.has_value() && out != nullptr && in != nullptr)
         if (const auto eo = energyDb(waveforms, *out), ei = energyDb(waveforms, *in); eo && ei) energyStep = *ei - *eo;
 
     const bool keysClash = keyGap >= 2;
@@ -176,7 +206,7 @@ Choice choose(const ProjectModel& model, WaveformStore& waveforms, const Library
     why << (keyGap < 0 ? "key unknown" : keysClash ? "keys clash (" + ko.text() + " > " + ki.text() + ")"
                                                    : "in key (" + ko.text() + " > " + ki.text() + ")");
     if (tempoGap >= 0.0) why << ", tempo " << juce::String(bo, 1) << " > " << juce::String(bi, 1);
-    if (energy != 0) why << (energy > 0 ? ", energy up" : ", energy down");
+    if (energy != 0) why << (energy > 0 ? ", energy up" : ", energy down") << (atTheJoin ? " at the join" : "");
     return {best->id, why};
 }
 

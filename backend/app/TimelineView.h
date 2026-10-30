@@ -46,6 +46,13 @@ class TimelineView final : public juce::Component,
                            private juce::Timer
 {
   public:
+    // Clips on other tracks this one could hand over to, or take over from, without
+    // overlapping yet: the nearest starting within 16 bars after it ends, and the nearest
+    // ending within 16 bars before it starts. As (outgoing, incoming).
+    std::vector<std::pair<juce::String, juce::String>> nearbyPairs(const juce::String& clipId) const;
+    // Applies a preset; when the clips do not overlap yet, the incoming one first moves so the
+    // preset's length of bars fits (on a bar). One undo step.
+    void applyTransitionPlacing(const juce::String& outId, const juce::String& inId, const juce::String& presetId);
     TimelineView(ProjectMirror& mirror, TimelineViewState& view, LiveState& live, TimelineActions& actions,
                  WaveformStore& waveforms);
     ~TimelineView() override;
@@ -206,8 +213,18 @@ class TimelineView final : public juce::Component,
     std::pair<double, double> tempoDragRange; // the scale stays put while a point moves
 
     void paintMixTransitions(juce::Graphics& g);
-    // A recorded transition's label bar along the bottom of the incoming clip.
-    std::optional<juce::Rectangle<float>> transitionBar(const juce::var& record) const;
+    // Where a recorded transition is drawn: its window over the outgoing and incoming clips,
+    // the connector between them, and its name. Double-click any of it to edit.
+    struct TransitionShape
+    {
+        juce::Rectangle<float> out, in, connector, pill;
+        bool contains(juce::Point<float> p) const
+        {
+            return out.contains(p) || in.contains(p) || connector.contains(p) || pill.contains(p);
+        }
+    };
+    std::optional<TransitionShape> transitionShape(const juce::var& record) const;
+
     juce::String transitionDropClipId; // the clip a dragged transition would land on
 
     void placeClipNameEditor();

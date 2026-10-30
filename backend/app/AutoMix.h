@@ -55,8 +55,13 @@ struct Choice
 // The preset that suits joining `out` into `in`. `previous` (the last join's preset) is
 // avoided, so a mix does not repeat one move all the way through.
 // `outShift` / `inShift` are the clips' pitch shifts in semitones (their keys move with them).
+// With the clips given, the energy compared is where they meet (the outgoing one's last
+// bars against the incoming one's first), not the whole tracks'.
 Choice choose(const ProjectModel& model, WaveformStore& waveforms, const LibraryItemModel* out, const LibraryItemModel* in,
-              const juce::String& previous, const juce::String& style, int outShift = 0, int inShift = 0);
+              const juce::String& previous, const juce::String& style, int outShift = 0, int inShift = 0,
+              const ClipModel* outClip = nullptr, const ClipModel* inClip = nullptr);
+// The summary lane's average swing over [fromMs, toMs) of a file (source time), in dB.
+std::optional<double> windowEnergyDb(WaveformStore& waveforms, const LibraryItemModel& item, double fromMs, double toMs);
 
 // Orders `itemIds` harmonically: from the first, always on to the closest remaining track.
 std::vector<juce::String> harmonicOrder(const ProjectModel& model, WaveformStore& waveforms, std::vector<juce::String> itemIds);

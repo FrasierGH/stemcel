@@ -1944,6 +1944,65 @@ void SmokeTest::addTempoJourney()
                          return ok;
                      }});
     steps.back().poll = true;
+    // A recommended transition between clips on two tracks that do not overlap yet: the
+    // incoming clip moves into place and the preset applies, drawn across both tracks.
+    steps.push_back({"transition into a later clip",
+                     [this]
+                     {
+                         // Every model pointer is fetched again after a refresh: it rebuilds the model.
+                         auto* timeline = findDescendant<TimelineView>(juce::TopLevelWindow::getTopLevelWindow(0));
+                         if (timeline == nullptr || model().findLibraryItem(tempoItemIds[0]) == nullptr
+                             || model().findLibraryItem(tempoItemIds[1]) == nullptr)
+                             return;
+                         // After everything else, so no other clip is nearer.
+                         const double after = model().contentEndMs() + 60000.0;
+                         const auto outTrack = actions.addTrack();
+                         nearOutClipId = actions.addClip(outTrack, *model().findLibraryItem(tempoItemIds[0]), after);
+                         mirror.refreshNow();
+                         const auto* outClip = model().findClip(nearOutClipId);
+                         if (outClip == nullptr) return;
+                         const auto curve = model().tempoCurve();
+                         const double inAt = curve.msAtBeat(curve.beatAt(outClip->endMs()) + 16.0);
+                         const auto inTrack = actions.addTrack();
+                         nearInClipId = actions.addClip(inTrack, *model().findLibraryItem(tempoItemIds[1]), inAt);
+                         mirror.refreshNow();
+                         // The timeline reads the workspace's copy of the model: bring it up to date.
+                         if (auto* workspace = findDescendant<Workspace>(juce::TopLevelWindow::getTopLevelWindow(0)))
+                             workspace->projectMirror().refreshNow();
+                         const auto pairs = timeline->nearbyPairs(nearOutClipId);
+                         if (std::find(pairs.begin(), pairs.end(), std::pair{nearOutClipId, nearInClipId}) == pairs.end())
+                         {
+                             report.add("transition into a later clip: not found among " + juce::String(static_cast<int>(pairs.size())) + " nearby");
+                             return;
+                         }
+                         timeline->applyTransitionPlacing(nearOutClipId, nearInClipId, "smoothBlend");
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         const auto* out = model().findClip(nearOutClipId);
+                         const auto* in = model().findClip(nearInClipId);
+                         if (out == nullptr || in == nullptr || !mix::overlap(*out, *in) || mix::recordFor(model(), nearOutClipId, nearInClipId) == nullptr)
+                             return false;
+                         auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
+                         auto* workspace = window != nullptr ? findDescendant<Workspace>(window) : nullptr;
+                         auto* timeline = window != nullptr ? findDescendant<TimelineView>(window) : nullptr;
+                         if (workspace != nullptr && timeline != nullptr)
+                         {
+                             auto& view = workspace->viewState();
+                             for (const auto& row : layoutRows(model()))
+                                 if (row.trackId == out->trackId) view.scrollY = juce::jmax(0, row.top - 20);
+                             view.scrollXPx = juce::jmax(0.0, in->offsetMs / 1000.0 * view.pxPerSecond - 300.0);
+                             timeline->clampScroll();
+                             view.changed();
+                             const auto image = window->createComponentSnapshot(window->getLocalBounds());
+                             juce::FileOutputStream file(workDir.getChildFile("transition-band.png"));
+                             if (file.openedOk()) juce::PNGImageFormat().writeImageToStream(image, file);
+                         }
+                         report.add("transition placed: in moved to " + juce::String(in->offsetMs, 0) + " ms, out ends " + juce::String(out->endMs(), 0));
+                         return true;
+                     }});
+    steps.back().poll = true;
     steps.push_back({"remove transition",
                      [this] { mix::remove(engine, actions, model(), mixTransitionId); },
                      {},

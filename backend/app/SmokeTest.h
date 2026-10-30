@@ -105,6 +105,7 @@ class SmokeTest final : private juce::Timer
     juce::Time seamlessSavedBefore;
     juce::String automationTrackId;
     int automationStage = 0;
+    juce::String nearOutClipId, nearInClipId;
     juce::File rekordboxFixtureDb;
     juce::String rekordboxFixturePassphrase;
     juce::String rekordboxItemId;
