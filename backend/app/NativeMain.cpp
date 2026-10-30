@@ -101,10 +101,16 @@ class StemcelApplication final : public juce::JUCEApplication
         log::info("main", juce::String("Stemcel native v") + kBackendVersion + " - "
                               + juce::SystemStats::getOperatingSystemName());
 
-        juce::LookAndFeel::setDefaultLookAndFeel(&lookAndFeel);
-
         prefs = std::make_unique<AppPreferences>();
         prefs->load();
+
+        // The theme is set before anything is drawn (Preferences > General; STEMCEL_THEME
+        // overrides it, which is how a smoke test runs under another theme).
+        const auto themeOverride = juce::SystemStats::getEnvironmentVariable("STEMCEL_THEME", {});
+        applyTheme(themeFromName(themeOverride.isNotEmpty() || smoke ? themeOverride
+                                                                     : prefs->get("ui", "theme", "terminal").toString()));
+        lookAndFeel.applyColours();
+        juce::LookAndFeel::setDefaultLookAndFeel(&lookAndFeel);
 
         EngineHost::Options options;
         options.preferredDeviceType = prefs->outputTypeName();

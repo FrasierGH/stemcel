@@ -78,7 +78,23 @@ GeneralPreferencesPage::GeneralPreferencesPage(AppPreferences& preferences) : pr
         prefs.set("toasts", "enabled", toasts.getToggleState());
         prefs.save();
     };
-    for (auto* c : std::initializer_list<juce::Component*>{&waveLabel, &waveMode, &toasts}) addAndMakeVisible(c);
+    // Read once at startup (applyTheme): every component takes its colours when it is made.
+    styleLabel(themeLabel);
+    const auto savedTheme = prefs.get("ui", "theme", "terminal").toString();
+    fillCombo(themeBox, {"terminal", "fusionDark"}, {"Terminal - green on black", "Fusion Dark - Qt's Fusion style, dark"}, savedTheme);
+    themeNote.setFont(uiFont(12.0f));
+    themeNote.setColour(juce::Label::textColourId, colours::textFaint);
+    themeBox.onChange = [this]
+    {
+        const auto chosen = juce::StringArray{"terminal", "fusionDark"}[themeBox.getSelectedItemIndex()];
+        prefs.set("ui", "theme", chosen);
+        prefs.save();
+        themeNote.setText(themeFromName(chosen) == currentTheme() ? juce::String()
+                                                                  : juce::String("Applies the next time Stemcel starts."),
+                          juce::dontSendNotification);
+    };
+    for (auto* c : std::initializer_list<juce::Component*>{&waveLabel, &waveMode, &toasts, &themeLabel, &themeBox, &themeNote})
+        addAndMakeVisible(c);
 }
 
 void GeneralPreferencesPage::resized()
@@ -89,6 +105,11 @@ void GeneralPreferencesPage::resized()
     waveMode.setBounds(r.removeFromLeft(380).reduced(0, 2));
     area.removeFromTop(12);
     toasts.setBounds(area.removeFromTop(26));
+    area.removeFromTop(12);
+    r = area.removeFromTop(28);
+    themeLabel.setBounds(r.removeFromLeft(120));
+    themeBox.setBounds(r.removeFromLeft(380).reduced(0, 2));
+    themeNote.setBounds(area.removeFromTop(22).withTrimmedLeft(120));
 }
 
 // ── Timeline ───────────────────────────────────────────────────────────────

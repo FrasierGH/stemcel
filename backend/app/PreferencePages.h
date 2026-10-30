@@ -26,6 +26,9 @@ class GeneralPreferencesPage final : public juce::Component
     juce::Label waveLabel{{}, "Waveforms"};
     juce::ComboBox waveMode;
     juce::ToggleButton toasts{"Show toast notifications"};
+    juce::Label themeLabel{{}, "Theme"};
+    juce::ComboBox themeBox;
+    juce::Label themeNote;
 };
 
 // Preferences > Timeline (PreferencesTimelineTab.vue): follow, tempo seed and auto-warp,

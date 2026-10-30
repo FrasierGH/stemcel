@@ -1390,7 +1390,9 @@ void SmokeTest::addTempoJourney()
                                                  && std::abs(out->endMs() - end) < 2.0;
                                  lastTempoLine = "ramp transition map=" + juce::String(static_cast<int>(model().tempoMap.size()))
                                                  + " out ends " + (out != nullptr ? juce::String(out->endMs(), 1) : juce::String("-"))
-                                                 + " window ends " + juce::String(end, 1);
+                                                 + " window ends " + juce::String(end, 1) + " preset "
+                                                 + t.getProperty("preset", {}).toString() + " follow "
+                                                 + (out != nullptr ? juce::String(out->tempoFollowBpm, 2) : juce::String("-"));
                                  if (ok) report.add(lastTempoLine);
                                  return ok;
                              }

@@ -295,10 +295,25 @@ Transition menu, then **Paste Transition** on a join in any tab, applies the sam
 
 ## Look
 
-A terminal theme (`app/Theme.*`): phosphor green on black everywhere, the timeline (canvas,
-rows, ruler, grid, tempo and automation lanes) in black and dark grey, square controls with thin green
-rules, and JetBrains Mono (SIL OFL 1.1, built in from `backend/app/fonts/`) for every font,
-JUCE's own menus and dialogs included. Clips keep their per-track colours.
+Two themes (`app/Theme.*`), picked in Preferences > General and applied the next time the
+app starts (every component takes its colours when it is made):
+
+- **Terminal**, the default: phosphor green on black everywhere, the timeline (canvas, rows,
+  ruler, grid, tempo and automation lanes) in black and dark grey, square controls with thin
+  green rules, and JetBrains Mono (SIL OFL 1.1, built in from `backend/app/fonts/`) for every
+  font, JUCE's own menus and dialogs included.
+- **Fusion Dark**: Qt's Fusion style with the dark palette most Qt applications give it
+  (window #353535, base #2a2a2a, highlight #2a82da, white text). Buttons, combo boxes,
+  scrollbars and table headers are bevelled the way Fusion bevels them: a vertical gradient,
+  a light line inside the top edge, a dark rounded outline. Sliders have a sunken groove
+  filled with the highlight and a bevelled handle, dials a groove ring, check boxes a sunken
+  square with a light tick, and tabs are rounded on top. The fonts are the system's
+  (Segoe UI and Consolas on Windows, Helvetica Neue and Menlo on macOS), as in Qt.
+
+The colour tokens keep their Tailwind names in both (`colours::zinc900` is the window grey
+in Fusion Dark); `applyTheme` sets them all. Clips keep their per-track colours in both.
+`STEMCEL_THEME=fusionDark` runs the app (or its smoke test) in a theme without touching the
+preferences.
 
 The top bar has the timeline zoom slider (beside − + Fit) and the master section: the master
 volume slider and a stereo meter (L and R from -60 dBFS in green, amber above -12 and red above
