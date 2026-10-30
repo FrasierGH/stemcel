@@ -560,6 +560,15 @@ void TimelineView::paintClip(juce::Graphics& g, const ClipModel& clip, juce::Rec
         }
     }
 
+    // The clip whose envelope is being edited and has none yet: its unity line, to click on.
+    if (view.envelopeClipId == clip.id && clip.envelope.size() < 2)
+    {
+        const auto body = r.withTrimmedTop(kClipHeaderPx);
+        const float y = body.getBottom() - body.getHeight() / 1.5f;
+        g.setColour(colours::amber400.withAlpha(0.8f));
+        const float dashes[] = {4.0f, 3.0f};
+        g.drawDashedLine({body.getX(), y, body.getRight(), y}, dashes, 2, 1.5f);
+    }
     // Volume envelope, drawn over the body.
     if (clip.envelope.size() >= 2)
     {
@@ -577,7 +586,7 @@ void TimelineView::paintClip(juce::Graphics& g, const ClipModel& clip, juce::Rec
         }
         g.setColour(colours::amber400.withAlpha(0.8f * alpha));
         g.strokePath(env, juce::PathStrokeType(1.5f));
-        if (view.volumeMode)
+        if (view.envelopeClipId == clip.id)
             for (const auto& p : clip.envelope)
             {
                 const float x = body.getX() + static_cast<float>(p.timeMs / juce::jmax(1.0, clip.effectiveDurationMs)) * body.getWidth();
@@ -1102,7 +1111,8 @@ void TimelineView::mouseDown(const juce::MouseEvent& e)
         return;
     }
 
-    if (const auto hit = clipAt(e.getPosition()); hit.has_value() && view.volumeMode && !e.mods.isPopupMenu() && !hit->clip->locked)
+    if (const auto hit = clipAt(e.getPosition()); hit.has_value() && hit->clip->id == view.envelopeClipId && !e.mods.isPopupMenu()
+                                                   && !hit->clip->locked)
     {
         const auto& clip = *hit->clip;
         const auto body = hit->bounds.withTrimmedTop(kClipHeaderPx);
@@ -1377,8 +1387,8 @@ void TimelineView::mouseDoubleClick(const juce::MouseEvent& e)
                 TransitionEditor::show(mirror, actions, t.getProperty("outClipId", {}).toString(), t.getProperty("inClipId", {}).toString());
                 return;
             }
-    if (view.volumeMode)
-        if (const auto hit = clipAt(e.getPosition()))
+    if (view.envelopeClipId.isNotEmpty())
+        if (const auto hit = clipAt(e.getPosition()); hit.has_value() && hit->clip->id == view.envelopeClipId)
         {
             auto points = hit->clip->envelope;
             const int index = envelopePointAt(*hit->clip, hit->bounds.withTrimmedTop(kClipHeaderPx), e.getPosition());
@@ -1740,6 +1750,14 @@ void TimelineView::showClipMenu(const juce::String& clipId, double atMs)
     menu.addItem("Split Here", atMs > clip->offsetMs && atMs < clip->endMs() && !clip->locked, false,
                  [this, clipId, atMs] { actions.splitClipAt(clipId, actions.snap(atMs)); });
     menu.addItem("Duplicate", [this, clipId] { actions.duplicateClip(clipId); });
+    // Clicks on the clip add and drag gain points; double-click one to remove it.
+    menu.addItem("Edit Volume Envelope", !clip->locked, view.envelopeClipId == clipId,
+                 [this, clipId]
+                 {
+                     view.envelopeClipId = view.envelopeClipId == clipId ? juce::String() : clipId;
+                     view.changed();
+                     repaint();
+                 });
     menu.addItem(clip->locked ? "Unlock" : "Lock", [this, clipId, locked = clip->locked] { actions.setClipLocked(clipId, !locked); });
     // Key lock, as on a DJ deck: off, a tempo change moves the pitch with it.
     const bool masterTempo = clip->warpMode != "repitch";

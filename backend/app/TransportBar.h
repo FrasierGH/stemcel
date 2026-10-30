@@ -86,7 +86,6 @@ class TransportBar final : public juce::Component, private juce::ChangeListener,
     juce::ComboBox snapBox;
     juce::TextButton loopButton{"Loop"};
     juce::TextButton followButton{"Follow"};
-    juce::TextButton volumeButton{"Vol"};
     juce::TextButton mixerButton{"Mixer"};
     juce::TextButton skipBack{"|<"}, skipForward{">|"};
     void skip(bool forward);

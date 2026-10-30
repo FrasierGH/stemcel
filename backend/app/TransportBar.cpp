@@ -136,15 +136,6 @@ TransportBar::TransportBar(ProjectMirror& projectMirror, TimelineViewState& view
     };
     addAndMakeVisible(followButton);
 
-    volumeButton.setClickingTogglesState(true);
-    volumeButton.setTooltip("Volume mode: click a clip to add envelope points, drag them, double-click to remove");
-    volumeButton.onClick = [this]
-    {
-        view.volumeMode = volumeButton.getToggleState();
-        volumeButton.setColour(juce::TextButton::buttonColourId, view.volumeMode ? colours::amber500 : colours::zinc800);
-        view.changed();
-    };
-    addAndMakeVisible(volumeButton);
 
     zoomIn.onClick = [this] { if (timeline != nullptr) timeline->zoomBy(1.25); };
     zoomOut.onClick = [this] { if (timeline != nullptr) timeline->zoomBy(0.8); };
@@ -357,8 +348,6 @@ void TransportBar::resized()
     loopButton.setBounds(area.removeFromLeft(52));
     area.removeFromLeft(4);
     followButton.setBounds(area.removeFromLeft(60));
-    area.removeFromLeft(4);
-    volumeButton.setBounds(area.removeFromLeft(44));
     area.removeFromLeft(4);
     mixerButton.setBounds(area.removeFromLeft(58));
 

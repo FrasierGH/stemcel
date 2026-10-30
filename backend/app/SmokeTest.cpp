@@ -1718,6 +1718,54 @@ void SmokeTest::addTempoJourney()
                          return ok;
                      }});
     steps.back().poll = true;
+    // The A button: a track with no lanes opens on its gain; hiding and showing again brings
+    // back what was shown. A picture of the open lanes, for eyes.
+    steps.push_back({"automation toggle",
+                     [this]
+                     {
+                         if (model().tracks.size() < 2) return;
+                         automationTrackId = model().tracks[1].id;
+                         actions.setAutomationLanes(automationTrackId, {});
+                         actions.toggleAutomation(automationTrackId);
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         const auto* track = model().findTrack(automationTrackId);
+                         if (track == nullptr) return false;
+                         const auto lanes = automation::lanesOf(*track);
+                         switch (automationStage)
+                         {
+                         case 0:
+                             if (lanes.size() != 1 || lanes.front().paramId != "level") return false;
+                             actions.setAutomationLanes(automationTrackId, {{"level", automation::kDefaultLaneHeight},
+                                                                             {"pan", automation::kDefaultLaneHeight}});
+                             automationStage = 1;
+                             return false;
+                         case 1:
+                             if (lanes.size() != 2) return false;
+                             if (auto* window = juce::TopLevelWindow::getTopLevelWindow(0))
+                             {
+                                 const auto image = window->createComponentSnapshot(window->getLocalBounds());
+                                 juce::FileOutputStream out(workDir.getChildFile("automation-lanes.png"));
+                                 if (out.openedOk()) juce::PNGImageFormat().writeImageToStream(image, out);
+                             }
+                             actions.toggleAutomation(automationTrackId);
+                             automationStage = 2;
+                             return false;
+                         case 2:
+                             if (!lanes.empty()) return false;
+                             actions.toggleAutomation(automationTrackId);
+                             automationStage = 3;
+                             return false;
+                         default:
+                             if (lanes.size() != 2 || lanes[1].paramId != "pan") return false;
+                             actions.setAutomationLanes(automationTrackId, {});
+                             report.add("automation toggle: gain lane, hidden, restored with pan");
+                             return true;
+                         }
+                     }});
+    steps.back().poll = true;
     // Beat stutter: a build-up from bar 3 lays four repeats down, the last at 1/32.
     steps.push_back({"beat stutter",
                      [this]

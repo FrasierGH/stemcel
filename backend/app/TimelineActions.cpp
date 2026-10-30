@@ -876,6 +876,36 @@ void TimelineActions::setAutomationLanes(const juce::String& trackId, const std:
     engine.send("TRACK_SET_AUTOMATION_LANE_VIEW", obj({{"trackId", trackId}, {"lanes", automation::toVar(lanes)}}));
 }
 
+juce::StringArray TimelineActions::automatedParams(const juce::String& trackId) const
+{
+    juce::StringArray out;
+    const auto* track = trackId == kMasterTrackId ? &model().master : model().findTrack(trackId);
+    if (track == nullptr) return out;
+    if (const auto* curves = track->raw.getProperty("automation", {}).getArray())
+        for (const auto& curve : *curves)
+            if (const auto* points = curve.getProperty("points", {}).getArray(); points != nullptr && !points->isEmpty())
+                out.addIfNotAlreadyThere(curve.getProperty("paramId", {}).toString());
+    return out;
+}
+
+void TimelineActions::toggleAutomation(const juce::String& trackId)
+{
+    const auto* track = trackId == kMasterTrackId ? &model().master : model().findTrack(trackId);
+    if (track == nullptr) return;
+    if (auto shown = automation::lanesOf(*track); !shown.empty())
+    {
+        hiddenLanes[trackId] = std::move(shown);
+        setAutomationLanes(trackId, {});
+        return;
+    }
+    std::vector<automation::Lane> next;
+    if (const auto it = hiddenLanes.find(trackId); it != hiddenLanes.end()) next = it->second;
+    if (next.empty())
+        for (const auto& id : automatedParams(trackId)) next.push_back({id, automation::kDefaultLaneHeight});
+    if (next.empty()) next.push_back({"level", automation::kDefaultLaneHeight});
+    setAutomationLanes(trackId, next);
+}
+
 // ── clipboard ───────────────────────────────────────────────────────────────
 bool TimelineActions::copyClips(const std::vector<juce::String>& clipIds)
 {

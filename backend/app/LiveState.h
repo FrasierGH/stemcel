@@ -48,8 +48,9 @@ class TimelineViewState final : public juce::ChangeBroadcaster
     juce::String selectedTrackId;
     std::set<juce::String> selectedClipIds;
     bool followPlayback = true;
-    // Clicks on clips edit their volume envelope instead of selecting / moving them.
-    bool volumeMode = false;
+    // The clip whose volume envelope is being edited (clip menu > Edit Volume Envelope):
+    // clicks on it add and drag envelope points instead of selecting / moving it.
+    juce::String envelopeClipId;
     // Preferences > Timeline: left/right waveforms (else the summary) and what the
     // transport's skip buttons jump to (markers, else the timeline's ends).
     bool stereoWaveforms = true;
