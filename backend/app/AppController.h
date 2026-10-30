@@ -21,6 +21,12 @@ class AppController : private juce::Timer
   public:
     // How often a saved project with changes writes itself back to its file, quietly.
     static constexpr int kSeamlessSaveSeconds = 180;
+    // Smoke-test support: the seamless save's interval, so a test need not wait three minutes.
+    void setSeamlessSaveIntervalForTest(int seconds)
+    {
+        seamlessSaveSeconds = seconds;
+        startTimer(seconds * 1000);
+    }
 
     AppController(EngineClient& engine, AppPreferences& prefs);
 
@@ -113,6 +119,7 @@ class AppController : private juce::Timer
     // open or another save is running.
     void timerCallback() override;
     bool quietSave = false;
+    int seamlessSaveSeconds = kSeamlessSaveSeconds;
 
     std::vector<Tab> tabs;
     int activeTab = -1;

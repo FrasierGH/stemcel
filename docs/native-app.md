@@ -365,6 +365,24 @@ VSTi plugins' names, makers and categories through FST.
 
 ## Automation curves
 
+**What can be automated.** Every parameter of the effects, plugins and transitions:
+
+- **Track FX**: every knob (Tone bass, mid, treble; the LP/HP filter; Room and Echo sends;
+  Leveler; Punch; Saturation drive and mix; Bit crusher rate, bits, boost and mix), plus
+  the track's gain and pan.
+- **Project FX**, on the master row: the master gain and every knob (Room size, decay,
+  tone and mix; Echo feedback, tone and mix; Glue). The echo's note length is a tempo-sync
+  setting the engine holds while playing, so it is not a lane; the safety limiter and
+  metronome are switches.
+- **Plugins**: every parameter of every plugin on a track or on the master, listed in
+  blocks of 32 under the plugin's name in the lane menu.
+- **Transitions** write their moves as automation on the two tracks (gain, filter, the
+  EQ bands, sends and the crusher), shaped by every setting in the transition editor; a
+  tempo ramp goes into the tempo map. **Beat stutter** lays its divisions down as beat
+  repeat regions over time.
+
+Letting go of a master lane hands the knob back to the Project FX setting.
+
 Each automation point carries the shape of the segment to the next one (`AutomationShape`,
 shared by the engine and the app): linear, smooth (S-curve), fast start, slow start, hold
 (a step) or stairs, with a bend (`tension`, -1..1) for fast and slow starts. Right-click a

@@ -181,6 +181,9 @@ class MasterClockSource : public juce::AudioSource
      *  child renders, so the child sees the block-start position. */
     const std::atomic<juce::int64>& positionAtomicRef() const noexcept { return positionSamples; }
 
+    /** The project glue, for the master automation's glue lane (its setters are lock-free). */
+    Leveler& mixGlueRef() noexcept { return mixGlue; }
+
     /** The output device's measured frame rate. Accumulated continuously — the device
      *  pulls whether or not anything is playing — so a take can be aligned against the
      *  rate the arrangement is really advancing at rather than the nominal one. Reset

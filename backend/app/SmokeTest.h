@@ -102,6 +102,7 @@ class SmokeTest final : private juce::Timer
     juce::String importedId;
     juce::String rekordboxTrackId;
     bool rekordboxWritesOk = false;
+    juce::Time seamlessSavedBefore;
     juce::File rekordboxFixtureDb;
     juce::String rekordboxFixturePassphrase;
     juce::String rekordboxItemId;

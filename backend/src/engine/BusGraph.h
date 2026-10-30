@@ -3,6 +3,7 @@
 #include "SharedFx.h"
 #include "BeatRepeatProcessor.h"
 #include "LatencyDelayLine.h"
+#include "Leveler.h"
 #include "PluginChain.h"
 #include "TrackAutomationSnapshot.h"
 #include "TrackChain.h"
@@ -219,6 +220,9 @@ public:
     /** Wire the transport hosted plugins follow (once, at setup). Chains are created
      *  lazily, so this is stored and applied to each one as it appears. */
     void setPluginPlayHead(juce::AudioPlayHead* playHead);
+    /** The master's glue (Leveler), which the master automation's glue lane drives (once,
+     *  at setup; null leaves the lane unheard). */
+    void setMasterGlue(Leveler* glue) noexcept { masterGlue = glue; }
 
     void setProjectReverb(float size, float decay, float tone, float mix, bool snap);
 
@@ -356,6 +360,7 @@ private:
     std::size_t masterSegments[TrackAutomationSnapshot::kNumParams] = {};
     float masterLevelGain = 1.0F;
     float masterLevelTarget = 1.0F;
+    Leveler* masterGlue = nullptr;
     void applyMasterAutomation(const TrackAutomationSnapshot* snap, juce::int64 subStartSamples, double rate) noexcept;
     static void applyPluginAutomation(const TrackAutomationSnapshot& snap, const plugins::PluginChain* chain, double ms) noexcept;
     juce::AudioPlayHead* pluginPlayHead = nullptr;

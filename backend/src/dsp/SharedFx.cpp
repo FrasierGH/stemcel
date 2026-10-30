@@ -103,6 +103,16 @@ void SharedFx::setEchoFeedbackTarget(float feedback) noexcept
     targetFeedback.store(juce::jlimit(0.0F, 0.95F, sanitize(feedback)), std::memory_order_relaxed);
 }
 
+void SharedFx::setReverbToneTarget(float tone) noexcept
+{
+    targetReverbToneHz.store(mapToneHz(juce::jlimit(0.0F, 1.0F, sanitize(tone))), std::memory_order_relaxed);
+}
+
+void SharedFx::setEchoToneTarget(float tone) noexcept
+{
+    targetEchoToneHz.store(mapToneHz(juce::jlimit(0.0F, 1.0F, sanitize(tone))), std::memory_order_relaxed);
+}
+
 void SharedFx::setDelayParams(double delayMs, float feedback, float tone, float mix,
                               bool snap, bool applyTimeNow) noexcept
 {

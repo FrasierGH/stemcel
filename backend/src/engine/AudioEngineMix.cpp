@@ -23,6 +23,7 @@ void AudioEngine::setSafetyLimiterEnabled(bool enabled, bool snap)
 
 void AudioEngine::setProjectMixGlue(float amount, bool snap)
 {
+    projectMixGlue = amount;
     master.setMixGlueAmount(amount, snap);
 }
 
@@ -271,10 +272,11 @@ void AudioEngine::setProjectDelay(double delayMs, float feedback, float tone, fl
 
 void AudioEngine::restoreProjectFx()
 {
-    // A master reverb or echo lane let go: the project's own settings take over again.
+    // A master reverb, echo or glue lane let go: the project's own settings take over again.
     busGraph.setProjectReverb(projectReverb.size, projectReverb.decay, projectReverb.tone, projectReverb.mix, false);
     busGraph.setProjectDelay(projectDelay.delayMs, projectDelay.feedback, projectDelay.tone, projectDelay.mix, false,
                              /*applyTimeNow*/ ! master.isPlaying());
+    master.setMixGlueAmount(projectMixGlue, false);
 }
 
 void AudioEngine::drainAllTrackPeaks(std::vector<BusGraph::TrackPeakSnapshot>& out)

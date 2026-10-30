@@ -65,7 +65,7 @@ AppController::AppController(EngineClient& engineClient, AppPreferences& prefere
                          if (auto done = std::exchange(pendingSave, nullptr)) done(ok);
                          changed();
                      });
-    startTimer(kSeamlessSaveSeconds * 1000);
+    startTimer(seamlessSaveSeconds * 1000);
     subscriptions.on("PROJECT_LOAD_FAILED",
                      [this](const juce::var& p)
                      {
@@ -186,7 +186,7 @@ void AppController::timerCallback()
         startTimer(10 * 1000);
         return;
     }
-    startTimer(kSeamlessSaveSeconds * 1000);
+    startTimer(seamlessSaveSeconds * 1000);
     quietSave = true;
     if (saveViewState) saveViewState();
     engine.send("PROJECT_SAVE");

@@ -90,8 +90,8 @@ bool isPluginParamId(const juce::String& paramId)
 
 double normalizeAutomationValue(const juce::String& paramId, double value)
 {
-    // Plugin parameters and the master's reverb and echo amounts are 0..1.
-    if (isPluginParamId(paramId) || paramId.startsWith("reverb") || paramId.startsWith("delay"))
+    // Plugin parameters and the master's reverb, echo and glue amounts are 0..1.
+    if (isPluginParamId(paramId) || paramId.startsWith("reverb") || paramId.startsWith("delay") || paramId == "glue")
         return juce::jlimit(0.0, 1.0, std::isfinite(value) ? value : 0.0);
     if (paramId == "saturationDrive")
         return saturation::sanitizeDrive(value);
@@ -282,7 +282,8 @@ bool isKnownAutomationParamId(const juce::String& paramId)
            paramId == "bitCrusherRate" || paramId == "bitCrusherBits" ||
            paramId == "bitCrusherBoost" || paramId == "bitCrusherMix" || paramId == "level" ||
            paramId == "reverbMix" || paramId == "reverbSize" || paramId == "reverbDecay" ||
-           paramId == "delayMix" || paramId == "delayFeedback" || isPluginParamId(paramId);
+           paramId == "delayMix" || paramId == "delayFeedback" || paramId == "reverbTone" ||
+           paramId == "delayTone" || paramId == "glue" || isPluginParamId(paramId);
 }
 
 juce::Array<juce::var> sanitizeAutomationLaneViews(const juce::Array<juce::var>& lanes,

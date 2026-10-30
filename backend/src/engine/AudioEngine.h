@@ -810,6 +810,7 @@ class AudioEngine : private AudioEngineGraphState,
         double delayMs = 250.0;
         float feedback = 0.3F, tone = 1.0F, mix = 0.0F;
     } projectDelay;
+    float projectMixGlue = 0.0F; // put back when a master glue lane is let go
     void restoreAutomated(const juce::String& trackId, AutomationParam param);
 };
 

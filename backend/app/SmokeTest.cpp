@@ -679,6 +679,34 @@ void SmokeTest::addSteps()
                   {}, [this](const juce::var&) { return workDir.getChildFile("arrange.png").existsAsFile(); }};
     snapshot.delayMs = 2500.0;
     steps.push_back(snapshot);
+    // The seamless save, on the project the app has open ("open in workspace" opened it as
+    // File > Open does).
+    steps.push_back({"seamless save",
+                     [this, projectFile]
+                     {
+                         // An edit to the saved project, then the seamless save (two seconds here,
+                         // three minutes in use) writes it to its file with no prompt or message.
+                         seamlessSavedBefore = projectFile.getLastModificationTime();
+                         if (auto* strip = findDescendant<ProjectTabStrip>(juce::TopLevelWindow::getTopLevelWindow(0)))
+                             strip->controller.setSeamlessSaveIntervalForTest(2);
+                         engine.send("PROJECT_RENAME", object({{"name", "Smoke Seamless"}}));
+                     },
+                     {},
+                     [this, projectFile](const juce::var&)
+                     {
+                         if (model().dirty || model().name != "Smoke Seamless") return false;
+                         if (projectFile.getLastModificationTime() <= seamlessSavedBefore) return false;
+                         if (!projectFile.loadFileAsString().contains("Smoke Seamless")) return false;
+                         if (auto* strip = findDescendant<ProjectTabStrip>(juce::TopLevelWindow::getTopLevelWindow(0)))
+                             strip->controller.setSeamlessSaveIntervalForTest(AppController::kSeamlessSaveSeconds);
+                         engine.send("PROJECT_RENAME", object({{"name", "Smoke"}}));
+                         report.add("seamless save wrote " + projectFile.getFileName() + " unprompted");
+                         return true;
+                     }});
+    steps.back().poll = true;
+    steps.push_back({"save as again",
+                     [this, projectFile] { engine.send("PROJECT_SAVE_AS", object({{"filePath", projectFile.getFullPathName()}})); },
+                     "PROJECT_SAVED", [](const juce::var& p) { return static_cast<bool>(p.getProperty("ok", false)); }});
 
     addTempoJourney();
 }
@@ -1669,8 +1697,10 @@ void SmokeTest::addTempoJourney()
                      [this]
                      {
                          actions.setAutomationLanes(kMasterTrackId, {{"reverbMix", automation::kDefaultLaneHeight},
-                                                                     {"level", automation::kDefaultLaneHeight}});
+                                                                     {"level", automation::kDefaultLaneHeight},
+                                                                     {"glue", automation::kDefaultLaneHeight}});
                          actions.setAutomation(kMasterTrackId, "reverbMix", {{0.0, 0.0, "smooth", 0.0}, {4000.0, 0.8}});
+                         actions.setAutomation(kMasterTrackId, "glue", {{0.0, 0.2}, {4000.0, 0.7}});
                          actions.setAutomation(kMasterTrackId, "level", {{0.0, 0.0}, {2000.0, -12.0}, {4000.0, 0.0}});
                      },
                      {},
@@ -1679,9 +1709,11 @@ void SmokeTest::addTempoJourney()
                          const auto lanes = automation::lanesOf(model().master);
                          const auto reverb = automation::pointsOf(model().master, "reverbMix");
                          const auto stored = engine.host().project().getTrackAutomation(kMasterTrackId, "level");
+                         const auto glue = engine.host().project().getTrackAutomation(kMasterTrackId, "glue");
                          lastTempoLine = "master automation lanes=" + juce::String(static_cast<int>(lanes.size())) + " reverb points="
-                                         + juce::String(static_cast<int>(reverb.size())) + " level stored=" + juce::String(stored.size());
-                         const bool ok = lanes.size() == 2 && reverb.size() == 2 && reverb.front().curve == "smooth" && stored.size() == 3;
+                                         + juce::String(static_cast<int>(reverb.size())) + " level stored=" + juce::String(stored.size()) + " glue stored=" + juce::String(glue.size());
+                         const bool ok = lanes.size() == 3 && reverb.size() == 2 && reverb.front().curve == "smooth" && stored.size() == 3
+                                         && glue.size() == 2;
                          if (ok) report.add(lastTempoLine);
                          return ok;
                      }});

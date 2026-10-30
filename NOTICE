@@ -10,9 +10,9 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 Origin
 ------
 Stemcel is a modified version of an AGPL-3.0-or-later digital audio workstation written by
-Ira Rainey (https://github.com/irarainey),
-Copyright (C) 2026 Ira Rainey. That work's licence is kept: Stemcel as a whole is
-distributed under the same GNU Affero General Public License, version 3 or later.
+Ira Rainey (https://github.com/irarainey), Copyright (C) 2026 Ira Rainey. That work's
+licence is kept: Stemcel as a whole is distributed under the same GNU Affero General
+Public License, version 3 or later.
 
 Modified by the Stemcel contributors from 29 October 2026: renamed, rebuilt as a native
 application, and extended (among other changes, the mixer and master-bus plugins, plugin

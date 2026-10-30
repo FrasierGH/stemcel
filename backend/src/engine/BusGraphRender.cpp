@@ -389,6 +389,10 @@ void BusGraph::applyMasterAutomation(const TrackAutomationSnapshot* snap, juce::
     if (snap->hasParam(AutomationParam::reverbDecay)) sharedFx.setReverbDecayTarget(sample(AutomationParam::reverbDecay));
     if (snap->hasParam(AutomationParam::delayMix)) sharedFx.setEchoMixTarget(sample(AutomationParam::delayMix));
     if (snap->hasParam(AutomationParam::delayFeedback)) sharedFx.setEchoFeedbackTarget(sample(AutomationParam::delayFeedback));
+    if (snap->hasParam(AutomationParam::reverbTone)) sharedFx.setReverbToneTarget(sample(AutomationParam::reverbTone));
+    if (snap->hasParam(AutomationParam::delayTone)) sharedFx.setEchoToneTarget(sample(AutomationParam::delayTone));
+    if (masterGlue != nullptr && snap->hasParam(AutomationParam::glue))
+        masterGlue->setParams(sample(AutomationParam::glue), /*snap*/ false);
     if (!snap->plugins.empty()) applyPluginAutomation(*snap, masterInserts.load(std::memory_order_acquire), ms);
 }
 

@@ -59,7 +59,7 @@ constexpr int kMaxLaneHeight = 220;
 
 // Every automatable track parameter, in the renderer's picker order.
 const std::vector<Param>& params();
-// The master bus's own: its level, and the project reverb and echo.
+// The master bus's own: its level, and every knob of Project FX (reverb, echo, glue).
 const std::vector<Param>& masterParams();
 // A plugin parameter's lane id, "plugin:<slotId>:<index>", and the slot and index in one.
 juce::String pluginParamId(const juce::String& slotId, int index);

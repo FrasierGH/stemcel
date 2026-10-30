@@ -5,6 +5,7 @@
 
 #include "BreakpointCurve.h"
 #include "ProjectState.h"
+#include "TrackAutomationSnapshot.h"
 
 #include <cmath>
 #include <cstddef>
@@ -156,6 +157,32 @@ void testProjectStateEffectAutomationCanonicalization()
     verify("bitCrusherMix", -1.0, 2.0, 0.0, 1.0);
 }
 
+// Every Project FX knob has a master lane: the engine knows each id, and the project keeps
+// its values in 0..1.
+void testMasterProjectFxParamsAreAutomatable()
+{
+    for (const auto* id : {"reverbMix", "reverbSize", "reverbDecay", "reverbTone", "delayMix", "delayFeedback", "delayTone", "glue"})
+    {
+        stemcel::AutomationParam param{};
+        require(stemcel::automationParamFromString(id, param), (juce::String("the engine should know the lane ") + id).toRawUTF8());
+    }
+    stemcel::ProjectState state;
+    require(state.addTrack("t1"), "addTrack should succeed");
+    for (const auto* id : {"reverbTone", "delayTone", "glue"})
+    {
+        juce::Array<juce::var> points;
+        points.add(automationPoint(0.0, -0.5));
+        points.add(automationPoint(1000.0, 1.5));
+        require(state.setTrackAutomation("t1", id, points), (juce::String("the project should store ") + id).toRawUTF8());
+        const auto stored = state.getTrackAutomation("t1", id);
+        require(stored.size() == 2, (juce::String(id) + " should keep both points").toRawUTF8());
+        requireNear(static_cast<double>(stored.getReference(0).getProperty("value", 1.0)), 0.0, 1.0e-9,
+                    (juce::String(id) + " should clamp to 0").toRawUTF8());
+        requireNear(static_cast<double>(stored.getReference(1).getProperty("value", 0.0)), 1.0, 1.0e-9,
+                    (juce::String(id) + " should clamp to 1").toRawUTF8());
+    }
+}
+
 void testTracksAsJsonCarriesAutomation()
 {
     stemcel::ProjectState state;
@@ -193,6 +220,7 @@ void addAutomationTests(std::vector<TestCase>& tests)
     tests.push_back({"ProjectState track automation rejects duplicate breakpoint times", testProjectStateAutomationRejectsDuplicateTimes});
     tests.push_back({"ProjectState canonicalizes Saturation and Bit Crusher automation values", testProjectStateEffectAutomationCanonicalization});
     tests.push_back({"tracksAsJson carries per-track automation into PROJECT_STATE", testTracksAsJsonCarriesAutomation});
+    tests.push_back({"Every Project FX knob is a master automation lane", testMasterProjectFxParamsAreAutomatable});
 }
 
 } // namespace stemcel::tests

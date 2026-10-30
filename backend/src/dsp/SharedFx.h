@@ -48,6 +48,8 @@ public:
     void setReverbDecayTarget(float decay) noexcept;
     void setEchoMixTarget(float mix) noexcept;
     void setEchoFeedbackTarget(float feedback) noexcept;
+    void setReverbToneTarget(float tone) noexcept;
+    void setEchoToneTarget(float tone) noexcept;
 
     /** Returns the minimum delay-tail duration needed to preserve feedback repeats. */
     static double minimumEchoTailSeconds(double delayMs, float feedback) noexcept;

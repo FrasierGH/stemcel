@@ -28,12 +28,16 @@ enum class AutomationParam
     bitCrusherBoost,
     bitCrusherMix,
     level,
-    // The master bus's own (on the master's automation only): the project reverb and echo.
+    // The master bus's own (on the master's automation only): the project reverb, echo and
+    // glue.
     reverbMix,
     reverbSize,
     reverbDecay,
     delayMix,
     delayFeedback,
+    reverbTone,
+    delayTone,
+    glue,
     count_
 };
 
@@ -60,6 +64,9 @@ inline bool automationParamFromString(const juce::String& id, AutomationParam& o
     if (id == "reverbDecay") { out = AutomationParam::reverbDecay; return true; }
     if (id == "delayMix") { out = AutomationParam::delayMix; return true; }
     if (id == "delayFeedback") { out = AutomationParam::delayFeedback; return true; }
+    if (id == "reverbTone") { out = AutomationParam::reverbTone; return true; }
+    if (id == "delayTone") { out = AutomationParam::delayTone; return true; }
+    if (id == "glue") { out = AutomationParam::glue; return true; }
     return false;
 }
 

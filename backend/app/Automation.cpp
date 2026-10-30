@@ -43,6 +43,9 @@ const std::vector<Param>& masterParams()
         {"reverbDecay", "Reverb Decay", 0.0, 1.0, 0.5},
         {"delayMix", "Echo Mix", 0.0, 1.0, 0.0},
         {"delayFeedback", "Echo Feedback", 0.0, 1.0, 0.3},
+        {"reverbTone", "Reverb Tone", 0.0, 1.0, 0.0},
+        {"delayTone", "Echo Tone", 0.0, 1.0, 0.0},
+        {"glue", "Glue", 0.0, 1.0, 0.0},
     };
     return list;
 }
