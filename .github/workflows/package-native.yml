@@ -10,7 +10,7 @@ name: Package native
 on:
   workflow_dispatch:
   push:
-    branches: ["native-ui", "native-only"]
+    branches: ["main"]
     paths:
       - "backend/**"
       - "scripts/package-native-mac.sh"
