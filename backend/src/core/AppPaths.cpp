@@ -50,35 +50,4 @@ void setAppFolderName(const juce::String& name)
     if (name.isNotEmpty()) folderName() = name;
 }
 
-namespace
-{
-std::vector<std::pair<juce::File, juce::File>>& movedFolders()
-{
-    static std::vector<std::pair<juce::File, juce::File>> moved;
-    return moved;
-}
-} // namespace
-
-void migrateAppFolders(const juce::String& oldName, const juce::String& newName)
-{
-    for (const auto& root : {juce::File::getSpecialLocation(juce::File::userHomeDirectory), userAppDataDirectory()})
-    {
-        const auto from = root.getChildFile(oldName);
-        const auto to = root.getChildFile(newName);
-        if (from.isDirectory() && !to.exists()) from.moveFileTo(to);
-        // Remembered whether it moved now or on an earlier run, for paths saved before.
-        if (!from.exists() && to.isDirectory()) movedFolders().emplace_back(from, to);
-    }
-}
-
-juce::String remapMovedAppPath(const juce::String& path)
-{
-    if (path.isEmpty() || !juce::File::isAbsolutePath(path)) return path;
-    const juce::File file(path);
-    if (file.exists()) return path;
-    for (const auto& [from, to] : movedFolders())
-        if (file.isAChildOf(from)) return to.getChildFile(file.getRelativePathFrom(from)).getFullPathName();
-    return path;
-}
-
 } // namespace stemcel

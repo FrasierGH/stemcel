@@ -61,8 +61,7 @@ juce::String fromPortablePath(const juce::String& stored, const juce::File& proj
     }
     if (juce::File::isAbsolutePath(stored))
     {
-        // A file under the app's folders from before they were renamed (migrateAppFolders).
-        return remapMovedAppPath(stored);
+        return stored;
     }
     return projectDir.getChildFile(stored).getFullPathName();
 }

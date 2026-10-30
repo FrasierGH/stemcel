@@ -30,8 +30,8 @@ struct Recipe
     juce::String model;  // a model filename, or
     juce::String preset; // an ensemble preset id
     juce::StringArray stems; // what comes out, when known (for the stem picker)
-    // The vocals come from Stemcel's own vocal model instead (it scored higher), when installed.
-    bool builtinVocals = false;
+    // A second model that takes the vocals (it scores higher on them), run after the first.
+    juce::String vocalModel;
 };
 
 const std::vector<Recipe>& recipes();

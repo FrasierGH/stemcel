@@ -213,61 +213,24 @@ license` in `backend/rekordbox_ffi` lists them.
 - **Licence**: MIT — © Borewit and contributors.
 - **Project**: <https://github.com/Borewit/music-metadata>
 
-## Downloaded models & runtimes (fetched on first use, not bundled)
+## Stem separation (installed by the user, not bundled)
 
-These are downloaded on demand into the user's app-data folder and integrity-
-checked against pinned SHA-256 hashes; they are not shipped in the release package.
+### audio-separator — © Andrew Beveridge (nomadkaraoke) and contributors
+
+- **Licence**: MIT.
+- **Project**: <https://github.com/nomadkaraoke/python-audio-separator>
+- **Use**: runs Ultimate Vocal Remover's separation models. The user installs it;
+  Stemcel runs it as a separate process and imports the files it writes. It
+  downloads each model on first use from the model's own published location;
+  each model keeps its author's licence, shown by `audio-separator --list_models`
+  and the model's page.
 
 ### ONNX Runtime (+ DirectML) — © Microsoft
 
 - **Licence**: MIT.
-- **Use**: runs the stem-separation models on CPU or any DirectX 12 GPU.
+- **Use**: bundled with the backend, which still carries an ONNX separation
+  engine; the native app separates stems through audio-separator instead.
 - **Project**: <https://github.com/microsoft/onnxruntime>
-
-### htdemucs fine-tuned — 4-stem separation model (backup)
-
-- **Licence**: MIT — © Meta Platforms, Inc. (Demucs). ONNX export ©
-  StemSplitio, also MIT.
-- **Use**: the backup 4-stem (vocals/drums/bass/other) separation model — used
-  per stem when that stem's RoFormer quality pack is not installed, or for every
-  stem when the user enables "Always use the backup model". Also the zero-config
-  path fetched on first use when no quality packs are present.
-- **Source**: <https://huggingface.co/StemSplitio/htdemucs-ft-onnx>
-  (re-hosted byte-identically by Stemcel at
-  <https://huggingface.co/legacydaw/htdemucs-ft-onnx> so every model ships from
-  one self-owned namespace).
-
-### Mel-Band RoFormer "Vocal Quality Pack" (primary vocal model)
-
-- **Licence**: MIT — vocal weights © Kimberley Jensen / SYH99999
-  (`SYH99999/MelBandRoformerBigSYHFTV1Fast`); ONNX export © musetric, also MIT.
-  Architecture from *Mel-Band RoFormer* (Wang, Lu, Won; arXiv:2310.01809) /
-  `lucidrains/BS-RoFormer` (MIT).
-- **Use**: higher-quality vocal model, used automatically for vocals once
-  installed (in place of the htdemucs backup) unless the user forces the backup.
-- **Source**: <https://huggingface.co/musetric/vocal-separation-roformer-onnx>
-  (re-hosted byte-identically by Stemcel at
-  <https://huggingface.co/legacydaw/mel-band-roformer-vocals-onnx> for a stable
-  download URL).
-- **Note**: the upstream training-data provenance is undocumented; the weights
-  are distributed by their author under MIT (the same posture as the htdemucs
-  weights above).
-
-### BS-RoFormer "Rhythm Quality Pack" (primary drums/bass model)
-
-- **Licence**: MIT — 4-stem weights © ZFTurbo
-  (`ZFTurbo/Music-Source-Separation-Training`, the
-  `model_bs_roformer_ep_17_sdr_9.6568` checkpoint trained on MUSDB18-HQ).
-  Architecture from `lucidrains/BS-RoFormer` (MIT). Stemcel exports the
-  checkpoint to a host-STFT ONNX (STFT/iSTFT stripped out of the graph) using an
-  MIT export pipeline derived from `elicwhite/bs-roformer-web`.
-- **Use**: higher-quality drums + bass model, used automatically for drums and
-  bass once installed (in place of the htdemucs backup) unless the user forces
-  the backup. One model run extracts both drums and bass.
-- **Source**: <https://github.com/ZFTurbo/Music-Source-Separation-Training>
-  (checkpoint + config, v1.0.12). Stemcel's host-STFT ONNX export is
-  distributed at
-  <https://huggingface.co/legacydaw/bs-roformer-rhythm-onnx>.
 
 ## Fonts
 

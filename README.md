@@ -129,15 +129,12 @@ Stemcel is built around a single idea: **arranging audio should be simple.**
 - **Metronome.** Toggle an audible click that follows the project tempo from the
   timing display, so you can check by ear whether a loop or beat sits in time
   with the BPM. It is off by default and its state is saved with the project.
-- **Stem separation.** Split a track into vocals, drums, bass, and other parts
-  and drop each onto its own track to remix and recombine — non-destructive, with
-  optional GPU acceleration. Each stem keeps the original's tempo, key, and
-  artwork. High-quality **RoFormer models** (downloaded once, ~1 GB) do the
-  separation by default, with a backup model downloaded automatically only if
-  it's ever needed. A
-  **Fast / Balanced / Best** speed control and optional one-click cleanup let you
-  trade speed for polish, and an optional per-run **reverb & echo removal** cleans
-  room reverb and slap-back off the vocal as it separates.
+- **Stem separation.** Split a track into vocals, drums, bass, guitar, piano and
+  other parts and drop each onto its own track to remix and recombine, without
+  touching the source. Each stem keeps the original's tempo, key and artwork. The
+  separation runs **Ultimate Vocal Remover's models** (BS-Roformer SW, Kim's
+  Mel-Band RoFormer, the community ensembles, DrumSep and de-reverb) through
+  audio-separator, on the GPU when it can (see "Stem separation models" below).
 - **Split stereo channels.** Use **Transform ▸ Split Stereo Channels…** on a
   stereo clip to split its **Left** and/or **Right** channel onto its own new
   track — each channel becomes a stereo clip carrying only that side (copied to
@@ -283,23 +280,17 @@ Stemcel is built around a single idea: **arranging audio should be simple.**
 
 ## Stem separation models
 
-Stemcel's stem separation is powered by open, machine-learning models. To keep
-the download small, **no models ship inside the app** — they are fetched only
-when you first use stem separation, downloaded once, and then stored on your
-computer and reused for every future separation.
+Stemcel separates stems with **Ultimate Vocal Remover's models** through
+[audio-separator](https://github.com/nomadkaraoke/python-audio-separator), the engine behind
+UVR, which you install once (see [INSTALL.md](INSTALL.md)). The recipes follow deton24's
+separation guide: BS-Roformer SW for six stems, Kim's Mel-Band RoFormer for vocals ("best of
+both" takes each stem from the stronger of the two), the vocal, instrumental and karaoke
+ensembles, MDX23C DrumSep for drum kit pieces, and anvuew's de-reverb.
 
-For full transparency about what Stemcel downloads and from where: the models
-are hosted on the project's own Hugging Face account (`stemcel`) and are downloaded directly
-from there:
-
-- **[huggingface.co/legacydaw](https://huggingface.co/legacydaw)**
-
-By default Stemcel uses the higher-quality **RoFormer** models (vocals and
-drums/bass, ~1 GB total), with a smaller **backup** model downloaded
-automatically only if it's ever needed as a fallback. Nothing is uploaded — separation runs entirely on your own machine, and
-the download is a one-time, on-demand fetch of the model files only. If you would
-rather not download anything, you can point Stemcel at a copy of the models you
-already have from **Preferences ▸ Stems**.
+**No models ship inside the app.** audio-separator downloads each model the first time a
+recipe uses it, from the model's own published location, and keeps it in
+`~/Stemcel/Models/uvr` for every later run. Nothing is uploaded: separation runs entirely on
+your own machine, on the GPU when the tool's PyTorch can use one.
 
 ## Documentation
 

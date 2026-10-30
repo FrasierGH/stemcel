@@ -90,7 +90,7 @@ void AppController::notify(const juce::String& message, bool isError)
 
 juce::File AppController::projectFolderPath(const juce::File& chosen)
 {
-    const auto withExt = chosen.hasFileExtension("stemcel;legacydaw") ? chosen : chosen.withFileExtension("stemcel");
+    const auto withExt = chosen.hasFileExtension("stemcel") ? chosen : chosen.withFileExtension("stemcel");
     const auto projectName = withExt.getFileNameWithoutExtension();
     if (projectName.isEmpty()) return withExt;
     const auto parent = withExt.getParentDirectory();
@@ -112,7 +112,7 @@ void AppController::newProject()
 void AppController::openProjectDialog()
 {
     // Opens in a tab of its own, so nothing open needs saving first.
-    chooser = std::make_unique<juce::FileChooser>("Open Stemcel Project", prefs.defaultProjectDirectory(), "*.stemcel;*.legacydaw");
+    chooser = std::make_unique<juce::FileChooser>("Open Stemcel Project", prefs.defaultProjectDirectory(), "*.stemcel");
     chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                          [this](const juce::FileChooser& fc)
                          {
@@ -263,7 +263,7 @@ void AppController::requestQuit()
     {
         guardUnsavedChanges([]
                             {
-                                for (const auto& f : tabStore().findChildFiles(juce::File::findFiles, false, "*.stemcel;*.legacydaw"))
+                                for (const auto& f : tabStore().findChildFiles(juce::File::findFiles, false, "*.stemcel"))
                                     f.deleteFile();
                                 juce::JUCEApplicationBase::quit();
                             });

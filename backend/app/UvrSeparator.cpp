@@ -10,18 +10,19 @@ const std::vector<Recipe>& recipes()
 {
     // From the guide's current recommendations, limited to models anyone can download.
     static const std::vector<Recipe> list{
-        // Help measured against the built-in models (docs/native-app.md, "Measured quality").
-        {"best", "6 stems, best of both: built-in vocals + BS-Roformer SW",
-         "Each stem from the model that scored highest on it: Stemcel's vocal model for vocals, BS-Roformer SW "
-         "for the rest. Without the built-in vocal pack, SW's vocals.",
-         "BS-Roformer-SW.ckpt", {}, {"vocals", "drums", "bass", "guitar", "piano", "other"}, true},
+        {"best", "6 stems, best of both: Mel-Band RoFormer vocals + BS-Roformer SW",
+         "Each stem from the stronger model: Kim's Mel-Band RoFormer for the vocals (the highest-scoring vocal "
+         "model), BS-Roformer SW for the rest. Two runs.",
+         "BS-Roformer-SW.ckpt", {}, {"vocals", "drums", "bass", "guitar", "piano", "other"}, "vocals_mel_band_roformer.ckpt"},
         {"six", "6 stems: vocals, drums, bass, guitar, piano, other",
-         "BS-Roformer SW. Against the built-in models it scored higher on bass (+1.3 dB), other (+0.7) and "
-         "drums (+0.2); the built-in vocals scored higher (+0.8).",
+         "BS-Roformer SW, the guide's six-stem model, in one run.",
          "BS-Roformer-SW.ckpt", {}, {"vocals", "drums", "bass", "guitar", "piano", "other"}},
+        {"vocalsTop", "Vocals and the rest: highest-scoring vocals",
+         "Kim's Mel-Band RoFormer (12.6 dB vocals on the model list's own test): the vocals, and everything else.",
+         "vocals_mel_band_roformer.ckpt", {}, {"vocals", "other"}},
         {"vocals", "Vocals and instrumental: balanced",
          "unwa's Resurrection and Big Beta 6X, tuned for full-sounding vocals: they keep more bleed, so they "
-         "score below the built-in vocals.", {}, "vocal_balanced",
+         "score below Kim's Mel-Band RoFormer.", {}, "vocal_balanced",
          {"vocals", "instrumental"}},
         {"vocalsClean", "Vocals and instrumental: cleanest vocals",
          "Ensemble tuned for the least instrument bleed in the vocals (Revive 2 and others).", {}, "vocal_clean",

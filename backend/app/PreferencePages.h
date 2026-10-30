@@ -6,6 +6,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include <deque>
+#include <memory>
 
 namespace stemcel::native
 {
@@ -83,7 +84,7 @@ class EffectsPreferencesPage final : public juce::Component
     juce::ComboBox brakeDuration, brakeCurve, spinDuration, spinIntensity;
 };
 
-// Preferences > Stems: GPU, backup model, enhancement passes and model downloads.
+// Preferences > Stems: where audio-separator (UVR's models) is, and where its models are kept.
 class StemsPreferencesPage final : public juce::Component
 {
   public:
@@ -91,11 +92,11 @@ class StemsPreferencesPage final : public juce::Component
     void resized() override;
 
   private:
+    void refresh();
     AppPreferences& prefs;
-    juce::ToggleButton gpu{"Use GPU acceleration when available"}, backup{"Always use the backup model"};
-    juce::OwnedArray<juce::ToggleButton> enhance;
-    juce::OwnedArray<juce::ComboBox> strength;
-    juce::OwnedArray<juce::Component> models;
+    juce::Label toolLabel{{}, "audio-separator"}, toolPath, modelsLabel{{}, "Models"}, modelsPath, help;
+    juce::TextButton locate{"Locate..."}, showModels{"Show"}, copyInstall{"Copy install command"};
+    std::unique_ptr<juce::FileChooser> chooser;
 };
 
 // Preferences > Developer: full-session diagnostic logging (applies from the next launch).

@@ -18,78 +18,9 @@
 namespace stemcel::native
 {
 
-// Stem separation models, on the Electron app's storage (`~/Stemcel/Models/<id>/`, or a
-// folder the user located, from the shared preferences), with the same pinned manifests:
-// the htdemucs backup (4 files), the Mel-Band RoFormer vocal pack and the BS-RoFormer
-// rhythm pack. A model is installed when every file has its expected size; downloads are
-// SHA-256 verified and stamped with the `.installed` revision sentinel.
-namespace stems
-{
-struct ModelFile
-{
-    const char* fileName;
-    const char* sha256;
-    juce::int64 sizeBytes;
-};
-
-struct Model
-{
-    const char* id;
-    const char* displayName;
-    const char* repo;
-    const char* prefsKey; // `paths.<key>` override in preferences
-    std::vector<ModelFile> files;
-    juce::int64 totalBytes() const;
-};
-
-const Model& backupModel();
-const Model& vocalPack();
-const Model& rhythmPack();
-
-juce::File modelDir(const Model& model, AppPreferences& prefs);
-bool isInstalled(const Model& model, AppPreferences& prefs);
-
-// Downloads a model in the background. Progress (0..1) and completion arrive on the
-// message thread. One download at a time per model.
-class Downloader final : private juce::Thread
-{
-  public:
-    Downloader(const Model& model, juce::File dir);
-    ~Downloader() override;
-
-    std::function<void(double progress, const juce::String& file)> onProgress;
-    std::function<void(bool ok, const juce::String& error)> onDone;
-    void start() { startThread(); }
-    void cancel() { signalThreadShouldExit(); }
-
-  private:
-    void run() override;
-    const Model& model;
-    juce::File dir;
-    std::shared_ptr<std::atomic<bool>> alive = std::make_shared<std::atomic<bool>>(true);
-};
-// One model's status, with Download (and progress) when it is missing.
-class ModelRow final : public juce::Component
-{
-  public:
-    ModelRow(const Model& model, AppPreferences& prefs);
-    void refresh();
-    void resized() override;
-
-  private:
-    void startDownload();
-    const Model& model;
-    AppPreferences& prefs;
-    juce::Label name, state;
-    juce::TextButton download{"Download"};
-    double progress = 0.0;
-    juce::ProgressBar bar{progress};
-    std::unique_ptr<Downloader> downloader;
-};
-} // namespace stems
-
-// Runs separations and turns their results into library stems (and, for a timeline clip,
-// one new track per stem aligned under it), like the renderer's createStemTracks.
+// Runs separations with UVR's models (uvr::Job, through audio-separator) and turns their
+// results into library stems (and, for a timeline clip, one new track per stem aligned
+// under it), like the renderer's createStemTracks.
 class StemService final
 {
   public:
@@ -109,10 +40,8 @@ class StemService final
     // Splits a clip's stereo channels into mono stems on their own tracks.
     void splitChannels(const juce::String& clipId, const juce::StringArray& channels);
 
-    void start(const juce::String& sourceItemId, const juce::String& clipId, const juce::StringArray& stemNames,
-               const juce::String& quality, const juce::String& dereverb);
-    // The same, with UVR's models through audio-separator: a recipe (uvr::recipes()), the
-    // model file for the "custom" one, and which of its stems to keep (empty = all).
+    // A recipe (uvr::recipes()), the model file for the "custom" one, and which of its stems
+    // to keep (empty = all).
     void startUvr(const juce::String& sourceItemId, const juce::String& clipId, const juce::String& recipeId,
                   const juce::String& customModel, const juce::StringArray& keep);
 
@@ -126,6 +55,10 @@ class StemService final
     };
     void importStem(Job& job, const juce::String& stem, const juce::File& file);
 
+    // One run of the tool; with `vocalPassAfter`, the recipe's vocal model runs after it on
+    // the same audio and takes the vocals.
+    void runUvr(const Job& job, const juce::File& input, const juce::File& tempInput, const juce::File& outputDir,
+                const uvr::Recipe& run, const juce::StringArray& keep, bool vocalPassAfter);
     void finishUvr(const juce::String& jobId, bool ok, const juce::String& error, std::map<juce::String, juce::File> stems,
                    const juce::StringArray& keep, const juce::File& tempInput);
 

@@ -2848,9 +2848,8 @@ fetched and bundled via CMake (`onnxruntime.dll` ships beside the backend); the
 model weights (htdemucs ~1.2 GB; the quality packs ~1 GB together) are **not**
 shipped — the Electron main process (`src/main/stems/`, pinned manifests + a
 dependency-injected `ModelStore`) downloads them on demand, verifies each file's
-SHA-256 + size, and commits atomically. All model weights are hosted on
-the Hugging Face account the models were first published on ([huggingface.co/legacydaw](https://huggingface.co/legacydaw))
-and the per-model manifests resolve their download URLs from that namespace.
+SHA-256 + size, and commits atomically. The native app does not use these models: it separates stems with UVR's models through
+audio-separator (`docs/native-app.md`, "Stem separation").
 
 A fully pack-covered run needs no htdemucs weights on disk at all: the backend
 only validates the htdemucs files for stems it will actually produce with the

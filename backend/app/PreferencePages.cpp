@@ -4,6 +4,7 @@
 #include <tuple>
 
 #include "Stems.h"
+#include "UvrSeparator.h"
 #include "Theme.h"
 
 namespace stemcel::native
@@ -305,56 +306,66 @@ void EffectsPreferencesPage::resized()
 }
 
 // ── Stems ──────────────────────────────────────────────────────────────────
+// Separation runs UVR's models through audio-separator: where the tool is, and where its
+// models are kept.
 StemsPreferencesPage::StemsPreferencesPage(AppPreferences& preferences) : prefs(preferences)
 {
-    gpu.setToggleState(static_cast<bool>(prefs.get("stems", "useGpu", false)), juce::dontSendNotification);
-    backup.setToggleState(static_cast<bool>(prefs.get("stems", "useBackupModel", false)), juce::dontSendNotification);
-    gpu.onClick = [this] { prefs.set("stems", "useGpu", gpu.getToggleState()); prefs.save(); };
-    backup.onClick = [this] { prefs.set("stems", "useBackupModel", backup.getToggleState()); prefs.save(); };
-    addAndMakeVisible(gpu);
-    addAndMakeVisible(backup);
-    const juce::StringArray names{"Vocals", "Drums", "Bass", "Other"};
-    const juce::StringArray strengthKeys{"vocalEnhanceStrength", "drumEnhanceStrength", "bassEnhanceStrength", "otherEnhanceStrength"};
-    for (int i = 0; i < names.size(); ++i)
+    for (auto* l : {&toolLabel, &modelsLabel}) styleLabel(*l);
+    for (auto* l : {&toolPath, &modelsPath})
     {
-        const auto& n = names[i];
-        const auto enableKey = "enhance" + n;
-        const auto strengthKey = strengthKeys[i];
-        auto* t = enhance.add(new juce::ToggleButton("Enhance " + n.toLowerCase()));
-        t->setToggleState(static_cast<bool>(prefs.get("stems", enableKey, false)), juce::dontSendNotification);
-        t->onClick = [this, t, enableKey] { prefs.set("stems", enableKey, t->getToggleState()); prefs.save(); };
-        addAndMakeVisible(t);
-        auto* s = strength.add(new juce::ComboBox());
-        fillCombo(*s, {"light", "medium", "strong"}, {"Light", "Medium", "Strong"}, prefs.get("stems", strengthKey, "medium").toString());
-        s->onChange = [this, s, strengthKey]
-        {
-            prefs.set("stems", strengthKey, juce::StringArray{"light", "medium", "strong"}[s->getSelectedItemIndex()]);
-            prefs.save();
-        };
-        addAndMakeVisible(s);
+        l->setFont(uiFont(12.0f));
+        l->setColour(juce::Label::textColourId, colours::text);
     }
-    for (const auto* model : {&stems::vocalPack(), &stems::rhythmPack(), &stems::backupModel()})
-        addAndMakeVisible(models.add(new stems::ModelRow(*model, prefs)));
+    help.setFont(uiFont(12.0f));
+    help.setColour(juce::Label::textColourId, colours::textFaint);
+    help.setJustificationType(juce::Justification::topLeft);
+    help.setText("Stemcel separates stems with UVR's models (BS-Roformer SW, Mel-Band RoFormer and the "
+                 "community ensembles) through audio-separator, which downloads each model the first time "
+                 "it is used. Install it once with:\n" + uvr::installCommand(),
+                 juce::dontSendNotification);
+    locate.onClick = [this]
+    {
+        chooser = std::make_unique<juce::FileChooser>("Locate audio-separator", juce::File::getSpecialLocation(juce::File::userHomeDirectory));
+        chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                             [this](const juce::FileChooser& fc)
+                             {
+                                 if (!fc.getResult().existsAsFile()) return;
+                                 prefs.set("stems", "audioSeparatorPath", fc.getResult().getFullPathName());
+                                 prefs.save();
+                                 refresh();
+                             });
+    };
+    showModels.onClick = [] { uvr::modelDir().createDirectory(); uvr::modelDir().revealToUser(); };
+    copyInstall.onClick = [] { juce::SystemClipboard::copyTextToClipboard(uvr::installCommand()); };
+    for (auto* c : std::initializer_list<juce::Component*>{&toolLabel, &toolPath, &locate, &modelsLabel, &modelsPath, &showModels,
+                                                           &help, &copyInstall})
+        addAndMakeVisible(c);
+    refresh();
+}
+
+void StemsPreferencesPage::refresh()
+{
+    const auto exe = uvr::findExecutable(prefs);
+    toolPath.setText(exe.existsAsFile() ? exe.getFullPathName() : juce::String("Not installed"), juce::dontSendNotification);
+    toolPath.setColour(juce::Label::textColourId, exe.existsAsFile() ? colours::text : colours::amber400);
+    modelsPath.setText(uvr::modelDir().getFullPathName(), juce::dontSendNotification);
 }
 
 void StemsPreferencesPage::resized()
 {
     auto area = getLocalBounds().reduced(16);
-    gpu.setBounds(area.removeFromTop(24));
-    backup.setBounds(area.removeFromTop(24));
+    auto r = area.removeFromTop(28);
+    toolLabel.setBounds(r.removeFromLeft(120));
+    locate.setBounds(r.removeFromRight(90).reduced(0, 2));
+    toolPath.setBounds(r);
     area.removeFromTop(6);
-    for (int i = 0; i < enhance.size(); ++i)
-    {
-        auto r = area.removeFromTop(26);
-        enhance[i]->setBounds(r.removeFromLeft(180));
-        strength[i]->setBounds(r.removeFromLeft(120).reduced(0, 2));
-    }
-    area.removeFromTop(8);
-    for (auto* m : models)
-    {
-        m->setBounds(area.removeFromTop(40));
-        area.removeFromTop(2);
-    }
+    r = area.removeFromTop(28);
+    modelsLabel.setBounds(r.removeFromLeft(120));
+    showModels.setBounds(r.removeFromRight(90).reduced(0, 2));
+    modelsPath.setBounds(r);
+    area.removeFromTop(12);
+    help.setBounds(area.removeFromTop(64));
+    copyInstall.setBounds(area.removeFromTop(26).removeFromLeft(180));
 }
 
 // ── MIDI ───────────────────────────────────────────────────────────────────

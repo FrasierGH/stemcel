@@ -23,12 +23,4 @@ juce::File systemTempDirectory();
 juce::String appFolderName();
 void setAppFolderName(const juce::String& name);
 
-// Moves each `<oldName>` folder (home, app data) to `<newName>` the first time, so models,
-// settings, caches and the sample library carry over a rename of the app.
-void migrateAppFolders(const juce::String& oldName, const juce::String& newName);
-
-// A saved absolute path into a folder migrateAppFolders moved, pointed at where it is now
-// (unchanged when it still exists or was never in one).
-juce::String remapMovedAppPath(const juce::String& path);
-
 } // namespace stemcel

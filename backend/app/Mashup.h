@@ -2,8 +2,9 @@
 
 // Mashup mode (docs/native-app.md, "Mashups and the sample library"): the vocals of one track
 // over the instrumental of another. The stems come from the library when they are already
-// there, or are separated first (the vocals, then drums, bass and other), one job at a time;
-// then the four stems go after the arrangement on their own tracks, warped to the project
+// there, or are separated first with UVR's models (the vocals by Mel-Band RoFormer, then
+// drums, bass, guitar, piano and other by BS-Roformer SW), one job at a time; then the
+// stems go after the arrangement on their own tracks, warped to the project
 // tempo, on the bar grid, with the vocals shifted into the instrumental's key (up to three
 // semitones either way). The placing is one undo step.
 

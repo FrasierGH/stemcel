@@ -89,9 +89,7 @@ publication journal, so an interrupted edit is finished or rolled back on the ne
 
 ## Stem separation
 
-Two engines. The built-in one runs ONNX models in-process: a Mel-Band RoFormer vocal pack,
-a BS-RoFormer 4-stem pack and htdemucs_ft as the backup, downloaded and hash-checked on
-first use. The UVR engine (`app/UvrSeparator.*`) runs
+Stems come from UVR's models: `app/UvrSeparator.*` runs
 [python-audio-separator](https://github.com/nomadkaraoke/python-audio-separator), the
 engine behind Ultimate Vocal Remover, as a child process: Stemcel passes the source (a
 timeline clip's window is written to a temporary WAV first), a model or ensemble preset,
@@ -99,9 +97,12 @@ timeline clip's window is written to a temporary WAV first), a model or ensemble
 progress bars, and imports what it writes (`<input>_(<Stem>)_<model>.wav`, renamed to
 `<Stem>.wav`) as ordinary stems. Stemcel does not ship the tool or its models; the user
 installs it once (INSTALL.md). The recipes in the dialog follow deton24's separation guide,
-limited to models anyone can download: BS-Roformer SW for 6 stems (alone, or with the
-built-in vocal model's vocals), the vocal / instrumental / karaoke ensemble presets, MDX23C
-DrumSep, anvuew's de-reverb, or any model by file name. `STEMCEL_SMOKE_UVR=1` with the
+limited to models anyone can download: BS-Roformer SW for 6 stems, alone or with Kim's
+Mel-Band RoFormer taking the vocals in a second run ("best of both", the default); Kim's
+Mel-Band RoFormer alone (the highest-scoring vocal model in audio-separator's list); the
+vocal / instrumental / karaoke ensemble presets; MDX23C DrumSep; anvuew's de-reverb; or any
+model by file name. Preferences > Stems shows where the tool and its models are. Mashups
+separate with the same recipes (the vocals by Mel-Band RoFormer, the instrumental by SW). `STEMCEL_SMOKE_UVR=1` with the
 tool on PATH adds real separations (SW, and best of both) to the smoke journey.
 
 The tool runs its models on the GPU only if its PyTorch can: pip's default PyTorch on Windows
@@ -117,29 +118,21 @@ Global SDR (dB, higher is better; the MDX challenge's measure) on 12 MUSDB18 tes
 (the freely downloadable 7-second excerpts, joined into one 82-second file so every model
 sees full-length context, then scored song by song), on a 16-thread CPU:
 
-| Engine | Vocals | Drums | Bass | Other | Mean | Time for 82 s |
-|---|---|---|---|---|---|---|
-| Built-in, Best (vocal and rhythm packs) | **12.46** | 10.31 | 6.91 | 5.83 | 8.88 | 302 s |
-| UVR, 6 stems (BS-Roformer SW; Other = guitar + piano + other) | 11.69 | **10.55** | **8.20** | **6.51** | **9.24** | 212 s |
-| UVR, vocals balanced (ensemble) | 8.86 | | | | | 717 s |
-| **UVR, 6 stems best of both** (built-in vocals + SW) | **12.46** | **10.55** | **8.20** | **6.51** | **9.43** | 212 s + vocals |
+| Recipe | Vocals | Drums | Bass | Other | Time for 82 s |
+|---|---|---|---|---|---|
+| 6 stems (BS-Roformer SW; Other = guitar + piano + other) | 11.69 | **10.55** | **8.20** | **6.51** | 212 s |
+| Vocals and instrumental: balanced (ensemble) | 8.86 | | | | 717 s |
 
-So the built-in engine is as good as UVR's best all-in-one model for vocals, and UVR is
-ahead on bass and the remaining instruments. The dialog's default UVR recipe, "best of
-both", takes each stem from the engine that scored higher on it: SW runs first (its vocals
-are dropped), then the built-in vocal model runs on the same window. It falls back to SW's
-vocals when the built-in vocal pack is not installed. The vocal ensemble trades SDR for fuller
-vocals (its Resurrection model scored 8.5 dB alone, Big Beta 6X 13.1 dB on three of the
-songs), so pick it by ear, not for clean stems. UVR's other recipes (drum kit pieces,
-karaoke, de-reverb) do things the built-in engine has no model for. Caveats: 12 songs,
-compressed excerpts (MUSDB18, not the HQ set), and the training data of the community
-models is not published, so some may have seen these songs.
+On audio-separator's own test, Kim's Mel-Band RoFormer scores 12.6 dB on vocals, the highest
+of the vocal models it lists, which is why "best of both" takes the vocals from it. The vocal
+ensemble trades SDR for fuller vocals (its Resurrection model scored 8.5 dB alone, Big Beta
+6X 13.1 dB on three of the songs), so pick it by ear, not for clean stems. Caveats: 12 songs,
+compressed excerpts (MUSDB18, not the HQ set), and the training data of the community models
+is not published, so some may have seen these songs.
 
-To repeat it: `StemcelStemRun [--quality best] <~/Stemcel/Models> <mixture.wav> <outDir>`
-(a dev tool beside `StemcelStemEval`) writes the built-in engine's four stems;
-`audio-separator <mixture.wav> -m BS-Roformer-SW.ckpt` writes UVR's; and
-`StemcelStemEval <manifest>` (lines `<referenceWav>|<estimateWav>|<label>`) prints SI-SDR
-and SDR per pair.
+To repeat it: `audio-separator <mixture.wav> -m BS-Roformer-SW.ckpt` writes the stems, and
+`StemcelStemEval <manifest>` (lines `<referenceWav>|<estimateWav>|<label>`) prints SI-SDR and
+SDR per pair.
 
 ## Tempo map
 
@@ -322,14 +315,8 @@ bar and their shortcuts (Space plays and pauses); there is no Transport menu.
 
 ## The name
 
-**Stemcel** (`Stemcel.exe`, `Stemcel.app`, bundle id `com.stemcel.app`; projects `.stemcel`)
-was released earlier under another name. For the people who used it then, it still opens their
-projects (`*.legacydaw`), and on its first launch it moves their old home and app-data folders to
-`Stemcel` (models, settings, caches, tabs and the sample library carry over), rewrites the paths
-saved in its preferences, and loads any project path that still points into the old folders from
-the new one (`remapMovedAppPath`). Those two places (`NativeMain.cpp`, the project choosers) are
-the only ones that name it; the stem models are still downloaded from the Hugging Face account
-they were first published on.
+**Stemcel** (`Stemcel.exe`, `Stemcel.app`, bundle id `com.stemcel.app`; projects `.stemcel`;
+its folders `~/Stemcel` and the app-data `Stemcel`).
 
 ## Mixer
 

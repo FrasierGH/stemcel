@@ -1036,7 +1036,7 @@ if(STEMCEL_BUILD_NATIVE_APP)
         BUNDLE_ID "com.stemcel.app"
         VERSION ${PROJECT_VERSION}
         ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/app/resources/256x256.png"
-        DOCUMENT_EXTENSIONS stemcel legacydaw
+        DOCUMENT_EXTENSIONS stemcel
         MICROPHONE_PERMISSION_ENABLED TRUE
         MICROPHONE_PERMISSION_TEXT "Stemcel records audio from the input you choose in Record Audio."
         HARDENED_RUNTIME_ENABLED TRUE

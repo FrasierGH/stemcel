@@ -369,7 +369,7 @@ ProjectImportDialog::ProjectImportDialog(EngineClient& client, const juce::File&
 
 void ProjectImportDialog::chooseAndShow(EngineClient& engine, std::function<void(const juce::String&, bool)> notify)
 {
-    auto chooser = std::make_shared<juce::FileChooser>("Import from Project", juce::File(), "*.stemcel;*.legacydaw");
+    auto chooser = std::make_shared<juce::FileChooser>("Import from Project", juce::File(), "*.stemcel");
     chooser->launchAsync(juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                          [&engine, notify, chooser](const juce::FileChooser& fc)
                          {

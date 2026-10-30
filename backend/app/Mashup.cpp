@@ -10,7 +10,10 @@ namespace stemcel::native
 {
 namespace
 {
+// The instrumental, part by part: these three always (any 4-stem split has them), and
+// BS-Roformer SW's guitar and piano too when the library has them.
 const juce::StringArray kBeatStems{"Drums", "Bass", "Other"};
+const juce::StringArray kExtraBeatStems{"Guitar", "Piano"};
 constexpr double kBeatsPerBar = 4.0;
 } // namespace
 
@@ -61,7 +64,7 @@ void MashupBuilder::timerCallback()
         }
         vocalRequested = true;
         if (onNotify) onNotify("Mashup: separating the vocals...", false);
-        stems.start(vocalItem, {}, {"vocals"}, "best", {});
+        stems.startUvr(vocalItem, {}, "vocalsTop", {}, {"vocals"});
         return;
     }
     if (!haveBeat)
@@ -73,7 +76,7 @@ void MashupBuilder::timerCallback()
         }
         beatRequested = true;
         if (onNotify) onNotify("Mashup: separating the instrumental...", false);
-        stems.start(beatItem, {}, {"drums", "bass", "other"}, "best", {});
+        stems.startUvr(beatItem, {}, "six", {}, {"drums", "bass", "guitar", "piano", "other"});
         return;
     }
     place();
@@ -94,6 +97,8 @@ void MashupBuilder::place()
         from = start.contentEndMs() > 0.0 ? curve.msAtBeat(std::ceil(curve.beatAt(start.contentEndMs()) / kBeatsPerBar) * kBeatsPerBar) : 0.0;
         std::vector<std::pair<juce::String, juce::String>> parts{{"Vocals", findStem(start, vocal, "Vocals")}};
         for (const auto& s : kBeatStems) parts.emplace_back(s, findStem(start, beat, s));
+        for (const auto& s : kExtraBeatStems)
+            if (const auto id = findStem(start, beat, s); id.isNotEmpty()) parts.emplace_back(s, id);
         std::vector<juce::String> clips;
         for (const auto& [label, stemId] : parts)
         {

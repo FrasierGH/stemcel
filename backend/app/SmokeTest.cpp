@@ -1086,8 +1086,8 @@ void SmokeTest::addTempoJourney()
     uvrStep.timeoutMs = 600000.0;
     steps.push_back(uvrStep);
 
-    // The best-of-both recipe: SW's bass, and vocals from the built-in vocal model run on the
-    // same clip window afterwards (SW's vocals are dropped).
+    // The best-of-both recipe: SW's bass, and vocals from Mel-Band RoFormer run on the same
+    // clip window afterwards (SW's vocals are dropped).
     Step bestStep{"uvr best of both",
                   [this]
                   {
@@ -1103,19 +1103,20 @@ void SmokeTest::addTempoJourney()
                       if (uvrSkipped) return true;
                       if (stems.busy()) return false;
                       juce::StringArray found;
-                      bool builtinVocals = false;
+                      bool vocalPass = false;
                       for (const auto& item : model().library)
                       {
                           if (item.kind != "stem" || item.sourceItemId != uvrItemId || uvrLibraryBefore.contains(item.id)) continue;
                           found.add(item.name.upToFirstOccurrenceOf(" ", false, false));
-                          // UVR's outputs are renamed to "<Stem>.wav"; the built-in engine's are not.
-                          if (item.name.startsWith("Vocals")) builtinVocals = juce::File(item.filePath).getFileName() != "Vocals.wav";
+                          // The vocal model's run writes into its own "-vocals" folder.
+                          if (item.name.startsWith("Vocals"))
+                              vocalPass = juce::File(item.filePath).getParentDirectory().getFileName().endsWith("-vocals");
                       }
                       found.sort(true);
                       const bool placed = static_cast<int>(model().tracks.size()) == uvrTracksBefore + 2;
-                      lastTempoLine = "uvr best stems=" + found.joinIntoString(",") + " vocals from built-in="
-                                      + (builtinVocals ? "yes" : "no") + " placed=" + (placed ? "yes" : "no");
-                      const bool ok = found.joinIntoString(",") == "Bass,Vocals" && builtinVocals && placed;
+                      lastTempoLine = "uvr best stems=" + found.joinIntoString(",") + " vocals from Mel-Band RoFormer="
+                                      + (vocalPass ? "yes" : "no") + " placed=" + (placed ? "yes" : "no");
+                      const bool ok = found.joinIntoString(",") == "Bass,Vocals" && vocalPass && placed;
                       if (ok) report.add(lastTempoLine);
                       return ok;
                   }};
@@ -1123,13 +1124,12 @@ void SmokeTest::addTempoJourney()
     bestStep.timeoutMs = 900000.0;
     steps.push_back(bestStep);
 
-    // The Separate Stems dialog with the UVR engine chosen, for eyes.
+    // The Separate Stems dialog, for eyes.
     steps.push_back({"stems dialog snapshot",
                      [this]
                      {
                          auto dialog = stems.makeDialog(tempoItemIds[0], {});
                          if (dialog == nullptr) return;
-                         if (auto* engineBox = dynamic_cast<juce::ComboBox*>(dialog->findChildWithID("engine"))) engineBox->setSelectedId(2, juce::sendNotificationSync);
                          const auto image = dialog->createComponentSnapshot(dialog->getLocalBounds());
                          juce::FileOutputStream out(workDir.getChildFile("stems-dialog.png"));
                          if (out.openedOk()) juce::PNGImageFormat().writeImageToStream(image, out);

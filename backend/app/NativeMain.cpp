@@ -22,38 +22,6 @@
 namespace stemcel::native
 {
 
-namespace
-{
-// Preference values that are paths into the folders the rename moved (the project folder,
-// located models), pointed at the new ones. Rewritten once; later runs find nothing to change.
-juce::var remapped(const juce::var& v, bool& changed)
-{
-    if (v.isString())
-    {
-        const auto next = remapMovedAppPath(v.toString());
-        if (next != v.toString()) changed = true;
-        return next;
-    }
-    if (auto* object = v.getDynamicObject())
-    {
-        juce::Array<juce::Identifier> names;
-        for (const auto& p : object->getProperties()) names.add(p.name);
-        for (const auto& name : names) object->setProperty(name, remapped(object->getProperty(name), changed));
-    }
-    if (auto* list = v.getArray())
-        for (auto& item : *list) item = remapped(item, changed);
-    return v;
-}
-
-void remapPreferencePaths(const juce::File& file)
-{
-    if (!file.existsAsFile()) return;
-    bool changed = false;
-    const auto prefs = remapped(juce::JSON::parse(file), changed);
-    if (changed) file.replaceWithText(juce::JSON::toString(prefs));
-}
-} // namespace
-
 class StemcelApplication final : public juce::JUCEApplication
 {
   public:
@@ -80,13 +48,8 @@ class StemcelApplication final : public juce::JUCEApplication
 
         // A smoke test keeps the whole session in the log, so a failure can be read afterwards.
         const bool smoke = commandLine.contains("--smoke-test");
-        // The app's folders under their earlier name (it was released before as LegacyDaw) move
-        // to Stemcel the first time, with the paths saved in the preferences. A smoke test moves
-        // nothing.
         const auto home = juce::File::getSpecialLocation(juce::File::userHomeDirectory);
-        if (!smoke) migrateAppFolders("LegacyDaw", "Stemcel");
         setAppFolderName("Stemcel");
-        if (!smoke) remapPreferencePaths(AppPreferences().file());
 
         const auto diagnostics = home.getChildFile(appFolderName()).getChildFile("Diagnostics");
         crash::install(diagnostics.getFullPathName());
@@ -203,7 +166,7 @@ class StemcelApplication final : public juce::JUCEApplication
         for (auto token : juce::StringArray::fromTokens(commandLine, true))
         {
             const juce::File file(token.unquoted());
-            if (file.hasFileExtension("stemcel;legacydaw") && file.existsAsFile())
+            if (file.hasFileExtension("stemcel") && file.existsAsFile())
             {
                 controller->guardUnsavedChanges([this, file] { controller->openProject(file); });
                 return;
