@@ -53,6 +53,16 @@ for required in MacOS/Stemcel MacOS/lame MacOS/libstemcel_rekordbox.dylib Resour
   fi
 done
 
+# The AGPL travels with the program: its text and the notice of who wrote and changed it,
+# in the bundle (so the signature covers them and the .zip carries them).
+for doc in LICENSE NOTICE; do
+  if [[ ! -f "${repo_root}/${doc}" ]]; then
+    echo "Licence guard: ${repo_root}/${doc} is missing." >&2
+    exit 1
+  fi
+  cp "${repo_root}/${doc}" "${app}/Contents/Resources/${doc}.txt"
+done
+
 # Sign inner code first, then the bundle (hardened runtime; the entitlements come from
 # juce_add_gui_app: microphone, and library validation off for third-party plugins).
 identity="${STEMCEL_SIGN_IDENTITY:--}"
@@ -83,6 +93,9 @@ base="${repo_root}/dist/Stemcel-${version}-native-mac-${arch}"
 staging="$(mktemp -d)"
 cp -R "$app" "$staging/"
 ln -s /Applications "$staging/Applications"
+# Beside the app on the disk image too, where someone opening it sees them.
+cp "${repo_root}/LICENSE" "$staging/LICENSE.txt"
+cp "${repo_root}/NOTICE" "$staging/NOTICE.txt"
 rm -f "${base}.dmg"
 hdiutil create -volname "Stemcel" -srcfolder "$staging" -ov -format UDZO "${base}.dmg"
 rm -f "${base}.zip"
