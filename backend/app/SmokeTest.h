@@ -134,6 +134,8 @@ class SmokeTest final : private juce::Timer
     float pluginAutoBefore = 0.0f, pluginAutoTarget = 0.0f;
     juce::String pluginAutoIdentifier, pluginAutoName, pluginAutoTrackId, pluginAutoSlotId, pluginAutoParam;
     juce::StringArray pluginAutoSlotsBefore;
+    juce::String everyParamLine;
+    bool everyParamOk = false;
     std::shared_ptr<std::atomic<bool>> pluginDirScanDone;
     int dragClipsBefore = 0, dragTracksBefore = 0;
     juce::String dragItemId;

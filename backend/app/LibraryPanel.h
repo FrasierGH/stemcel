@@ -78,6 +78,9 @@ class LibraryPanel final : public juce::Component, public juce::FileDragAndDropT
   public:
     explicit LibraryPanel(LibraryContext context);
     ~LibraryPanel() override;
+    // The Track FX and Project FX tabs' panels (TrackFxView, ProjectFxView).
+    juce::Component* trackFxPanel() const { return trackFx.get(); }
+    juce::Component* projectFxPanel() const { return projectFx.get(); }
 
     void paint(juce::Graphics&) override;
     void resized() override;

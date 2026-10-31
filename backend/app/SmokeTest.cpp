@@ -23,7 +23,9 @@
 #include "ScratchEditor.h"
 #include "SectionAnalyser.h"
 #include "SectionAnalysis.h"
+#include "FxPanels.h"
 #include "PluginCatalogue.h"
+#include "TrackAutomationSnapshot.h"
 #include "Tracklist.h"
 #include "WaveformStore.h"
 #include "Workspace.h"
@@ -2261,6 +2263,97 @@ void SmokeTest::addTempoJourney()
                          return true;
                      }});
     steps.back().poll = true;
+    // Every parameter there is to tweak can be automated: each knob of Track FX and Project FX
+    // has a lane, every track and master lane is stored and understood by the audio engine, and
+    // every parameter a transition writes is one of them.
+    steps.push_back({"every parameter automatable",
+                     [this]
+                     {
+                         juce::StringArray problems;
+                         auto engineKnows = [](const juce::String& id)
+                         {
+                             AutomationParam p{};
+                             return automationParamFromString(id, p);
+                         };
+                         auto isTrackParam = [](const juce::String& id)
+                         {
+                             for (const auto& p : automation::params())
+                                 if (id == p.id) return true;
+                             return false;
+                         };
+                         auto isMasterParam = [](const juce::String& id)
+                         {
+                             for (const auto& p : automation::masterParams())
+                                 if (id == p.id) return true;
+                             return false;
+                         };
+                         // The panels as the app shows them.
+                         int knobCount = 0;
+                         auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
+                         auto* library = window != nullptr ? findDescendant<LibraryPanel>(window) : nullptr;
+                         auto* trackFx = library != nullptr ? dynamic_cast<TrackFxView*>(library->trackFxPanel()) : nullptr;
+                         auto* projectFx = library != nullptr ? dynamic_cast<ProjectFxView*>(library->projectFxPanel()) : nullptr;
+                         if (trackFx == nullptr || projectFx == nullptr) problems.add("FX panels not found");
+                         else
+                         {
+                             for (const auto& [knob, lane] : trackFx->knobAutomation())
+                             {
+                                 ++knobCount;
+                                 if (!isTrackParam(lane) || !engineKnows(lane)) problems.add("track knob " + knob + " -> '" + lane + "'");
+                             }
+                             for (const auto& [knob, lane] : projectFx->knobAutomation())
+                             {
+                                 ++knobCount;
+                                 if (!isMasterParam(lane) || !engineKnows(lane)) problems.add("project knob " + knob + " -> '" + lane + "'");
+                             }
+                         }
+                         // Every track lane and every master lane, written and read back from the project.
+                         auto& project = engine.host().project();
+                         mirror.refreshNow();
+                         const auto laneTrack = model().tracks.empty() ? juce::String() : model().tracks.front().id;
+                         for (const auto& p : automation::params())
+                         {
+                             actions.setAutomation(laneTrack, p.id, {{0.0, p.min}, {1000.0, p.max}});
+                             if (!engineKnows(p.id) || project.getTrackAutomation(laneTrack, p.id).size() != 2) problems.add(juce::String("track lane ") + p.id);
+                             actions.setAutomation(laneTrack, p.id, {});
+                         }
+                         for (const auto& p : automation::masterParams())
+                         {
+                             actions.setAutomation(kMasterTrackId, p.id, {{0.0, p.min}, {1000.0, p.max}});
+                             if (!engineKnows(p.id) || project.getTrackAutomation(kMasterTrackId, p.id).size() != 2) problems.add(juce::String("master lane ") + p.id);
+                             actions.setAutomation(kMasterTrackId, p.id, {});
+                         }
+                         // What transitions write: every preset's halves and every kind of half.
+                         std::set<juce::String> written;
+                         for (const auto& preset : mix::presets())
+                         {
+                             for (const auto& s : preset.out) written.insert(s.param);
+                             for (const auto& s : preset.in) written.insert(s.param);
+                         }
+                         for (const auto& kind : mix::halfKinds())
+                             for (const auto& s : mix::shapesFor(kind.defaults, kind.outgoing)) written.insert(s.param);
+                         for (const auto& id : written)
+                             if (!isTrackParam(id) || !engineKnows(id)) problems.add("transition writes '" + id + "'");
+                         // The engine has no parameter the lanes leave out.
+                         const int engineParams = static_cast<int>(AutomationParam::count_);
+                         const int laneParams = static_cast<int>(automation::params().size() + automation::masterParams().size());
+                         // "level" is a lane on both a track and the master: one engine parameter.
+                         if (laneParams - 1 != engineParams)
+                             problems.add("engine has " + juce::String(engineParams) + " parameters, lanes " + juce::String(laneParams - 1));
+                         juce::StringArray writtenList;
+                         for (const auto& id : written) writtenList.add(id);
+                         everyParamLine = juce::String(knobCount) + " FX knobs, " + juce::String(static_cast<int>(automation::params().size()))
+                                          + " track lanes, " + juce::String(static_cast<int>(automation::masterParams().size()))
+                                          + " master lanes, transitions write {" + writtenList.joinIntoString(", ") + "}; "
+                                          + (problems.isEmpty() ? juce::String("all automatable") : "problems: " + problems.joinIntoString("; "));
+                         everyParamOk = problems.isEmpty() && knobCount > 0;
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         report.add(everyParamLine);
+                         return everyParamOk;
+                     }});
     // Shortcuts on the live timeline: Alt-drag copies a clip, the middle button pans, N turns
     // snapping off, and Cmd/Ctrl+J joins a clip split in two.
     steps.push_back({"shortcuts view",

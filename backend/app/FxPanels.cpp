@@ -163,6 +163,43 @@ int modulesHeight(const std::vector<std::unique_ptr<FxModule>>& modules, int wid
 } // namespace
 
 // ── Track FX ───────────────────────────────────────────────────────────────
+namespace
+{
+// A knob's project-state key to its automation lane (Automation.cpp params / masterParams).
+const std::map<juce::String, juce::String>& knobLanes()
+{
+    static const std::map<juce::String, juce::String> lanes{
+        {"toneBassDb", "toneBass"}, {"toneMidDb", "toneMid"}, {"toneTrebleDb", "toneTreble"}, {"toneFilter", "filter"},
+        {"sendReverb", "reverbSend"}, {"sendDelay", "delaySend"}, {"levelerAmount", "leveler"}, {"punchAmount", "punch"},
+        {"saturationDrive", "saturationDrive"}, {"saturationMix", "saturationMix"}, {"bitCrusherRate", "bitCrusherRate"},
+        {"bitCrusherBits", "bitCrusherBits"}, {"bitCrusherBoost", "bitCrusherBoost"}, {"bitCrusherMix", "bitCrusherMix"},
+        {"reverbSize", "reverbSize"}, {"reverbDecay", "reverbDecay"}, {"reverbTone", "reverbTone"}, {"reverbMix", "reverbMix"},
+        {"delayFeedback", "delayFeedback"}, {"delayTone", "delayTone"}, {"delayMix", "delayMix"}, {"mixGlueAmount", "glue"}};
+    return lanes;
+}
+
+std::vector<std::pair<juce::String, juce::String>> lanesFor(const std::map<juce::String, FxKnob*>& knobs)
+{
+    std::vector<std::pair<juce::String, juce::String>> out;
+    for (const auto& [key, knob] : knobs)
+    {
+        const auto it = knobLanes().find(key);
+        out.emplace_back(key, it != knobLanes().end() ? it->second : juce::String());
+    }
+    return out;
+}
+} // namespace
+
+std::vector<std::pair<juce::String, juce::String>> TrackFxView::knobAutomation() const
+{
+    return lanesFor(knobs);
+}
+
+std::vector<std::pair<juce::String, juce::String>> ProjectFxView::knobAutomation() const
+{
+    return lanesFor(knobs);
+}
+
 TrackFxView::TrackFxView(LibraryContext& context) : ctx(context)
 {
     heading.setFont(uiFont(13.0f, true));
