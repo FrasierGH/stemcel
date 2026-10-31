@@ -131,9 +131,14 @@ class SmokeTest final : private juce::Timer
     bool pluginScanSkipped = false;
     int pluginAutoStage = 0;
     juce::uint32 pluginAutoPlayedAt = 0;
-    float pluginAutoBefore = 0.0f, pluginAutoTarget = 0.0f;
-    juce::String pluginAutoIdentifier, pluginAutoName, pluginAutoTrackId, pluginAutoSlotId, pluginAutoParam;
-    juce::StringArray pluginAutoSlotsBefore;
+    juce::String pluginAutoTrackId;
+    struct PluginTest
+    {
+        juce::String identifier, name, plainName, slotId;
+        juce::StringArray names;
+        std::vector<float> targets;
+    };
+    std::vector<PluginTest> pluginTests;
     juce::String everyParamLine;
     bool everyParamOk = false;
     std::shared_ptr<std::atomic<bool>> pluginDirScanDone;

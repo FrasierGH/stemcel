@@ -1807,31 +1807,30 @@ void SmokeTest::addTempoJourney()
     steps.push_back({"installed plugin automation",
                      [this]
                      {
-                         if (pluginScanSkipped) return;
+                         pluginTests.clear();
                          pluginAutoStage = 0;
-                         pluginAutoIdentifier.clear();
-                         for (const auto& p : engine.host().engine().pluginCatalogue().getKnownPlugins())
-                             if (!p.isInstrument && pluginAutoIdentifier.isEmpty())
-                             {
-                                 pluginAutoIdentifier = p.fileOrIdentifier;
-                                 pluginAutoName = p.name + " (" + p.pluginFormatName + ")";
-                             }
-                         if (pluginAutoIdentifier.isEmpty()) return;
+                         if (pluginScanSkipped) return;
                          mirror.refreshNow();
                          pluginAutoTrackId.clear();
-                         pluginAutoSlotsBefore.clear();
                          for (const auto& t : model().tracks)
                              if (!t.clips.empty() && pluginAutoTrackId.isEmpty()) pluginAutoTrackId = t.id;
-                         if (const auto* track = model().findTrack(pluginAutoTrackId))
-                             if (const auto* slots = track->raw.getProperty("plugins", {}).getArray())
-                                 for (const auto& s : *slots) pluginAutoSlotsBefore.add(s.getProperty("slotId", {}).toString());
-                         engine.send("TRACK_ADD_PLUGIN", object({{"trackId", pluginAutoTrackId}, {"identifier", pluginAutoIdentifier}}));
+                         // Every effect the scan found, all on one track.
+                         for (const auto& d : engine.host().engine().pluginCatalogue().getKnownPlugins())
+                         {
+                             if (d.isInstrument) continue;
+                             PluginTest test;
+                             test.identifier = d.fileOrIdentifier;
+                             test.name = d.name + " (" + d.pluginFormatName + ")";
+                             test.plainName = d.name;
+                             pluginTests.push_back(test);
+                             engine.send("TRACK_ADD_PLUGIN", object({{"trackId", pluginAutoTrackId}, {"identifier", d.fileOrIdentifier}}));
+                         }
                      },
                      {},
                      [this](const juce::var&)
                      {
                          if (pluginScanSkipped) return true;
-                         if (pluginAutoIdentifier.isEmpty())
+                         if (pluginTests.empty())
                          {
                              report.add("SKIP installed plugin automation: no effect plugin installed");
                              return true;
@@ -1839,27 +1838,35 @@ void SmokeTest::addTempoJourney()
                          auto& audio = engine.host().engine();
                          if (pluginAutoStage == 0)
                          {
+                             // Each plugin's slot, by name, once the project shows it.
                              mirror.refreshNow();
                              const auto* track = model().findTrack(pluginAutoTrackId);
-                             if (track == nullptr) return false;
-                             if (const auto* slots = track->raw.getProperty("plugins", {}).getArray())
-                                 for (const auto& s : *slots)
-                                     if (!pluginAutoSlotsBefore.contains(s.getProperty("slotId", {}).toString()))
-                                         pluginAutoSlotId = s.getProperty("slotId", {}).toString();
-                             if (pluginAutoSlotId.isEmpty()) return false;
-                             const auto names = audio.getTrackPluginParameterNames(pluginAutoTrackId, pluginAutoSlotId);
-                             const auto before = audio.getTrackPluginParameterValue(pluginAutoTrackId, pluginAutoSlotId, 0);
-                             if (names.isEmpty() || !before.has_value())
-                             {
-                                 lastTempoLine = pluginAutoName + " shows no parameters";
-                                 return false;
-                             }
-                             pluginAutoParam = names[0];
-                             pluginAutoBefore = *before;
-                             pluginAutoTarget = *before < 0.5f ? 0.8f : 0.2f;
+                             const auto* slots = track != nullptr ? track->raw.getProperty("plugins", {}).getArray() : nullptr;
+                             if (slots == nullptr) return false;
+                             for (auto& test : pluginTests)
+                                 for (const auto& slot : *slots)
+                                     if (test.slotId.isEmpty() && slot.getProperty("name", {}).toString() == test.plainName)
+                                     {
+                                         bool taken = false;
+                                         for (const auto& other : pluginTests) taken = taken || other.slotId == slot.getProperty("slotId", {}).toString();
+                                         if (!taken) test.slotId = slot.getProperty("slotId", {}).toString();
+                                     }
+                             for (const auto& test : pluginTests)
+                                 if (test.slotId.isEmpty()) return false;
+                             // Every parameter to the far end of its range from where it is: exact
+                             // for stepped parameters (on/off, choices, integers) as well.
                              const double end = model().contentEndMs() + 60000.0;
-                             actions.setAutomation(pluginAutoTrackId, automation::pluginParamId(pluginAutoSlotId, 0),
-                                                   {{0.0, pluginAutoTarget}, {end, pluginAutoTarget}});
+                             for (auto& test : pluginTests)
+                             {
+                                 test.names = audio.getTrackPluginParameterNames(pluginAutoTrackId, test.slotId);
+                                 for (int i = 0; i < test.names.size(); ++i)
+                                 {
+                                     const float before = audio.getTrackPluginParameterValue(pluginAutoTrackId, test.slotId, i).value_or(0.0f);
+                                     const float target = before < 0.5f ? 1.0f : 0.0f;
+                                     test.targets.push_back(target);
+                                     actions.setAutomation(pluginAutoTrackId, automation::pluginParamId(test.slotId, i), {{0.0, target}, {end, target}});
+                                 }
+                             }
                              actions.seek(0.0);
                              actions.play();
                              pluginAutoPlayedAt = juce::Time::getMillisecondCounter();
@@ -1867,20 +1874,31 @@ void SmokeTest::addTempoJourney()
                              return false;
                          }
                          if (juce::Time::getMillisecondCounter() - pluginAutoPlayedAt < 1500) return false;
-                         const auto now = audio.getTrackPluginParameterValue(pluginAutoTrackId, pluginAutoSlotId, 0);
                          actions.stop();
-                         const bool moved = now.has_value() && std::abs(*now - pluginAutoTarget) < 0.02f;
-                         lastTempoLine = "installed plugin automation: " + pluginAutoName + " \"" + pluginAutoParam + "\" "
-                                         + juce::String(pluginAutoBefore, 3) + " -> " + (now.has_value() ? juce::String(*now, 3) : juce::String("?"))
-                                         + " (lane " + juce::String(pluginAutoTarget, 2) + ")";
-                         // Leave the project as it was for the steps after.
-                         actions.setAutomation(pluginAutoTrackId, automation::pluginParamId(pluginAutoSlotId, 0), {});
-                         engine.send("TRACK_REMOVE_PLUGIN", object({{"trackId", pluginAutoTrackId}, {"slotId", pluginAutoSlotId}}));
-                         if (moved) report.add(lastTempoLine);
-                         return moved;
+                         bool all = true;
+                         for (const auto& test : pluginTests)
+                         {
+                             juce::StringArray missed;
+                             for (int i = 0; i < test.names.size(); ++i)
+                             {
+                                 const auto now = audio.getTrackPluginParameterValue(pluginAutoTrackId, test.slotId, i);
+                                 if (!now.has_value() || std::abs(*now - test.targets[static_cast<size_t>(i)]) > 0.02f)
+                                     missed.add(test.names[i] + "=" + (now.has_value() ? juce::String(*now, 3) : juce::String("?")));
+                             }
+                             const int followed = test.names.size() - missed.size();
+                             all = all && missed.isEmpty() && test.names.size() > 0;
+                             report.add("installed plugin automation: " + test.name + " " + juce::String(followed) + "/" + juce::String(test.names.size())
+                                        + " parameters followed their lanes (" + test.names.joinIntoString(", ") + ")"
+                                        + (missed.isEmpty() ? juce::String() : "; missed " + missed.joinIntoString(", ")));
+                             // Leave the project as it was for the steps after.
+                             for (int i = 0; i < test.names.size(); ++i)
+                                 actions.setAutomation(pluginAutoTrackId, automation::pluginParamId(test.slotId, i), {});
+                             engine.send("TRACK_REMOVE_PLUGIN", object({{"trackId", pluginAutoTrackId}, {"slotId", test.slotId}}));
+                         }
+                         return all;
                      }});
     steps.back().poll = true;
-    steps.back().timeoutMs = 30000.0;
+    steps.back().timeoutMs = 60000.0;
     // Drag and drop onto the timeline through its own target callbacks (drag move, then drop),
     // as a library tile, a Files row and the area below the tracks deliver them.
     auto dropOnTimeline = [this](const juce::var& description, bool belowTracks)
