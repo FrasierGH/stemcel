@@ -55,6 +55,13 @@ New-Item -ItemType Directory -Force $stage | Out-Null
 Get-ChildItem $artefacts | Where-Object { $_.Extension -notin @('.pdb', '.lib', '.exp', '.ilk') } |
     ForEach-Object { Copy-Item $_.FullName -Destination $stage -Recurse -Force }
 
+# The AGPL travels with the program: its text and the notice of who wrote and changed it.
+foreach ($doc in @('LICENSE', 'NOTICE')) {
+    $source = Join-Path $repo $doc
+    if (-not (Test-Path $source)) { throw "Licence guard: $doc is missing from $repo" }
+    Copy-Item $source -Destination (Join-Path $stage "$doc.txt") -Force
+}
+
 # Prove the staged app runs end to end.
 $smoke = Join-Path ([System.IO.Path]::GetTempPath()) "stemcel-package-smoke"
 if (Test-Path $smoke) { Remove-Item -Recurse -Force $smoke }
