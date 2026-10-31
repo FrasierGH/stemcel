@@ -58,6 +58,16 @@ class Workspace final : public juce::Component, public juce::DragAndDropContaine
     void showLibraryTab(int index);
     // The mixer in place of the bottom panel, or the bottom panel back.
     void toggleMixer();
+    // Shortcuts' operations (also in the menus).
+    void selectAllClips();
+    void joinSelection();
+    void toggleAutomationOnSelectedTrack();
+    void toggleLoop();
+    void toggleMetronome();
+    void toggleSnap();
+    void openClipEditorOnSelection();
+    void stepBars(int bars);
+    void selectAdjacentTrack(int direction);
     // After a tempo is detected or seeded: line placed clips up with the beat grid (preference).
     void alignAfterAnalysis(const juce::var& analysis);
     void alignAfterTempoSeed();
@@ -78,6 +88,7 @@ class Workspace final : public juce::Component, public juce::DragAndDropContaine
 
   private:
     EngineClient& engine;
+    juce::String lastSnapGrid{"quarter"}; // what N turns snapping back on to
     AppController& controller;
     AppPreferences& prefs;
 

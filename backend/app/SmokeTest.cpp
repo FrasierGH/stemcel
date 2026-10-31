@@ -2166,6 +2166,122 @@ void SmokeTest::addTempoJourney()
                          return true;
                      }});
     steps.back().poll = true;
+    // Shortcuts on the live timeline: Alt-drag copies a clip, the middle button pans, N turns
+    // snapping off, and Cmd/Ctrl+J joins a clip split in two.
+    steps.push_back({"shortcuts view",
+                     [this]
+                     {
+                         shortcutStartMs = juce::Time::getMillisecondCounter();
+                         auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
+                         auto* workspace = window != nullptr ? findDescendant<Workspace>(window) : nullptr;
+                         if (workspace == nullptr) return;
+                         workspace->projectMirror().refreshNow();
+                         const auto* clip = workspace->projectMirror().model().findClip(nearOutClipId);
+                         if (clip == nullptr) return;
+                         // The clip 300 px wide, from x = 100.
+                         auto& view = workspace->viewState();
+                         view.pxPerSecond = 300.0 / juce::jmax(0.5, clip->effectiveDurationMs / 1000.0);
+                         view.scrollXPx = clip->offsetMs / 1000.0 * view.pxPerSecond - 100.0;
+                         for (const auto& row : layoutRows(workspace->projectMirror().model()))
+                             if (row.trackId == clip->trackId) view.scrollY = juce::jmax(0, row.top - 20);
+                         view.changed();
+                     },
+                     {},
+                     [this](const juce::var&) { return juce::Time::getMillisecondCounter() - shortcutStartMs > 400; }});
+    steps.back().poll = true;
+    steps.push_back({"alt-drag, pan and snap key",
+                     [this]
+                     {
+                         auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
+                         auto* workspace = window != nullptr ? findDescendant<Workspace>(window) : nullptr;
+                         auto* timeline = window != nullptr ? findDescendant<TimelineView>(window) : nullptr;
+                         if (workspace == nullptr || timeline == nullptr) return;
+                         auto& wsMirror = workspace->projectMirror();
+                         wsMirror.refreshNow();
+                         const auto* clip = wsMirror.model().findClip(nearOutClipId);
+                         if (clip == nullptr) return;
+                         auto& view = workspace->viewState();
+                         float y = -1.0f;
+                         for (const auto& row : layoutRows(wsMirror.model()))
+                             if (row.trackId == clip->trackId)
+                             {
+                                 y = static_cast<float>(row.top + view.headerHeight() - view.scrollY + row.clipHeight / 2);
+                                 shortcutClipsBefore = static_cast<int>(wsMirror.model().findTrack(row.trackId)->clips.size());
+                             }
+                         if (y < 0.0f) return;
+                         shortcutOriginMs = clip->offsetMs;
+                         mirror.refreshNow();
+                         snapBefore = actions.snapGrid();
+                         const auto x = static_cast<float>(view.msToX(clip->offsetMs)) + 50.0f;
+                         auto event = [timeline](juce::Point<float> at, juce::Point<float> from, juce::ModifierKeys mods, bool dragged)
+                         {
+                             const auto now = juce::Time::getCurrentTime();
+                             return juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(), at, mods, 1.0f, 0.0f, 0.0f, 0.0f,
+                                                     0.0f, timeline, timeline, now, from, now, 1, dragged);
+                         };
+                         // Alt-drag 400 px right: a copy past the clip's end, the clip where it was.
+                         const juce::Point<float> from{x, y}, to{x + 400.0f, y};
+                         const juce::ModifierKeys alt(juce::ModifierKeys::altModifier | juce::ModifierKeys::leftButtonModifier);
+                         timeline->mouseDown(event(from, from, alt, false));
+                         timeline->mouseDrag(event(to, from, alt, true));
+                         timeline->mouseUp(event(to, from, juce::ModifierKeys(juce::ModifierKeys::altModifier), true));
+                         // The middle button 120 px right: the view moves 120 px back.
+                         timeline->clampScroll();
+                         panScrollBefore = view.scrollXPx;
+                         const juce::ModifierKeys middle(juce::ModifierKeys::middleButtonModifier);
+                         const juce::Point<float> grab{180.0f, y}, release{300.0f, y};
+                         timeline->mouseDown(event(grab, grab, middle, false));
+                         timeline->mouseDrag(event(release, grab, middle, true));
+                         panScrollAfter = view.scrollXPx;
+                         timeline->mouseUp(event(release, grab, {}, true));
+                         workspace->keyPressed(juce::KeyPress('n', {}, 'n'));
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         mirror.refreshNow();
+                         const auto* clip = model().findClip(nearOutClipId);
+                         if (clip == nullptr) return false;
+                         const auto* track = model().findTrack(clip->trackId);
+                         shortcutCopyId.clear();
+                         for (const auto& c : track->clips)
+                             if (c.id != clip->id && c.libraryItemId == clip->libraryItemId && c.offsetMs >= clip->endMs() - 1.0) shortcutCopyId = c.id;
+                         const bool copied = static_cast<int>(track->clips.size()) == shortcutClipsBefore + 1 && shortcutCopyId.isNotEmpty()
+                                             && std::abs(clip->offsetMs - shortcutOriginMs) < 0.5;
+                         const bool panned = std::abs(panScrollAfter - panScrollBefore + 120.0) < 1.0;
+                         const auto grid = actions.snapGrid();
+                         const bool snapToggled = snapBefore != "free" ? grid == "free" : grid != "free";
+                         lastTempoLine = juce::String("shortcuts: copy ") + (copied ? "yes" : "no") + ", pan "
+                                         + juce::String(panScrollAfter - panScrollBefore, 1) + " px, snap " + snapBefore + " -> " + grid;
+                         if (copied && panned && snapToggled)
+                         {
+                             report.add(lastTempoLine);
+                             actions.setSnapGrid(snapBefore);
+                         }
+                         return copied && panned && snapToggled;
+                     }});
+    steps.back().poll = true;
+    steps.push_back({"join clips",
+                     [this]
+                     {
+                         mirror.refreshNow();
+                         const auto* copy = model().findClip(shortcutCopyId);
+                         if (copy == nullptr) return;
+                         shortcutJoinEndMs = copy->endMs();
+                         const auto right = actions.splitClipAt(shortcutCopyId, copy->offsetMs + copy->effectiveDurationMs / 2.0);
+                         mirror.refreshNow();
+                         shortcutJoins = actions.joinClips({shortcutCopyId, right});
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         mirror.refreshNow();
+                         const auto* copy = model().findClip(shortcutCopyId);
+                         const bool ok = shortcutJoins == 1 && copy != nullptr && std::abs(copy->endMs() - shortcutJoinEndMs) < 1.0;
+                         if (ok) report.add("join clips: one clip again, to " + juce::String(shortcutJoinEndMs, 0) + " ms");
+                         return ok;
+                     }});
+    steps.back().poll = true;
     // Stemcel's own sections find the drop and the breakdown of a generated arrangement.
     steps.push_back({"sections",
                      [this]

@@ -303,6 +303,98 @@ void Workspace::duplicateSelection()
     juce::ignoreUnused(created); // the source stays selected so repeated D keeps appending
 }
 
+void Workspace::selectAllClips()
+{
+    view.selectedClipIds.clear();
+    for (const auto& track : mirror.model().tracks)
+        for (const auto& c : track.clips) view.selectedClipIds.insert(c.id);
+    view.changed();
+}
+
+void Workspace::joinSelection()
+{
+    actions.joinClips({view.selectedClipIds.begin(), view.selectedClipIds.end()});
+}
+
+void Workspace::toggleAutomationOnSelectedTrack()
+{
+    if (mirror.model().findTrack(view.selectedTrackId) != nullptr) actions.toggleAutomation(view.selectedTrackId);
+}
+
+void Workspace::toggleLoop()
+{
+    const auto& m = mirror.model();
+    if (!m.timelineSelection.has_value())
+    {
+        if (actions.onNotify) actions.onNotify("Drag across the ruler to choose what to loop", false);
+        return;
+    }
+    actions.setTimelineSelection(m.timelineSelection, !m.loopSelection);
+}
+
+void Workspace::toggleMetronome()
+{
+    const auto& m = mirror.model();
+    const bool on = !static_cast<bool>(m.raw.getProperty("metronomeEnabled", false));
+    auto* payload = new juce::DynamicObject();
+    payload->setProperty("enabled", on);
+    engine.send("PROJECT_SET_METRONOME", juce::var(payload));
+    // Not an edit (as the Master module's button): a clean project writes it straight away.
+    if (!m.dirty && m.filePath.isNotEmpty())
+    {
+        auto* save = new juce::DynamicObject();
+        save->setProperty("filePath", m.filePath);
+        engine.send("PROJECT_SAVE_VIEW_STATE", juce::var(save));
+    }
+    if (actions.onNotify) actions.onNotify(on ? "Metronome on" : "Metronome off", false);
+}
+
+void Workspace::toggleSnap()
+{
+    const auto grid = actions.snapGrid();
+    if (grid != "free")
+    {
+        lastSnapGrid = grid;
+        actions.setSnapGrid("free");
+        if (actions.onNotify) actions.onNotify("Snap off", false);
+    }
+    else
+    {
+        actions.setSnapGrid(lastSnapGrid);
+        if (actions.onNotify) actions.onNotify("Snap to " + lastSnapGrid, false);
+    }
+}
+
+void Workspace::openClipEditorOnSelection()
+{
+    if (view.selectedClipIds.empty() || timeline.onOpenClipEditor == nullptr) return;
+    timeline.onOpenClipEditor(*view.selectedClipIds.begin());
+}
+
+// The playhead to the previous or next bar line.
+void Workspace::stepBars(int bars)
+{
+    const auto& m = mirror.model();
+    const double bpm = m.tempoMap.empty() ? m.bpm : m.tempoCurve().bpmAt(live.positionMs);
+    const double bar = 240000.0 / juce::jmax(1.0, bpm);
+    const double index = live.positionMs / bar;
+    // From just off a bar line, the first step lands on the line itself.
+    const double target = juce::jmax(0.0, (bars < 0 ? std::ceil(index - 1e-6) - 1.0 : std::floor(index + 1e-6) + 1.0) * bar);
+    actions.seek(target);
+    timeline.reveal(target);
+}
+
+void Workspace::selectAdjacentTrack(int direction)
+{
+    const auto& tracks = mirror.model().tracks;
+    if (tracks.empty()) return;
+    int index = 0;
+    for (int i = 0; i < static_cast<int>(tracks.size()); ++i)
+        if (tracks[static_cast<size_t>(i)].id == view.selectedTrackId) index = juce::jlimit(0, static_cast<int>(tracks.size()) - 1, i + direction);
+    view.selectedTrackId = tracks[static_cast<size_t>(index)].id;
+    view.changed();
+}
+
 void Workspace::deleteSelection()
 {
     std::vector<juce::String> ids(view.selectedClipIds.begin(), view.selectedClipIds.end());
@@ -395,8 +487,35 @@ bool Workspace::keyPressed(const juce::KeyPress& key)
         case 's': splitAtPlayhead(); return true;
         case 'd': duplicateSelection(); return true;
         case 'm': addMarkerAtPlayhead(); return true;
+        case 'a': toggleAutomationOnSelectedTrack(); return true;
+        case 'c': toggleLoop(); return true;
+        case 'k': toggleMetronome(); return true;
+        case 'n': toggleSnap(); return true;
+        case 'e': openClipEditorOnSelection(); return true;
+        case 'x': toggleMixer(); return true;
+        case ',': stepBars(-1); return true;
+        case '.': stepBars(1); return true;
         default: break;
         }
+    }
+    if (code == juce::KeyPress::escapeKey && plain)
+    {
+        // Esc clears the clip selection, then the range.
+        if (!view.selectedClipIds.empty())
+        {
+            view.selectedClipIds.clear();
+            view.changed();
+        }
+        else if (mirror.model().timelineSelection.has_value())
+        {
+            actions.setTimelineSelection(std::nullopt, false);
+        }
+        return true;
+    }
+    if ((code == juce::KeyPress::upKey || code == juce::KeyPress::downKey) && plain && !mods.isShiftDown())
+    {
+        selectAdjacentTrack(code == juce::KeyPress::upKey ? -1 : 1);
+        return true;
     }
     if ((mods.isCommandDown()) && juce::CharacterFunctions::toLowerCase(key.getTextCharacter()) == 'l')
     {

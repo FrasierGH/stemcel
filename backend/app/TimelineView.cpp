@@ -778,7 +778,7 @@ void TimelineView::paint(juce::Graphics& g)
                 if (r.getRight() < 0.0f || r.getX() > static_cast<float>(getWidth())) continue;
                 const bool dragging = drag != DragKind::none && drag != DragKind::seek && drag != DragKind::range
                                       && drag != DragKind::marker && c.id == dragClipId;
-                paintClip(g, c, r, silenced, trackColor, dragging ? 0.35f : 1.0f);
+                paintClip(g, c, r, silenced, trackColor, dragging && !dragDuplicates ? 0.35f : 1.0f);
             }
 
             // Crossfades: the overlap between each transition's two clips.
@@ -1195,8 +1195,19 @@ void TimelineView::mouseDown(const juce::MouseEvent& e)
 {
     grabKeyboardFocus();
     drag = DragKind::none;
+    dragDuplicates = false;
     rangePreview.reset();
     const double ms = juce::jmax(0.0, view.xToMs(e.x));
+
+    // The middle button pans, anywhere, selecting and moving nothing (FL Studio's grab).
+    if (e.mods.isMiddleButtonDown())
+    {
+        drag = DragKind::pan;
+        panStartScrollX = view.scrollXPx;
+        panStartScrollY = view.scrollY;
+        setMouseCursor(juce::MouseCursor::DraggingHandCursor);
+        return;
+    }
 
     if (tempoLaneMouseDown(e)) return;
     if (e.y < VS::kRulerHeight)
@@ -1302,8 +1313,10 @@ void TimelineView::mouseDown(const juce::MouseEvent& e)
             showClipMenu(clip.id, ms);
             return;
         }
-        if (clip.locked) return;
+        if (clip.locked && !(e.mods.isAltDown() && hit->edge == DragKind::move)) return;
         drag = hit->edge;
+        // Alt/Option-drag copies the clip (Logic, Ableton); a locked clip can still be copied.
+        dragDuplicates = drag == DragKind::move && e.mods.isAltDown();
         dragClipId = clip.id;
         dragAnchorMs = ms;
         dragOriginStartMs = clip.offsetMs;
@@ -1325,7 +1338,16 @@ void TimelineView::mouseDown(const juce::MouseEvent& e)
 void TimelineView::mouseDrag(const juce::MouseEvent& e)
 {
     const double ms = juce::jmax(0.0, view.xToMs(e.x));
-    const bool free = e.mods.isAltDown();
+    if (drag == DragKind::pan)
+    {
+        view.scrollXPx = panStartScrollX - e.getDistanceFromDragStartX();
+        view.scrollY = panStartScrollY - e.getDistanceFromDragStartY();
+        clampScroll();
+        view.changed();
+        return;
+    }
+    // Cmd/Ctrl drags off the grid (Alt too, except on a clip, where Alt copies it).
+    const bool free = e.mods.isCommandDown() || e.mods.isCtrlDown() || (e.mods.isAltDown() && drag != DragKind::move);
     auto snapped = [&](double t) { return free ? juce::jmax(0.0, t) : actions.snap(t); };
     if (tempoDragIndex >= 0 && tempoDragIndex < static_cast<int>(tempoDraft.size()))
     {
@@ -1438,6 +1460,7 @@ void TimelineView::mouseDrag(const juce::MouseEvent& e)
         dragPreviewEndMs = juce::jmax(snapped(dragOriginEndMs + (ms - dragAnchorMs)), dragOriginStartMs + 10.0);
         repaint();
         break;
+    case DragKind::pan:
     case DragKind::none:
         break;
     }
@@ -1484,7 +1507,25 @@ void TimelineView::mouseUp(const juce::MouseEvent& e)
         actions.setAutomation(autoTrackId, autoParamId, autoPoints, autoGestureId, true);
         autoGestureId.clear();
         break;
+    case DragKind::pan:
+        persistView();
+        setMouseCursor(juce::MouseCursor::NormalCursor);
+        break;
     case DragKind::move:
+        if (dragDuplicates)
+        {
+            if (moved)
+            {
+                const auto copy = actions.duplicateClipTo(dragClipId, dragPreviewTrackId, dragPreviewStartMs);
+                if (copy.isNotEmpty())
+                {
+                    view.selectedClipIds = {copy};
+                    view.selectedTrackId = dragPreviewTrackId;
+                    view.changed();
+                }
+            }
+            break;
+        }
         if (moved
             && (std::abs(dragPreviewStartMs - dragOriginStartMs) > 0.01
                 || dragPreviewTrackId != (model().findClip(dragClipId) != nullptr

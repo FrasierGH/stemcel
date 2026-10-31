@@ -109,7 +109,8 @@ class TimelineView final : public juce::Component,
         automationPoint,
         automationBend,
         envelopePoint,
-        marker
+        marker,
+        pan // middle button held: the view follows the mouse
     };
 
     struct ClipHit
@@ -189,6 +190,8 @@ class TimelineView final : public juce::Component,
     double dragPreviewStartMs = 0.0;
     double dragPreviewEndMs = 0.0;
     juce::String dragPreviewTrackId;
+    bool dragDuplicates = false; // Alt/Option held as a clip move began: drop a copy, leave the clip
+    double panStartScrollX = 0.0, panStartScrollY = 0.0;
     std::optional<std::pair<double, double>> rangePreview;
     std::optional<std::pair<juce::String, double>> dropPreview; // track id, start ms
     double lastDrawnPlayheadX = -1.0;

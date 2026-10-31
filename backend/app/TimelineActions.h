@@ -28,6 +28,11 @@ class TimelineActions
     // Returns the new right-half clip id, or empty when refused.
     juce::String splitClipAt(const juce::String& clipId, double atMs);
     juce::String duplicateClip(const juce::String& clipId);
+    // A copy of the clip (its properties and envelope too) at `positionMs` on `trackId`.
+    juce::String duplicateClipTo(const juce::String& clipId, const juce::String& trackId, double positionMs);
+    // Joins clips that were cut from one another (same track and source, end to end in both
+    // the timeline and the source) back into one; returns how many joins.
+    int joinClips(const std::vector<juce::String>& clipIds);
     void removeClips(const std::vector<juce::String>& clipIds);
     void moveClip(const juce::String& clipId, double positionMs, const juce::String& trackId);
     // Trim in timeline terms: new timeline start and end; source window follows via the

@@ -155,7 +155,8 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& ids)
                   CommandIds::showLibraryTab, CommandIds::showFilesTab, CommandIds::showRekordboxTab,
                   CommandIds::exportMixdown, CommandIds::projectProperties, CommandIds::recordAudio,
                   CommandIds::importFromProject, CommandIds::cutClips, CommandIds::copyClips, CommandIds::pasteClips,
-                  CommandIds::toggleMixer});
+                  CommandIds::toggleMixer, CommandIds::selectAllClips, CommandIds::joinClips, CommandIds::toggleAutomation,
+                  CommandIds::toggleLoop, CommandIds::toggleMetronome, CommandIds::toggleSnap, CommandIds::openClipEditor});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -310,6 +311,40 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
         info.setActive(open);
         info.setTicked(workspace != nullptr && workspace->isMixerShown());
         break;
+    case CommandIds::selectAllClips:
+        info.setInfo("Select All Clips", "Select every clip", "Edit", 0);
+        info.addDefaultKeypress('a', cmd);
+        info.setActive(open);
+        break;
+    case CommandIds::joinClips:
+        info.setInfo("Join Clips", "Join selected clips split from one another", "Edit", 0);
+        info.addDefaultKeypress('j', cmd);
+        info.setActive(open && workspace != nullptr && workspace->hasClipSelection());
+        break;
+    case CommandIds::openClipEditor:
+        info.setInfo("Open Clip Editor\tE", "Open the selected clip in the clip editor", "Edit", 0);
+        info.setActive(open && workspace != nullptr && workspace->hasClipSelection());
+        break;
+    case CommandIds::toggleAutomation:
+        info.setInfo("Show / Hide Automation\tA", "Show or hide the selected track's automation lanes", "Track", 0);
+        info.setActive(open);
+        break;
+    case CommandIds::toggleLoop:
+        info.setInfo("Loop Selection\tC", "Loop the timeline selection", "View", 0);
+        info.setActive(open && workspace != nullptr && workspace->projectMirror().model().timelineSelection.has_value());
+        info.setTicked(workspace != nullptr && workspace->projectMirror().model().loopSelection);
+        break;
+    case CommandIds::toggleMetronome:
+        info.setInfo("Metronome\tK", "Click on every beat", "View", 0);
+        info.setActive(open);
+        info.setTicked(workspace != nullptr
+                       && static_cast<bool>(workspace->projectMirror().model().raw.getProperty("metronomeEnabled", false)));
+        break;
+    case CommandIds::toggleSnap:
+        info.setInfo("Snap to Grid\tN", "Turn snapping on or off", "View", 0);
+        info.setActive(open);
+        info.setTicked(workspace != nullptr && workspace->timelineActions().snapGrid() != "free");
+        break;
     default:
         break;
     }
@@ -358,6 +393,13 @@ bool MainComponent::perform(const InvocationInfo& info)
     case CommandIds::showFilesTab: if (workspace != nullptr) workspace->showLibraryTab(1); return true;
     case CommandIds::showRekordboxTab: if (workspace != nullptr) workspace->showLibraryTab(2); return true;
     case CommandIds::toggleMixer: if (workspace != nullptr) workspace->toggleMixer(); return true;
+    case CommandIds::selectAllClips: if (workspace != nullptr) workspace->selectAllClips(); return true;
+    case CommandIds::joinClips: if (workspace != nullptr) workspace->joinSelection(); return true;
+    case CommandIds::toggleAutomation: if (workspace != nullptr) workspace->toggleAutomationOnSelectedTrack(); return true;
+    case CommandIds::toggleLoop: if (workspace != nullptr) workspace->toggleLoop(); return true;
+    case CommandIds::toggleMetronome: if (workspace != nullptr) workspace->toggleMetronome(); return true;
+    case CommandIds::toggleSnap: if (workspace != nullptr) workspace->toggleSnap(); return true;
+    case CommandIds::openClipEditor: if (workspace != nullptr) workspace->openClipEditorOnSelection(); return true;
     case CommandIds::redo: controller.redo(); return true;
     case CommandIds::about:
         juce::AlertWindow::showAsync(juce::MessageBoxOptions()
@@ -422,11 +464,14 @@ juce::PopupMenu MainComponent::getMenuForIndex(int topLevelMenuIndex, const juce
         menu.addCommandItem(&commandManager, CommandIds::cutClips);
         menu.addCommandItem(&commandManager, CommandIds::copyClips);
         menu.addCommandItem(&commandManager, CommandIds::pasteClips);
+        menu.addCommandItem(&commandManager, CommandIds::selectAllClips);
         menu.addSeparator();
         menu.addCommandItem(&commandManager, CommandIds::splitAtPlayhead);
+        menu.addCommandItem(&commandManager, CommandIds::joinClips);
         menu.addCommandItem(&commandManager, CommandIds::duplicateClip);
         menu.addCommandItem(&commandManager, CommandIds::deleteClip);
         menu.addCommandItem(&commandManager, CommandIds::toggleLock);
+        menu.addCommandItem(&commandManager, CommandIds::openClipEditor);
         menu.addSeparator();
         menu.addCommandItem(&commandManager, CommandIds::addMarker);
     }
@@ -435,6 +480,10 @@ juce::PopupMenu MainComponent::getMenuForIndex(int topLevelMenuIndex, const juce
         menu.addCommandItem(&commandManager, CommandIds::zoomIn);
         menu.addCommandItem(&commandManager, CommandIds::zoomOut);
         menu.addCommandItem(&commandManager, CommandIds::zoomFit);
+        menu.addSeparator();
+        menu.addCommandItem(&commandManager, CommandIds::toggleSnap);
+        menu.addCommandItem(&commandManager, CommandIds::toggleLoop);
+        menu.addCommandItem(&commandManager, CommandIds::toggleMetronome);
         menu.addSeparator();
         menu.addCommandItem(&commandManager, CommandIds::showLibraryTab);
         menu.addCommandItem(&commandManager, CommandIds::showFilesTab);
@@ -446,6 +495,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int topLevelMenuIndex, const juce
     {
         menu.addCommandItem(&commandManager, CommandIds::addTrack);
         menu.addCommandItem(&commandManager, CommandIds::recordAudio);
+        menu.addCommandItem(&commandManager, CommandIds::toggleAutomation);
     }
     else if (topLevelMenuIndex == 4)
     {

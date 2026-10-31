@@ -107,6 +107,10 @@ class SmokeTest final : private juce::Timer
     int automationStage = 0;
     juce::String nearOutClipId, nearInClipId;
     juce::String sectionItemId, sectionClipId;
+    juce::uint32 shortcutStartMs = 0;
+    int shortcutClipsBefore = 0, shortcutJoins = 0;
+    double shortcutOriginMs = 0.0, shortcutJoinEndMs = 0.0, panScrollBefore = 0.0, panScrollAfter = 0.0;
+    juce::String shortcutCopyId, snapBefore;
     bool sectionRevealed = false;
     std::unique_ptr<class SectionAnalyser> sectionAnalyser;
     juce::File rekordboxFixtureDb;

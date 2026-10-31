@@ -49,6 +49,13 @@ enum : juce::CommandID
     copyClips,
     pasteClips,
     toggleMixer,
+    selectAllClips,
+    joinClips,
+    toggleAutomation,
+    toggleLoop,
+    toggleMetronome,
+    toggleSnap,
+    openClipEditor,
 };
 } // namespace CommandIds
 
