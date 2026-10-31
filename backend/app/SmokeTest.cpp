@@ -23,6 +23,7 @@
 #include "ScratchEditor.h"
 #include "SectionAnalyser.h"
 #include "SectionAnalysis.h"
+#include "PluginCatalogue.h"
 #include "Tracklist.h"
 #include "WaveformStore.h"
 #include "Workspace.h"
@@ -1784,6 +1785,100 @@ void SmokeTest::addTempoJourney()
                      }});
     steps.back().poll = true;
     steps.back().timeoutMs = 300000.0;
+    // An installed plugin's parameter follows its automation lane while the timeline plays
+    // (with the scan above: STEMCEL_SMOKE_PLUGIN_SCAN=1). STEMCEL_SMOKE_PLUGIN_DIR adds a
+    // folder of plugins to scan first, for a machine with no effect plugin installed.
+    steps.push_back({"installed plugin folder",
+                     [this]
+                     {
+                         const auto dir = juce::SystemStats::getEnvironmentVariable("STEMCEL_SMOKE_PLUGIN_DIR", {});
+                         pluginDirScanDone = std::make_shared<std::atomic<bool>>(pluginScanSkipped || dir.isEmpty());
+                         if (pluginDirScanDone->load()) return;
+                         engine.host().engine().pluginCatalogue().startScan(
+                             juce::FileSearchPath(dir), [](plugins::ScanProgress) {},
+                             [done = pluginDirScanDone](bool) { done->store(true); });
+                     },
+                     {},
+                     [this](const juce::var&) { return pluginDirScanDone != nullptr && pluginDirScanDone->load(); }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 120000.0;
+    steps.push_back({"installed plugin automation",
+                     [this]
+                     {
+                         if (pluginScanSkipped) return;
+                         pluginAutoStage = 0;
+                         pluginAutoIdentifier.clear();
+                         for (const auto& p : engine.host().engine().pluginCatalogue().getKnownPlugins())
+                             if (!p.isInstrument && pluginAutoIdentifier.isEmpty())
+                             {
+                                 pluginAutoIdentifier = p.fileOrIdentifier;
+                                 pluginAutoName = p.name + " (" + p.pluginFormatName + ")";
+                             }
+                         if (pluginAutoIdentifier.isEmpty()) return;
+                         mirror.refreshNow();
+                         pluginAutoTrackId.clear();
+                         pluginAutoSlotsBefore.clear();
+                         for (const auto& t : model().tracks)
+                             if (!t.clips.empty() && pluginAutoTrackId.isEmpty()) pluginAutoTrackId = t.id;
+                         if (const auto* track = model().findTrack(pluginAutoTrackId))
+                             if (const auto* slots = track->raw.getProperty("plugins", {}).getArray())
+                                 for (const auto& s : *slots) pluginAutoSlotsBefore.add(s.getProperty("slotId", {}).toString());
+                         engine.send("TRACK_ADD_PLUGIN", object({{"trackId", pluginAutoTrackId}, {"identifier", pluginAutoIdentifier}}));
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         if (pluginScanSkipped) return true;
+                         if (pluginAutoIdentifier.isEmpty())
+                         {
+                             report.add("SKIP installed plugin automation: no effect plugin installed");
+                             return true;
+                         }
+                         auto& audio = engine.host().engine();
+                         if (pluginAutoStage == 0)
+                         {
+                             mirror.refreshNow();
+                             const auto* track = model().findTrack(pluginAutoTrackId);
+                             if (track == nullptr) return false;
+                             if (const auto* slots = track->raw.getProperty("plugins", {}).getArray())
+                                 for (const auto& s : *slots)
+                                     if (!pluginAutoSlotsBefore.contains(s.getProperty("slotId", {}).toString()))
+                                         pluginAutoSlotId = s.getProperty("slotId", {}).toString();
+                             if (pluginAutoSlotId.isEmpty()) return false;
+                             const auto names = audio.getTrackPluginParameterNames(pluginAutoTrackId, pluginAutoSlotId);
+                             const auto before = audio.getTrackPluginParameterValue(pluginAutoTrackId, pluginAutoSlotId, 0);
+                             if (names.isEmpty() || !before.has_value())
+                             {
+                                 lastTempoLine = pluginAutoName + " shows no parameters";
+                                 return false;
+                             }
+                             pluginAutoParam = names[0];
+                             pluginAutoBefore = *before;
+                             pluginAutoTarget = *before < 0.5f ? 0.8f : 0.2f;
+                             const double end = model().contentEndMs() + 60000.0;
+                             actions.setAutomation(pluginAutoTrackId, automation::pluginParamId(pluginAutoSlotId, 0),
+                                                   {{0.0, pluginAutoTarget}, {end, pluginAutoTarget}});
+                             actions.seek(0.0);
+                             actions.play();
+                             pluginAutoPlayedAt = juce::Time::getMillisecondCounter();
+                             pluginAutoStage = 1;
+                             return false;
+                         }
+                         if (juce::Time::getMillisecondCounter() - pluginAutoPlayedAt < 1500) return false;
+                         const auto now = audio.getTrackPluginParameterValue(pluginAutoTrackId, pluginAutoSlotId, 0);
+                         actions.stop();
+                         const bool moved = now.has_value() && std::abs(*now - pluginAutoTarget) < 0.02f;
+                         lastTempoLine = "installed plugin automation: " + pluginAutoName + " \"" + pluginAutoParam + "\" "
+                                         + juce::String(pluginAutoBefore, 3) + " -> " + (now.has_value() ? juce::String(*now, 3) : juce::String("?"))
+                                         + " (lane " + juce::String(pluginAutoTarget, 2) + ")";
+                         // Leave the project as it was for the steps after.
+                         actions.setAutomation(pluginAutoTrackId, automation::pluginParamId(pluginAutoSlotId, 0), {});
+                         engine.send("TRACK_REMOVE_PLUGIN", object({{"trackId", pluginAutoTrackId}, {"slotId", pluginAutoSlotId}}));
+                         if (moved) report.add(lastTempoLine);
+                         return moved;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 30000.0;
     // Drag and drop onto the timeline through its own target callbacks (drag move, then drop),
     // as a library tile, a Files row and the area below the tracks deliver them.
     auto dropOnTimeline = [this](const juce::var& description, bool belowTracks)

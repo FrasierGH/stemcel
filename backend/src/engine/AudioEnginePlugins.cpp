@@ -143,6 +143,15 @@ juce::StringArray AudioEngine::getTrackPluginParameterNames(const juce::String& 
     return names;
 }
 
+std::optional<float> AudioEngine::getTrackPluginParameterValue(const juce::String& trackId, const juce::String& slotId, int index)
+{
+    auto* chain = busGraph.getTrackPlugins(trackId);
+    auto* slot = chain != nullptr ? chain->findSlot(slotId) : nullptr;
+    auto* instance = slot != nullptr ? slot->getInstance() : nullptr;
+    if (instance == nullptr || index < 0 || index >= instance->getParameters().size()) return std::nullopt;
+    return instance->getParameters()[index]->getValue();
+}
+
 void AudioEngine::setTrackPluginsFromState(const juce::String& trackId,
                                            const std::vector<TrackPluginSlot>& slots)
 {

@@ -14,6 +14,7 @@
 #include <juce_events/juce_events.h>
 
 #include <functional>
+#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -128,6 +129,12 @@ class SmokeTest final : private juce::Timer
     juce::String mixTransitionId;
     juce::String stutterTrackId;
     bool pluginScanSkipped = false;
+    int pluginAutoStage = 0;
+    juce::uint32 pluginAutoPlayedAt = 0;
+    float pluginAutoBefore = 0.0f, pluginAutoTarget = 0.0f;
+    juce::String pluginAutoIdentifier, pluginAutoName, pluginAutoTrackId, pluginAutoSlotId, pluginAutoParam;
+    juce::StringArray pluginAutoSlotsBefore;
+    std::shared_ptr<std::atomic<bool>> pluginDirScanDone;
     int dragClipsBefore = 0, dragTracksBefore = 0;
     juce::String dragItemId;
 
