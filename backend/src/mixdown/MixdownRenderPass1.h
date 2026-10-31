@@ -26,6 +26,7 @@ struct Pass1Result
     std::vector<std::unique_ptr<mixdown_graph::OfflineClip>> clips;
 
     int64_t outputFramesWritten { 0 };
+    int64_t leadInFrames { 0 }; // the silence before the first sample, part of outputFramesWritten
     double effectiveRenderLengthMs { 0.0 };
     double preClampPeakAmplitude { 0.0 };
     int64_t clippedSampleCount { 0 };

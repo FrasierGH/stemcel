@@ -23,6 +23,7 @@
 #include "ScratchEditor.h"
 #include "SectionAnalyser.h"
 #include "SectionAnalysis.h"
+#include "Tracklist.h"
 #include "WaveformStore.h"
 #include "Workspace.h"
 #include "Autosave.h"
@@ -628,6 +629,42 @@ void SmokeTest::addSteps()
                          return recovered.filePath == projectFile.getFullPathName() && clip != nullptr
                                 && std::abs(clip->offsetMs - 3500.0) < 1.0;
                      }});
+    // The tracklist's reading of file names that carry no tags.
+    steps.push_back({"tracklist names",
+                     [] {},
+                     {},
+                     [this](const juce::var&)
+                     {
+                         const std::vector<std::array<const char*, 3>> cases{
+                             {"01 - Daft Punk - One More Time.mp3", "Daft Punk", "One More Time"},
+                             {"Fred again.._-_Delilah (pull me out of this) [Official Video].wav", "Fred again..", "Delilah (pull me out of this)"},
+                             {"A1 Bicep - Glue (Extended Mix) (320kbps).flac", "Bicep", "Glue (Extended Mix)"},
+                             {"Skrillex – Rumble (feat. Fred again..) [HQ].mp3", "Skrillex feat. Fred again..", "Rumble"},
+                             {"Kölsch - Grey (Original Mix) [KOMPAKT123].aiff", "Kölsch", "Grey (Original Mix)"},
+                             {"Strobe (Club Edit) - deadmau5.mp3", "deadmau5", "Strobe (Club Edit)"},
+                             {"Losing It by Fisher.mp3", "Fisher", "Losing It"},
+                             {"Stand by Me.mp3", "", "Stand by Me"},
+                             {"50 Cent - In Da Club (Lyrics).mp3", "50 Cent", "In Da Club"},
+                             {"track_07_final_master.wav", "", "track 07 final master"},
+                             {"Title ft. Someone - www.musicsite.com.mp3", "", ""},
+                         };
+                         juce::StringArray wrong;
+                         for (const auto& [name, artist, title] : cases)
+                         {
+                             const auto g = tracklist::fromFileName(juce::String::fromUTF8(name));
+                             // The last case only has to come out without the site.
+                             if (juce::String(title).isEmpty())
+                             {
+                                 if ((g.artist + g.title).containsIgnoreCase("musicsite")) wrong.add(juce::String::fromUTF8(name));
+                                 continue;
+                             }
+                             if (g.artist != juce::String::fromUTF8(artist) || g.title != juce::String::fromUTF8(title))
+                                 wrong.add(juce::String::fromUTF8(name) + " -> [" + g.artist + "] [" + g.title + "]");
+                         }
+                         if (!wrong.isEmpty()) lastTempoLine = "tracklist: " + wrong.joinIntoString("; ");
+                         else report.add("tracklist names: " + juce::String(static_cast<int>(cases.size())) + " read");
+                         return wrong.isEmpty();
+                     }});
     steps.push_back({"export mixdown",
                      [this]
                      {
@@ -650,6 +687,41 @@ void SmokeTest::addSteps()
                          if (reader == nullptr || expectedMixSeconds <= 1.0) return false;
                          const double seconds = static_cast<double>(reader->lengthInSamples) / reader->sampleRate;
                          return seconds >= expectedMixSeconds - 0.01 && seconds < expectedMixSeconds + 0.5;
+                     }});
+
+    // Half a second of silence before the first sample, and the tracklist's times after it.
+    steps.push_back({"export with lead-in",
+                     [this]
+                     {
+                         mirror.refreshNow();
+                         expectedMixSeconds = model().contentEndMs() / 1000.0;
+                         engine.send("MIXDOWN_START", object({{"outputPath", workDir.getChildFile("mixdown-leadin.wav").getFullPathName()},
+                                                              {"format", "wav"},
+                                                              {"sampleRate", 44100},
+                                                              {"bitDepth", 24},
+                                                              {"leadInMs", 500.0},
+                                                              {"lengthMode", "trim-to-last-clip"}}));
+                     },
+                     "MIXDOWN_DONE",
+                     [this](const juce::var&)
+                     {
+                         juce::AudioFormatManager formats;
+                         formats.registerBasicFormats();
+                         std::unique_ptr<juce::AudioFormatReader> reader(
+                             formats.createReaderFor(workDir.getChildFile("mixdown-leadin.wav")));
+                         if (reader == nullptr) return false;
+                         const double seconds = static_cast<double>(reader->lengthInSamples) / reader->sampleRate;
+                         const bool lengthOk = seconds >= expectedMixSeconds + 0.49 && seconds < expectedMixSeconds + 1.0;
+                         juce::AudioBuffer<float> head(2, 22050);
+                         reader->read(&head, 0, 22050, 0, true, true);
+                         const bool silent = head.getMagnitude(0, 22050) == 0.0f;
+                         const auto entries = tracklist::fromProject(model(), 0.0, model().contentEndMs(), 500.0);
+                         const auto text = tracklist::toText(entries);
+                         const bool listOk = !entries.empty() && entries.front().atMs >= 500.0 && text.startsWith("00:00  ");
+                         lastTempoLine = "lead-in " + juce::String(seconds - expectedMixSeconds, 3) + " s extra, silent " +
+                                         (silent ? "yes" : "no") + "; tracklist " + text.replace("\n", " | ");
+                         if (lengthOk && silent && listOk) report.add(lastTempoLine);
+                         return lengthOk && silent && listOk;
                      }});
 
     // Save what the M4 steps did, so the workspace snapshot shows lanes and regions.

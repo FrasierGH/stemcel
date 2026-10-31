@@ -782,6 +782,7 @@ if(STEMCEL_BUILD_NATIVE_APP)
         app/Rekordbox.cpp
         app/SectionAnalysis.cpp
         app/SectionAnalyser.cpp
+        app/Tracklist.cpp
         app/RekordboxBrowser.cpp
         app/EngineClient.cpp
         app/ExportDialog.cpp

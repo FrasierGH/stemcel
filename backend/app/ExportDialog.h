@@ -45,6 +45,8 @@ class ExportDialog final : public juce::Component, private juce::Timer
     double startBarMs() const;
     std::optional<double> durationMs() const;
     std::optional<double> tailSeconds() const;
+    double leadInMs() const;
+    void refreshTracklist();
 
     EngineClient& engine;
     AppPreferences& prefs;
@@ -55,6 +57,7 @@ class ExportDialog final : public juce::Component, private juce::Timer
     int restoredDepth = 16; // from the project's saved settings
     double lastClipEndMs = 0.0;
     std::optional<std::pair<double, double>> selection;
+    ProjectModel model; // the project as the dialog opened, for the tracklist
     std::function<void(const juce::String&, bool)> notify;
     Subscriptions subscriptions;
 
@@ -63,11 +66,15 @@ class ExportDialog final : public juce::Component, private juce::Timer
         startHint, tailLabel{{}, "Tail (s)"}, lengthLabel{{}, "Length"}, loudnessLabel{{}, "Loudness"},
         targetLabel{{}, "Target LUFS"}, ceilingLabel{{}, "Ceiling dBTP"}, titleLabel{{}, "Title"},
         artistLabel{{}, "Artist"}, albumLabel{{}, "Album"}, yearLabel{{}, "Year"}, genreLabel{{}, "Genre"},
-        commentLabel{{}, "Comment"};
+        commentLabel{{}, "Comment"}, leadInLabel{{}, "Lead-in"}, tracklistLabel{{}, "Tracklist"};
     juce::TextEditor output, startBar, tail, duration, target, ceiling, title, artist, album, year, genre, comment;
     juce::TextButton browseButton{"Browse..."};
-    juce::ComboBox formatBox, rate, depth, bitrate, length, loudness;
+    juce::ComboBox formatBox, rate, depth, bitrate, length, loudness, leadIn;
     juce::ToggleButton dither{"Dither (TPDF)"};
+    // The tracklist written beside the file: generated, and editable before the export.
+    juce::ToggleButton writeTracklist{"Write tracklist (.txt) beside the file"};
+    juce::TextEditor tracklistText;
+    bool tracklistEdited = false;
     juce::TextButton exportButton{"Export"}, cancelButton{"Cancel"};
 
     // Progress view.

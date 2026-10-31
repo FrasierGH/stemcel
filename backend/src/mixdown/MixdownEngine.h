@@ -150,6 +150,9 @@ struct MixdownOptions
     // Shared TPDF dither keeps 16-bit output identical across render paths.
     bool dither{true};
     double tailSeconds{0.0};
+    // Silence written before the first sample, so a player that clips a file's first moment
+    // (some do) clips nothing audible. 0..2000 ms.
+    double leadInMs{0.0};
     enum class LoudnessMode { Off, AnalyzeOnly, Normalize };
     LoudnessMode loudnessMode{LoudnessMode::Off};
     double targetLufs{-14.0};

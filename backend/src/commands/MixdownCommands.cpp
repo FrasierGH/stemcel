@@ -178,6 +178,13 @@ void handleMixdownStart(const juce::var& payload, stemcel::AudioEngine& engine,
         return;
     }
     options.tailSeconds = tailSecondsRaw;
+    const double leadInRaw = static_cast<double>(payload.getProperty("leadInMs", 0.0));
+    if (! std::isfinite(leadInRaw) || leadInRaw < 0.0 || leadInRaw > 2000.0)
+    {
+        rejectInvalid("leadInMs must be in [0, 2000] (got " + juce::String(leadInRaw, 1) + ").");
+        return;
+    }
+    options.leadInMs = leadInRaw;
     options.dither = ditherRaw;
     options.bitrateKbps = bitrateKbps;
 

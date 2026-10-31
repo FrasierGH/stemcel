@@ -256,7 +256,7 @@ void runMixdownJob(const MixdownSnapshot& snapshot, MixdownOptions options, Brid
 
         const auto finalizeStartMs = juce::Time::getMillisecondCounter();
         const int64_t totalOutputFrames =
-            static_cast<int64_t>(std::round(effectiveRenderLengthMs * options.outputSampleRate / 1000.0));
+            static_cast<int64_t>(std::round(effectiveRenderLengthMs * options.outputSampleRate / 1000.0)) + p1.leadInFrames;
         if (outputFramesWritten < totalOutputFrames)
         {
             const int64_t pad = totalOutputFrames - outputFramesWritten;

@@ -293,6 +293,27 @@ Pass1Result runPass1(const MixdownSnapshot& snapshot,
         return true;
     };
 
+    // The lead-in: exact silence (no dither), at the output rate, before the first sample.
+    const auto leadInFrames = static_cast<int64_t>(
+        std::llround(juce::jlimit(0.0, 2000.0, options.leadInMs) / 1000.0 * options.outputSampleRate));
+    {
+        std::fill(writeL.begin(), writeL.end(), 0.0f);
+        std::fill(writeR.begin(), writeR.end(), 0.0f);
+        for (int64_t left = leadInFrames; left > 0;)
+        {
+            const int frames = static_cast<int>(juce::jmin<int64_t>(left, maxWriteFrames));
+            const float* silence[kOutputChannels] = {writeL.data(), writeR.data()};
+            if (analyzer) analyzer->process(silence, 2, frames);
+            if (!writer.writeFromFloatArrays(silence, kOutputChannels, frames))
+            {
+                writerError = "Writer failed writing the lead-in.";
+                break;
+            }
+            outputFramesWritten += frames;
+            left -= frames;
+        }
+    }
+
     while (projectFramesRendered < totalProjectFrames)
     {
         // ScopedNoDenormals protects realtime DSP from denormal CPU spikes.
@@ -421,6 +442,7 @@ Pass1Result runPass1(const MixdownSnapshot& snapshot,
     result.ok = true;
     result.clips = std::move(clips);
     result.outputFramesWritten = outputFramesWritten;
+    result.leadInFrames = leadInFrames;
     result.effectiveRenderLengthMs = effectiveRenderLengthMs;
     result.preClampPeakAmplitude = preClampPeakAmplitude;
     result.clippedSampleCount = clippedSampleCount;
