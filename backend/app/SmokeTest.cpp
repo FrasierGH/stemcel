@@ -1895,6 +1895,9 @@ void SmokeTest::addTempoJourney()
                                  actions.setAutomation(pluginAutoTrackId, automation::pluginParamId(test.slotId, i), {});
                              engine.send("TRACK_REMOVE_PLUGIN", object({{"trackId", pluginAutoTrackId}, {"slotId", test.slotId}}));
                          }
+                         // Plugins scanned from the test's own folder leave the user's plugin list as it was.
+                         if (const auto dir = juce::SystemStats::getEnvironmentVariable("STEMCEL_SMOKE_PLUGIN_DIR", {}); dir.isNotEmpty())
+                             audio.pluginCatalogue().forgetPluginsIn(juce::File(dir));
                          return all;
                      }});
     steps.back().poll = true;
