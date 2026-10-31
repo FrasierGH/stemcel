@@ -74,8 +74,14 @@ class Workspace final : public juce::Component, public juce::DragAndDropContaine
     bool isMixerShown() const { return mixer != nullptr && mixer->isVisible(); }
     void saveViewState();
     // Imports files/rekordbox tracks and lays them end to end on `trackId` (a new track
-    // when empty) from `positionMs`, as one undo step.
+    // when empty) from `positionMs`, as one undo step. Two or more ask first whether to auto
+    // mix them instead.
     void importAndPlace(std::vector<ImportRequest> requests, const juce::String& trackId, double positionMs);
+    // Imports the tracks, waits for their tempo analysis (30 s at most), then auto mixes them
+    // after the arrangement: harmonically ordered, or in the order given.
+    void importAndMix(std::vector<ImportRequest> requests, bool harmonic);
+    // The library's Auto Mix: builds the mix and shows it.
+    void runAutoMix(std::vector<juce::String> itemIds, bool reorder, const juce::String& style, bool matchKeys);
 
     ProjectMirror& projectMirror() { return mirror; }
     TimelineActions& timelineActions() { return actions; }
@@ -87,6 +93,8 @@ class Workspace final : public juce::Component, public juce::DragAndDropContaine
     void setBottomPanel(std::unique_ptr<juce::Component> panel, int height);
 
   private:
+    void placeImported(std::vector<ImportRequest> requests, const juce::String& trackId, double positionMs);
+    void mixWhenAnalysed(std::vector<juce::String> itemIds, bool harmonic, juce::uint32 deadlineMs);
     EngineClient& engine;
     juce::String lastSnapGrid{"quarter"}; // what N turns snapping back on to
     AppController& controller;

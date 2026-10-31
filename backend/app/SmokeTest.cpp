@@ -101,7 +101,7 @@ bool writeTone(const juce::File& file, double frequency = 220.0)
 
 // 32 bars at 120 BPM with an arrangement to find: hats alone (intro), a kick and bass on every
 // beat (drop), a mid pad with no kick (breakdown), then the kick again.
-bool writeArrangement(const juce::File& file)
+bool writeArrangement(const juce::File& file, float level = 1.0f)
 {
     file.deleteFile();
     std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream>(file);
@@ -127,7 +127,7 @@ bool writeArrangement(const juce::File& file)
             v += 0.25 * std::sin(twoPi * 45.0 * t);                                  // bass
         }
         if (breakdown) v += 0.2 * std::sin(twoPi * 440.0 * t) + 0.1 * std::sin(twoPi * 660.0 * t);
-        const auto f = static_cast<float>(juce::jlimit(-1.0, 1.0, v));
+        const auto f = static_cast<float>(juce::jlimit(-1.0, 1.0, v)) * level;
         buffer.setSample(0, i, f);
         buffer.setSample(1, i, f);
     }
@@ -2282,6 +2282,51 @@ void SmokeTest::addTempoJourney()
                          return ok;
                      }});
     steps.back().poll = true;
+    // Two files dropped at once: the prompt, answered "as dropped", mixes them on two decks.
+    steps.push_back({"auto mix on drop",
+                     [this]
+                     {
+                         auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
+                         auto* workspace = window != nullptr ? findDescendant<Workspace>(window) : nullptr;
+                         if (workspace == nullptr) return;
+                         const auto a = workDir.getChildFile("Files").getChildFile("drop-a.wav");
+                         const auto b = workDir.getChildFile("Files").getChildFile("drop-b.wav");
+                         if (!writeArrangement(a, 1.0f) || !writeArrangement(b, 0.8f)) return;
+                         mirror.refreshNow();
+                         dropTracksBefore = static_cast<int>(model().tracks.size());
+                         dropPromptSeen = false;
+                         workspace->importAndPlace({{a, {}}, {b, {}}}, {}, 0.0);
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         if (!dropPromptSeen)
+                         {
+                             if (auto* alert = dynamic_cast<juce::AlertWindow*>(juce::ModalComponentManager::getInstance()->getModalComponent(0)))
+                             {
+                                 dropPromptSeen = true;
+                                 alert->exitModalState(2); // Auto Mix (As Dropped)
+                             }
+                             return false;
+                         }
+                         mirror.refreshNow();
+                         const auto& m = model();
+                         if (static_cast<int>(m.tracks.size()) < dropTracksBefore + 2) return false;
+                         const auto& deckA = m.tracks[m.tracks.size() - 2];
+                         const auto& deckB = m.tracks.back();
+                         if (deckA.clips.size() != 1 || deckB.clips.size() != 1) return false;
+                         const auto* itemA = m.findLibraryItem(deckA.clips[0].libraryItemId);
+                         const auto* itemB = m.findLibraryItem(deckB.clips[0].libraryItemId);
+                         const bool files = itemA != nullptr && itemB != nullptr && itemA->displayName().contains("drop-a")
+                                            && itemB->displayName().contains("drop-b");
+                         const bool joined = mix::recordFor(m, deckA.clips[0].id, deckB.clips[0].id) != nullptr;
+                         lastTempoLine = "auto mix on drop: " + deckA.name + " / " + deckB.name + ", files " + (files ? "yes" : "no")
+                                         + ", transition " + (joined ? "yes" : "no");
+                         if (files && joined) report.add(lastTempoLine);
+                         return files && joined;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 60000.0;
     // Stemcel's own sections find the drop and the breakdown of a generated arrangement.
     steps.push_back({"sections",
                      [this]

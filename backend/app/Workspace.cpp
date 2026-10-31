@@ -6,6 +6,8 @@
 #include "ScratchEditor.h"
 #include "Theme.h"
 
+#include <algorithm>
+
 namespace stemcel::native
 {
 
@@ -69,16 +71,8 @@ Workspace::Workspace(EngineClient& engineClient, AppController& appController, A
                                                                { ScratchEditor::show(engine, mirror, waveforms, {}, itemId, notify); },
                                                                [this](const juce::String& itemId)
                                                                { ClipEditor::showLibraryItem(engine, mirror, actions, waveforms, itemId); },
-                                                               [this, notify](std::vector<juce::String> ids, bool reorder, const juce::String& style, bool matchKeys)
-                                                               {
-                                                                   const double before = mirror.model().contentEndMs();
-                                                                   notify(automix::build(engine, mirror, actions, waveforms, std::move(ids), reorder, style, matchKeys), false);
-                                                                   mirror.refreshNow();
-                                                                   // Show the new mix, from its first deck down.
-                                                                   const auto& tracks = mirror.model().tracks;
-                                                                   if (tracks.size() >= 2 && mirror.model().contentEndMs() > before)
-                                                                       timeline.revealRange(before, mirror.model().contentEndMs(), tracks[tracks.size() - 2].id);
-                                                               },
+                                                               [this](std::vector<juce::String> ids, bool reorder, const juce::String& style, bool matchKeys)
+                                                               { runAutoMix(std::move(ids), reorder, style, matchKeys); },
                                                                [this](const juce::String& vocal, const juce::String& beat) { mashup->start(vocal, beat); },
                                                                [this](const juce::String& itemId) { sectionAnalyser.analyse(itemId, true); }});
     libraryPanel = panel.get();
@@ -194,7 +188,86 @@ void Workspace::showLibraryTab(int index)
     if (libraryPanel != nullptr) libraryPanel->showTab(index);
 }
 
+void Workspace::runAutoMix(std::vector<juce::String> ids, bool reorder, const juce::String& style, bool matchKeys)
+{
+    const double before = mirror.model().contentEndMs();
+    const auto said = automix::build(engine, mirror, actions, waveforms, std::move(ids), reorder, style, matchKeys);
+    if (toast) toast(said, false);
+    mirror.refreshNow();
+    // Show the new mix, from its first deck down.
+    const auto& tracks = mirror.model().tracks;
+    if (tracks.size() >= 2 && mirror.model().contentEndMs() > before)
+        timeline.revealRange(before, mirror.model().contentEndMs(), tracks[tracks.size() - 2].id);
+}
+
 void Workspace::importAndPlace(std::vector<ImportRequest> requests, const juce::String& trackId, double positionMs)
+{
+    if (requests.size() < 2)
+    {
+        placeImported(std::move(requests), trackId, positionMs);
+        return;
+    }
+    // Several tracks at once: mix them, or just put them down (Escape) as one alone would be.
+    auto pending = std::make_shared<std::vector<ImportRequest>>(std::move(requests));
+    juce::AlertWindow::showAsync(juce::MessageBoxOptions()
+                                     .withIconType(juce::MessageBoxIconType::QuestionIcon)
+                                     .withTitle("Auto Mix")
+                                     .withMessage(juce::String(static_cast<int>(pending->size()))
+                                                  + " tracks dropped. Mix them after the arrangement, on two decks, "
+                                                    "with transitions chosen from their tempo, key and energy?")
+                                     .withButton("Auto Mix (Harmonic Order)")
+                                     .withButton("Auto Mix (As Dropped)")
+                                     .withButton("Just Place Them")
+                                     .withAssociatedComponent(this),
+                                 [safe = juce::Component::SafePointer<Workspace>(this), pending, trackId, positionMs](int result)
+                                 {
+                                     if (safe == nullptr) return;
+                                     // 1 and 2 are the mixes; the last button and Escape are 0.
+                                     if (result == 0) safe->placeImported(std::move(*pending), trackId, positionMs);
+                                     else safe->importAndMix(std::move(*pending), result == 1);
+                                 });
+}
+
+void Workspace::importAndMix(std::vector<ImportRequest> requests, bool harmonic)
+{
+    if (toast) toast("Importing " + juce::String(static_cast<int>(requests.size())) + " tracks for the mix...", false);
+    importer.import(std::move(requests),
+                    [safe = juce::Component::SafePointer<Workspace>(this), harmonic](const juce::StringArray& itemIds)
+                    {
+                        if (safe == nullptr) return;
+                        std::vector<juce::String> ids(itemIds.begin(), itemIds.end());
+                        // After the import's undo group closes: the mix is a step of its own.
+                        juce::MessageManager::callAsync(
+                            [safe, ids, harmonic]
+                            {
+                                if (safe != nullptr) safe->mixWhenAnalysed(ids, harmonic, juce::Time::getMillisecondCounter() + 30000);
+                            });
+                    });
+}
+
+// The mix needs each track's tempo (and key, for the harmonic order): wait for the analysis.
+void Workspace::mixWhenAnalysed(std::vector<juce::String> ids, bool harmonic, juce::uint32 deadlineMs)
+{
+    mirror.refreshNow();
+    const bool ready = std::all_of(ids.begin(), ids.end(),
+                                   [this](const juce::String& id)
+                                   {
+                                       const auto* item = mirror.model().findLibraryItem(id);
+                                       return item == nullptr || item->bpm > 0.0;
+                                   });
+    if (!ready && juce::Time::getMillisecondCounter() < deadlineMs)
+    {
+        juce::Timer::callAfterDelay(250,
+                                    [safe = juce::Component::SafePointer<Workspace>(this), ids, harmonic, deadlineMs]
+                                    {
+                                        if (safe != nullptr) safe->mixWhenAnalysed(ids, harmonic, deadlineMs);
+                                    });
+        return;
+    }
+    runAutoMix(std::move(ids), harmonic, "Auto", false);
+}
+
+void Workspace::placeImported(std::vector<ImportRequest> requests, const juce::String& trackId, double positionMs)
 {
     importer.import(std::move(requests),
                     [this, trackId, positionMs](const juce::StringArray& itemIds)
