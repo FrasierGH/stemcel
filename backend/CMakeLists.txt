@@ -6,8 +6,7 @@ endif()
 
 # macOS: target a fixed minimum rather than the build machine's SDK, so the engine
 # runs everywhere the app does (electron-builder.yml `mac.minimumSystemVersion`).
-# 14.0 is the floor of the prebuilt ONNX Runtime dylib below; a backend targeting
-# anything older would fail to load it there. Must precede project().
+# Must precede project().
 # scripts/fetch-lame.sh builds the bundled LAME for the same target.
 set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS version for the backend")
 
@@ -355,165 +354,6 @@ if(MSVC)
     target_compile_options(rnnoise_local PRIVATE /W0 /wd4244 /wd4267 /wd4305 /wd4996)
 endif()
 
-# ─── ONNX Runtime (stem separation inference) ────────────────────────────
-# Phase 6 stem separation runs a Demucs model through ONNX Runtime. Microsoft
-# ships official prebuilt Windows binaries, so rather than vendor a DLL by hand
-# we FetchContent the prebuilt release archive at configure time — the same
-# "every dependency is pulled in through CMake" approach used for JUCE,
-# IXWebSocket and Rubber Band above. The archive carries the headers, an MSVC
-# import library and the runtime DLL; we expose them through an IMPORTED target
-# and copy the DLL next to StemcelBackend.exe so it ships inside the installer
-# (see the extraResources filter in `frontend/electron-builder.yml`).
-#
-# Licence: ONNX Runtime is MIT-licensed (the archive's `LICENSE` lands at
-# `_deps/onnxruntime-src/LICENSE`, picked up by the THIRD_PARTY_LICENSES.md
-# aggregation step), so redistributing the DLL alongside the app is permitted.
-option(STEMCEL_ENABLE_STEM_SEPARATION
-    "Fetch ONNX Runtime and build the stem-separation engine" ON)
-
-# GPU acceleration for stem separation via the DirectML execution provider.
-# ON by default on Windows x64: the DirectML "superset" ONNX Runtime runs on the
-# CPU *and* any DirectX 12 GPU from a single bundled onnxruntime.dll, so one
-# build serves every machine — GPU when present (gated by detection), CPU
-# otherwise. It is sourced from NuGet (the DirectML EP is not in the GitHub CPU
-# release) and ships DirectML.dll alongside the executable. Set this OFF to build
-# against the CPU-only GitHub ONNX Runtime instead (no GPU support, no
-# DirectML.dll). The same .onnx weights run on either, so there is no
-# GPU-specific model. GPU acceleration must be validated on real GPU hardware.
-# DirectML is Windows-only, so the option defaults OFF (and is forced OFF)
-# everywhere else.
-if(WIN32)
-    set(_stemcel_directml_default ON)
-else()
-    set(_stemcel_directml_default OFF)
-endif()
-option(STEMCEL_ONNXRUNTIME_DIRECTML
-    "Build stem separation against a DirectML-capable ONNX Runtime (GPU)" ${_stemcel_directml_default})
-if(NOT WIN32 AND STEMCEL_ONNXRUNTIME_DIRECTML)
-    set(STEMCEL_ONNXRUNTIME_DIRECTML OFF CACHE BOOL "" FORCE)
-endif()
-
-# Which prebuilt ONNX Runtime the stem-separation engine can consume. Microsoft
-# publishes win-x64, but the pinned release ships only an arm64 macOS archive,
-# so Intel Macs build without stem separation.
-set(_stemcel_ort_platform "")
-if(WIN32 AND CMAKE_SIZEOF_VOID_P EQUAL 8)
-    set(_stemcel_ort_platform "win-x64")
-elseif(APPLE)
-    if(CMAKE_OSX_ARCHITECTURES)
-        set(_stemcel_mac_archs "${CMAKE_OSX_ARCHITECTURES}")
-    else()
-        set(_stemcel_mac_archs "${CMAKE_SYSTEM_PROCESSOR}")
-    endif()
-    if(_stemcel_mac_archs STREQUAL "arm64")
-        set(_stemcel_ort_platform "osx-arm64")
-    endif()
-endif()
-
-if(STEMCEL_ENABLE_STEM_SEPARATION AND _stemcel_ort_platform STREQUAL "")
-    message(WARNING
-        "Stem separation consumes the prebuilt win-x64 or osx-arm64 ONNX Runtime; "
-        "disabling STEMCEL_ENABLE_STEM_SEPARATION on this platform.")
-    set(STEMCEL_ENABLE_STEM_SEPARATION OFF CACHE BOOL "" FORCE)
-endif()
-
-if(STEMCEL_ENABLE_STEM_SEPARATION AND _stemcel_ort_platform STREQUAL "osx-arm64")
-    # macOS: the official CPU release archive (built for macOS 14+, hence the
-    # deployment target at the top). The dylib's install name is
-    # `@rpath/libonnxruntime.1.dylib`, so it is copied next to each executable
-    # under that name and found through the `@executable_path` rpath set below.
-    set(ONNXRUNTIME_MAC_VERSION "1.26.0"
-        CACHE STRING "ONNX Runtime version to fetch on macOS")
-    set(ONNXRUNTIME_MAC_SHA256
-        "7a1280bbb1701ea514f71828765237e7896e0f2e1cd332f1f70dbd5c3e33aca3"
-        CACHE STRING "SHA-256 of the ONNX Runtime osx-arm64 release archive")
-
-    FetchContent_Declare(onnxruntime
-        URL https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_MAC_VERSION}/onnxruntime-osx-arm64-${ONNXRUNTIME_MAC_VERSION}.tgz
-        URL_HASH SHA256=${ONNXRUNTIME_MAC_SHA256}
-        DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
-    FetchContent_MakeAvailable(onnxruntime)
-
-    set(ORT_INCLUDE_DIR "${onnxruntime_SOURCE_DIR}/include")
-    set(STEMCEL_ONNXRUNTIME_DLL
-        "${onnxruntime_SOURCE_DIR}/lib/libonnxruntime.${ONNXRUNTIME_MAC_VERSION}.dylib"
-        CACHE FILEPATH "Path to the bundled ONNX Runtime shared library" FORCE)
-    set(STEMCEL_ONNXRUNTIME_DLL_NAME "libonnxruntime.1.dylib")
-
-    add_library(onnxruntime SHARED IMPORTED GLOBAL)
-    set_target_properties(onnxruntime PROPERTIES
-        IMPORTED_LOCATION "${STEMCEL_ONNXRUNTIME_DLL}"
-        INTERFACE_INCLUDE_DIRECTORIES "${ORT_INCLUDE_DIR}")
-elseif(STEMCEL_ENABLE_STEM_SEPARATION)
-    if(STEMCEL_ONNXRUNTIME_DIRECTML)
-        # GPU build: the DirectML execution provider ships only in the NuGet
-        # ONNX Runtime, which tops out a couple of minor versions behind the
-        # GitHub CPU release. This single "superset" onnxruntime.dll runs on the
-        # CPU *and* any DirectX 12 GPU (the DML EP is compiled into it), so the
-        # same .onnx weights work either way — no GPU-specific model. NuGet
-        # packages are plain zips, so FetchContent extracts them like any archive.
-        # The DML EP has a runtime dependency on DirectML.dll (from the separate
-        # Microsoft.AI.DirectML package), which is copied next to the executable.
-        set(ORT_DML_VERSION "1.24.4"
-            CACHE STRING "Microsoft.ML.OnnxRuntime.DirectML NuGet version")
-        set(ORT_DML_SHA256
-            "57e9f11b73437bef7a309496135d4c1f96b1a8e9ddba60013fa27bfc1d788681"
-            CACHE STRING "SHA-256 of the ORT DirectML .nupkg")
-        set(DIRECTML_VERSION "1.15.4"
-            CACHE STRING "Microsoft.AI.DirectML NuGet version (ORT DML dependency)")
-        set(DIRECTML_SHA256
-            "4e7cb7ddce8cf837a7a75dc029209b520ca0101470fcdf275c1f49736a3615b9"
-            CACHE STRING "SHA-256 of the Microsoft.AI.DirectML .nupkg")
-
-        FetchContent_Declare(onnxruntime_dml
-            URL https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime.directml/${ORT_DML_VERSION}/microsoft.ml.onnxruntime.directml.${ORT_DML_VERSION}.nupkg
-            URL_HASH SHA256=${ORT_DML_SHA256}
-            DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
-        FetchContent_MakeAvailable(onnxruntime_dml)
-
-        FetchContent_Declare(directml
-            URL https://api.nuget.org/v3-flatcontainer/microsoft.ai.directml/${DIRECTML_VERSION}/microsoft.ai.directml.${DIRECTML_VERSION}.nupkg
-            URL_HASH SHA256=${DIRECTML_SHA256}
-            DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
-        FetchContent_MakeAvailable(directml)
-
-        set(ORT_INCLUDE_DIR "${onnxruntime_dml_SOURCE_DIR}/build/native/include")
-        set(ORT_LIB "${onnxruntime_dml_SOURCE_DIR}/runtimes/win-x64/native/onnxruntime.lib")
-        set(STEMCEL_ONNXRUNTIME_DLL
-            "${onnxruntime_dml_SOURCE_DIR}/runtimes/win-x64/native/onnxruntime.dll"
-            CACHE FILEPATH "Path to the bundled onnxruntime.dll" FORCE)
-        set(STEMCEL_DIRECTML_DLL "${directml_SOURCE_DIR}/bin/x64-win/DirectML.dll"
-            CACHE FILEPATH "Path to the bundled DirectML.dll" FORCE)
-    else()
-        # CPU build (default): the official ONNX Runtime win-x64 release archive.
-        set(ONNXRUNTIME_VERSION "1.26.0"
-            CACHE STRING "ONNX Runtime version to fetch")
-        # SHA-256 of onnxruntime-win-x64-${ONNXRUNTIME_VERSION}.zip. Bump alongside
-        # ONNXRUNTIME_VERSION; the integrity check makes the fetch reproducible.
-        set(ONNXRUNTIME_SHA256
-            "6ebe99b5564bf4d029b6e93eac9ff423682b6212eade769e9ca3f685eaf500b4"
-            CACHE STRING "SHA-256 of the ONNX Runtime win-x64 release archive")
-
-        FetchContent_Declare(onnxruntime
-            URL https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-win-x64-${ONNXRUNTIME_VERSION}.zip
-            URL_HASH SHA256=${ONNXRUNTIME_SHA256}
-            DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
-        # With no CMakeLists.txt, MakeAvailable only extracts the binary archive.
-        FetchContent_MakeAvailable(onnxruntime)
-
-        set(ORT_INCLUDE_DIR "${onnxruntime_SOURCE_DIR}/include")
-        set(ORT_LIB "${onnxruntime_SOURCE_DIR}/lib/onnxruntime.lib")
-        set(STEMCEL_ONNXRUNTIME_DLL "${onnxruntime_SOURCE_DIR}/lib/onnxruntime.dll"
-            CACHE FILEPATH "Path to the bundled onnxruntime.dll" FORCE)
-    endif()
-
-    add_library(onnxruntime SHARED IMPORTED GLOBAL)
-    set_target_properties(onnxruntime PROPERTIES
-        IMPORTED_LOCATION "${STEMCEL_ONNXRUNTIME_DLL}"
-        IMPORTED_IMPLIB   "${ORT_LIB}"
-        INTERFACE_INCLUDE_DIRECTORIES "${ORT_INCLUDE_DIR}")
-endif()
-
 option(STEMCEL_BUILD_TESTS "Build backend unit tests" OFF)
 option(STEMCEL_ENABLE_COVERAGE "Instrument backend unit tests for code coverage" OFF)
 
@@ -530,9 +370,8 @@ configure_file(
     ${CMAKE_CURRENT_BINARY_DIR}/generated/Version.h
     @ONLY)
 
-# macOS: the ONNX Runtime dylib is copied beside each executable (see
-# copy_onnx_runtime_dependencies below) and its install name is `@rpath/...`,
-# so every executable built from here on searches its own directory first.
+# macOS: every executable built from here on searches its own directory first for
+# the libraries bundled beside it.
 if(APPLE)
     set(CMAKE_BUILD_RPATH "@executable_path")
 endif()
@@ -567,7 +406,6 @@ add_library(stemcel_backend_core STATIC
     src/commands/RecordingCalibrationCommands.cpp
     src/commands/RecordingCommands.cpp
     src/commands/ScratchPatternReplayCommands.cpp
-    src/commands/StemSeparationCommands.cpp
     src/commands/TrackCommands.cpp
     src/commands/TempoMapCommands.cpp
     src/commands/TransitionCommands.cpp
@@ -617,19 +455,11 @@ add_library(stemcel_backend_core STATIC
     src/dsp/MiniBpmEstimator.cpp
     src/dsp/PercussiveEmphasis.cpp
     src/dsp/LoudnessAnalyzer.cpp
-    src/dsp/EnhancerDsp.cpp
     src/dsp/SafetyLimiter.cpp
     src/dsp/SharedFx.cpp
     src/dsp/ToneEq.cpp
     src/dsp/VinylScratchProcessor.cpp
-    src/dsp/VocalEnhancer.cpp
     src/dsp/VocalDenoiser.cpp
-    src/dsp/VocalDebleeder.cpp
-    src/dsp/Dereverberator.cpp
-    src/dsp/VocalRestorer.cpp
-    src/dsp/DrumEnhancer.cpp
-    src/dsp/BassEnhancer.cpp
-    src/dsp/OtherEnhancer.cpp
     src/dsp/WarpProcessor.cpp
     src/dsp/Waveform.cpp
     # engine
@@ -698,18 +528,7 @@ add_library(stemcel_backend_core STATIC
     src/plugins/PluginEditorWindow.cpp
     src/plugins/PluginScanCoordinator.cpp
     src/plugins/PluginScanJob.cpp
-    src/plugins/PluginScanWorker.cpp
-    # stems (bridge/job plumbing — ONNX-free, always built)
-    src/stems/RoformerPerformance.cpp
-    src/stems/StemAudioPreparation.cpp
-    src/stems/StemBroadcast.cpp
-    src/stems/StemGpuFallback.cpp
-    src/stems/StemProgressCoalescer.cpp
-    src/stems/StemSeparationEngine.cpp
-    src/stems/StemVocalCleanup.cpp
-    src/stems/MelRoformerSpectral.cpp
-    src/stems/BsRoformerSpectral.cpp
-    src/stems/StemSeparatorFactory.cpp)
+    src/plugins/PluginScanWorker.cpp)
 
 target_compile_definitions(stemcel_backend_core PUBLIC
     JUCE_WEB_BROWSER=0
@@ -808,22 +627,6 @@ target_link_libraries(stemcel_backend_core PUBLIC
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags)
 
-if(STEMCEL_ENABLE_STEM_SEPARATION)
-    target_link_libraries(stemcel_backend_core PUBLIC onnxruntime)
-    target_compile_definitions(stemcel_backend_core PUBLIC STEMCEL_STEM_SEPARATION=1)
-    if(STEMCEL_ONNXRUNTIME_DIRECTML)
-        target_compile_definitions(stemcel_backend_core PUBLIC STEMCEL_ONNXRUNTIME_DIRECTML=1)
-    endif()
-    # The real ONNX inference is only compiled when stem separation is enabled;
-    # the factory falls back to a stub otherwise.
-    target_sources(stemcel_backend_core PRIVATE
-        src/stems/InferenceThreads.cpp
-        src/stems/OnnxStemSeparator.cpp
-        src/stems/MelRoformerVocals.cpp
-        src/stems/BsRoformerRhythm.cpp
-        src/stems/StemRhythmOverlap.cpp)
-endif()
-
 if(STEMCEL_ENABLE_COVERAGE)
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         target_compile_options(stemcel_backend_core PRIVATE
@@ -907,89 +710,6 @@ add_custom_target(StemcelMidiMappings
     DEPENDS ${STEMCEL_MIDI_MAPPING_FILES}
     COMMENT "Copying MIDI controller profiles next to backend executable")
 add_dependencies(StemcelBackend StemcelMidiMappings)
-
-# Delay-load onnxruntime.dll so the large ML runtime (and its transitive VC++ runtime
-# dependency chain) is NOT mapped into the process at startup — the Windows loader binds
-# it lazily on first use (stem separation only), not before main(). This shortens cold
-# launch (less to page in / AV-scan at process start) with no runtime downside: the DLL
-# still ships app-local next to the exe (copied below), so the delayed load resolves the
-# first time a stem-separation session is created. Requires delayimp.lib. Stems are never
-# constructed at static-init time, so nothing forces the DLL to load early.
-if(STEMCEL_ENABLE_STEM_SEPARATION AND MSVC)
-    target_link_options(StemcelBackend PRIVATE "/DELAYLOAD:onnxruntime.dll")
-    target_link_libraries(StemcelBackend PRIVATE delayimp)
-endif()
-
-# ─── ONNX Runtime DLL (bundled, MIT) ─────────────────────────────────────
-# ONNX Runtime is a shared library. Every executable that invokes it needs the
-# pinned runtime beside itself so Windows does not resolve a system-installed version
-# (and, on macOS, so the `@executable_path` rpath resolves it).
-if(STEMCEL_ENABLE_STEM_SEPARATION)
-    # The name the loader looks for: the DLL's own on Windows, the dylib's install
-    # name (set by the macOS branch above) on macOS.
-    if(NOT STEMCEL_ONNXRUNTIME_DLL_NAME)
-        get_filename_component(STEMCEL_ONNXRUNTIME_DLL_NAME "${STEMCEL_ONNXRUNTIME_DLL}" NAME)
-    endif()
-    function(copy_onnx_runtime_dependencies target)
-        add_custom_command(TARGET ${target} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${STEMCEL_ONNXRUNTIME_DLL}"
-                "$<TARGET_FILE_DIR:${target}>/${STEMCEL_ONNXRUNTIME_DLL_NAME}"
-            COMMENT "Copying ${STEMCEL_ONNXRUNTIME_DLL_NAME} next to ${target}")
-        # The DirectML build's EP depends on DirectML.dll at runtime; ship it too.
-        if(STEMCEL_ONNXRUNTIME_DIRECTML AND STEMCEL_DIRECTML_DLL)
-            add_custom_command(TARGET ${target} POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${STEMCEL_DIRECTML_DLL}"
-                    "$<TARGET_FILE_DIR:${target}>/DirectML.dll"
-                COMMENT "Copying DirectML.dll next to ${target}")
-        endif()
-    endfunction()
-
-    copy_onnx_runtime_dependencies(StemcelBackend)
-
-    # onnxruntime.dll (Microsoft-built) dynamically links the VC++ runtime
-    # (MSVCP140 / MSVCP140_1 / VCRUNTIME140 / VCRUNTIME140_1). The backend exe
-    # load-time-links onnxruntime.dll, so on a clean machine WITHOUT the VC++
-    # redistributable the loader fails with STATUS_DLL_NOT_FOUND (0xC0000135)
-    # before main() even runs — the backend never starts and never writes its
-    # log. MSIX does not auto-provide the VCLibs framework, so ship the runtime
-    # app-local next to the exe; this fixes both the MSIX package and the
-    # portable zip. The bundling guard + electron-builder extraResources filter
-    # ship whatever lands here, so keep both in sync with this list.
-    if(MSVC)
-        set(_stemcel_vc_runtime_dlls
-            msvcp140.dll msvcp140_1.dll vcruntime140.dll vcruntime140_1.dll)
-        # Derive the redist dir from the compiler location (VCToolsRedistDir is not
-        # reliably exported into the CMake environment). cl.exe lives at
-        # <VC>/Tools/MSVC/<ver>/bin/Hostx64/x64/cl.exe, so the VC root is 7 levels up;
-        # the runtime DLLs ship under <VC>/Redist/MSVC/<ver>/x64/Microsoft.VC*.CRT.
-        get_filename_component(_stemcel_vc_root "${CMAKE_CXX_COMPILER}" DIRECTORY)
-        foreach(_i RANGE 1 6)
-            get_filename_component(_stemcel_vc_root "${_stemcel_vc_root}" DIRECTORY)
-        endforeach()
-        set(_stemcel_vc_crt_dir "")
-        file(GLOB _stemcel_vc_crt_dirs "${_stemcel_vc_root}/Redist/MSVC/*/x64/Microsoft.VC*.CRT")
-        if(_stemcel_vc_crt_dirs)
-            list(SORT _stemcel_vc_crt_dirs)
-            list(GET _stemcel_vc_crt_dirs -1 _stemcel_vc_crt_dir)
-        endif()
-        if(_stemcel_vc_crt_dir STREQUAL "" OR NOT EXISTS "${_stemcel_vc_crt_dir}/vcruntime140.dll")
-            message(WARNING
-                "VC++ runtime redist not found under ${_stemcel_vc_root}/Redist; onnxruntime.dll "
-                "may fail to load on machines without the VC++ redistributable installed.")
-        else()
-            message(STATUS "Bundling VC++ runtime from: ${_stemcel_vc_crt_dir}")
-            foreach(_dll IN LISTS _stemcel_vc_runtime_dlls)
-                add_custom_command(TARGET StemcelBackend POST_BUILD
-                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                        "${_stemcel_vc_crt_dir}/${_dll}"
-                        "$<TARGET_FILE_DIR:StemcelBackend>/${_dll}"
-                    COMMENT "Copying VC++ runtime ${_dll} next to backend executable")
-            endforeach()
-        endif()
-    endif()
-endif()
 
 # ─── LAME MP3 encoder/decoder (required, bundled) ────────────────────────
 # LAME is spawned as a child process for two jobs: MP3 *encoding* on export
@@ -1167,20 +887,33 @@ if(STEMCEL_BUILD_NATIVE_APP)
         message(STATUS "cargo not found: StemcelNative builds without rekordbox support")
     endif()
 
-    if(STEMCEL_ENABLE_STEM_SEPARATION)
-        copy_onnx_runtime_dependencies(StemcelNative)
-        if(MSVC)
-            target_link_options(StemcelNative PRIVATE "/DELAYLOAD:onnxruntime.dll")
-            target_link_libraries(StemcelNative PRIVATE delayimp)
-            if(_stemcel_vc_crt_dir AND EXISTS "${_stemcel_vc_crt_dir}/vcruntime140.dll")
-                foreach(_dll IN LISTS _stemcel_vc_runtime_dlls)
-                    add_custom_command(TARGET StemcelNative POST_BUILD
-                        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                            "${_stemcel_vc_crt_dir}/${_dll}"
-                            "$<TARGET_FILE_DIR:StemcelNative>/${_dll}"
-                        COMMENT "Copying VC++ runtime ${_dll} next to StemcelNative")
-                endforeach()
-            endif()
+    # The rekordbox reader (a Rust DLL) links the VC++ runtime dynamically; ship it beside
+    # the app so a machine without the redistributable still loads it.
+    if(MSVC)
+        set(_stemcel_vc_runtime_dlls msvcp140.dll msvcp140_1.dll vcruntime140.dll vcruntime140_1.dll)
+        # cl.exe lives at <VC>/Tools/MSVC/<ver>/bin/Hostx64/x64/cl.exe, so the VC root is
+        # 7 levels up; the runtime DLLs ship under <VC>/Redist/MSVC/<ver>/x64/Microsoft.VC*.CRT.
+        get_filename_component(_stemcel_vc_root "${CMAKE_CXX_COMPILER}" DIRECTORY)
+        foreach(_i RANGE 1 6)
+            get_filename_component(_stemcel_vc_root "${_stemcel_vc_root}" DIRECTORY)
+        endforeach()
+        file(GLOB _stemcel_vc_crt_dirs "${_stemcel_vc_root}/Redist/MSVC/*/x64/Microsoft.VC*.CRT")
+        set(_stemcel_vc_crt_dir "")
+        if(_stemcel_vc_crt_dirs)
+            list(SORT _stemcel_vc_crt_dirs)
+            list(GET _stemcel_vc_crt_dirs -1 _stemcel_vc_crt_dir)
+        endif()
+        if(_stemcel_vc_crt_dir STREQUAL "" OR NOT EXISTS "${_stemcel_vc_crt_dir}/vcruntime140.dll")
+            message(WARNING "VC++ runtime redist not found under ${_stemcel_vc_root}/Redist; the rekordbox "
+                            "reader may fail to load on machines without the VC++ redistributable.")
+        else()
+            foreach(_dll IN LISTS _stemcel_vc_runtime_dlls)
+                add_custom_command(TARGET StemcelNative POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${_stemcel_vc_crt_dir}/${_dll}"
+                        "$<TARGET_FILE_DIR:StemcelNative>/${_dll}"
+                    COMMENT "Copying VC++ runtime ${_dll} next to StemcelNative")
+            endforeach()
         endif()
     endif()
 endif()
@@ -1217,24 +950,12 @@ if(STEMCEL_BUILD_TESTS)
         tests/AutomationTests.cpp
         tests/BeatRepeatTests.cpp
 tests/MixdownRenderTests.cpp
-        tests/StemSeparationTests.cpp
         tests/BpmDetectorTests.cpp
-        tests/VocalEnhancerTests.cpp
         tests/VocalDenoiserTests.cpp
-        tests/DereverberatorTests.cpp
-        tests/VocalRestorerTests.cpp
-        tests/DrumEnhancerTests.cpp
-        tests/BassEnhancerTests.cpp
-        tests/OtherEnhancerTests.cpp
-        tests/MelRoformerSpectralTests.cpp
-        tests/BsRoformerSpectralTests.cpp
         tests/LibraryCleanupTests.cpp
         tests/DecodedCacheTests.cpp)
     target_link_libraries(StemcelBackendTests PRIVATE
         stemcel_backend_core)
-    if(STEMCEL_ENABLE_STEM_SEPARATION)
-        copy_onnx_runtime_dependencies(StemcelBackendTests)
-    endif()
 
     # Offline BPM/beat accuracy harness (dev tool, not shipped, not a CTest test).
     # Run: StemcelBpmEval <manifest>  (manifest lines: <path>|<referenceBpm>)
@@ -1256,8 +977,8 @@ tests/MixdownRenderTests.cpp
     add_executable(StemcelCaptureProbe tools/capture_probe/CaptureProbe.cpp)
     target_link_libraries(StemcelCaptureProbe PRIVATE stemcel_backend_core)
 
-    # Offline stem-separation quality harness (dev tool, not shipped, not a CTest
-    # test). Run: StemcelStemEval <manifest>
+    # Offline stem-separation quality harness, for scoring UVR's stems against references
+    # (dev tool, not shipped, not a CTest test). Run: StemcelStemEval <manifest>
     # (manifest lines: <referenceWav>|<estimateWav>[|label]). Reports SI-SDR / SDR.
     add_executable(StemcelStemEval tools/stem_eval/StemEval.cpp)
     target_link_libraries(StemcelStemEval PRIVATE stemcel_backend_core)
@@ -1266,32 +987,6 @@ tests/MixdownRenderTests.cpp
     # trips, for scoring by script. Run: StemcelStretchEval <in.wav> <outDir> [ratio ...]
     add_executable(StemcelStretchEval tools/stretch_eval/StretchEval.cpp)
     target_link_libraries(StemcelStretchEval PRIVATE stemcel_backend_core)
-
-    # Dev probe for the Mel-Band RoFormer vocal pack (needs ONNX + a model file).
-    # Run: StemcelRoformerProbe <core.onnx> <inputWav> <outputVocalWav>
-    if(STEMCEL_ENABLE_STEM_SEPARATION)
-        add_executable(StemcelRoformerProbe tools/roformer_probe/RoformerProbe.cpp)
-        target_link_libraries(StemcelRoformerProbe PRIVATE stemcel_backend_core)
-
-        # Generic spectrogram-in/out ONNX probe: validates a new separation model
-        # on the real linked ONNX Runtime (CPU or DirectML EP) against a saved
-        # reference, before any pipeline integration. Run:
-        # StemcelSpecOnnxProbe <model.onnx> <in0.bin> <in1.bin> <ref0.bin> <ref1.bin> [cpu|gpu]
-        add_executable(StemcelSpecOnnxProbe tools/spec_onnx_probe/SpecOnnxProbe.cpp)
-        target_link_libraries(StemcelSpecOnnxProbe PRIVATE stemcel_backend_core)
-
-        # Dev probe for the 4-stem BS-RoFormer rhythm pack. Run:
-        # StemcelRhythmProbe <core.onnx> <inputWav> <outDrumsWav> <outBassWav>
-        add_executable(StemcelRhythmProbe tools/rhythm_probe/RhythmProbe.cpp)
-        target_link_libraries(StemcelRhythmProbe PRIVATE stemcel_backend_core)
-
-        # The built-in separator on one file, as the app's Separate Stems runs it, for
-        # scoring with StemcelStemEval. Run:
-        # StemcelStemRun [--quality fast|balanced|best] [--htdemucs-only] <modelsRoot> <inputWav> <outputDir>
-        add_executable(StemcelStemRun tools/stem_run/StemRun.cpp)
-        target_link_libraries(StemcelStemRun PRIVATE stemcel_backend_core)
-        copy_onnx_runtime_dependencies(StemcelStemRun)
-    endif()
 
     if(STEMCEL_ENABLE_COVERAGE)
         # Write reports to a dedicated, non-hidden folder (backend/build-coverage)

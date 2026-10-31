@@ -1,17 +1,13 @@
 #pragma once
 
-// Offline RNNoise-based denoiser for the *vocals* stem. This runs on a worker
-// thread after htdemucs-ft has produced a vocal buffer and before it is written
-// to disk, so it may allocate and is NOT real-time code. RNNoise is an RNN noise
-// suppressor that operates on mono 48 kHz / 480-sample frames, so this wrapper
+// Offline RNNoise-based denoiser for a recorded vocal take (RecordingCleanup). It runs
+// on a worker thread, so it may allocate and is NOT real-time code. RNNoise is an RNN
+// noise suppressor that operates on mono 48 kHz / 480-sample frames, so this wrapper
 // resamples each channel to 48 kHz, runs the network, compensates the model's
 // one-frame algorithmic delay, blends the denoised signal with the dry signal at
 // 48 kHz (so a partial blend never combs against a differently-delayed dry copy),
-// and resamples back to the stem's sample rate. It targets broadband noise and
-// separation artefacts; it does NOT remove pitched instrument bleed or reverb.
-//
-// It complements (does not replace) VocalEnhancer's high-pass + expander stage,
-// which still runs afterwards to push down residual inter-phrase bleed.
+// and resamples back to the take's sample rate. It targets broadband noise; it does
+// NOT remove pitched instrument bleed or reverb.
 
 #include <juce_audio_basics/juce_audio_basics.h>
 

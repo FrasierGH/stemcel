@@ -16,7 +16,7 @@ needed; to remove it, delete the folder.
    **More info** ▸ **Run anyway**.
 
 Everything the app needs sits beside `Stemcel.exe` (the MP3 encoder, MIDI controller
-profiles, ONNX Runtime for stem separation, and the rekordbox reader), so keep the
+profiles, the rekordbox reader and the VC++ runtime it needs), so keep the
 folder together.
 
 ## macOS
@@ -41,16 +41,14 @@ grid and key with it.
 
 ## Stem separation models
 
-Stem separation downloads its models on first use (Preferences ▸ Stems, or the Separate
-Stems dialog) into `~/Stemcel/Models`. They are verified before use.
+### Stem separation
 
-### UVR models (optional)
-
-For the community's best separation models, the ones Ultimate Vocal Remover uses, pick
-**UVR models (audio-separator)** in the Separate Stems dialog. They run through
+Stemcel separates stems with the models Ultimate Vocal Remover uses, through
 [audio-separator](https://github.com/nomadkaraoke/python-audio-separator), which you install
 once with [pipx](https://pipx.pypa.io) (Python 3.10 or later; the commands install pipx
-too). **Copy install command** in the dialog copies the right one for your system.
+too). **Copy install command** in the Separate Stems dialog or Preferences ▸ Stems copies the
+right one for your system. The tool downloads each model the first time it is used, into
+`~/Stemcel/Models/uvr`.
 
 Windows (PowerShell):
 

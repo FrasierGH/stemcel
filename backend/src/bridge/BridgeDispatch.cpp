@@ -31,8 +31,6 @@
 #include "ScratchPatternCommands.h"
 #include "ScratchSaveCommands.h"
 #include "ScratchPatternReplayCommands.h"
-#include "StemSeparationCommands.h"
-#include "StemSeparator.h"
 #include "TrackCommands.h"
 #include "TempoMapCommands.h"
 #include "TransitionCommands.h"
@@ -41,7 +39,6 @@
 #include "WaveformCommands.h"
 
 #include <atomic>
-#include <memory>
 #include <juce_core/juce_core.h>
 #include <juce_events/juce_events.h>
 
@@ -52,20 +49,6 @@ namespace
 // Mixdown state gates playback and carries the engine-polled cancel flag.
 std::atomic<bool> g_mixdownBusy{false};
 std::atomic<bool> g_mixdownCancel{false};
-
-// Stem separation runs single-slot on the shared pool; activeJobId is touched
-// only on the message thread so it needs no lock.
-std::atomic<bool> g_stemBusy{false};
-std::atomic<bool> g_stemCancel{false};
-juce::String g_stemActiveJobId;
-
-// Lazily constructed so the ONNX environment is only spun up if a build with
-// stem separation actually receives a STEM_SEPARATE.
-stemcel::StemSeparator& stemSeparator()
-{
-    static std::unique_ptr<stemcel::StemSeparator> instance = stemcel::createDefaultStemSeparator();
-    return *instance;
-}
 
 // Bundles the long, shared dispatch parameter list so each per-domain router
 // stays readable. References only: the context outlives every dispatch call.
@@ -982,33 +965,6 @@ bool dispatchMixdown(const DispatchContext& ctx)
     return true;
 }
 
-bool dispatchStem(const DispatchContext& ctx)
-{
-    const auto& type = ctx.type;
-    const auto& payload = ctx.payload;
-    auto& projectState = ctx.projectState;
-    auto& bridge = ctx.bridge;
-    auto& peakPool = ctx.peakPool;
-    const auto& decodedCache = ctx.decodedCache;
-    auto& session = ctx.session;
-
-    if (type == "STEM_SEPARATE")
-    {
-        stemcel::handleStemSeparate(payload, projectState, bridge, peakPool, decodedCache,
-                                      stemSeparator(), g_stemBusy, g_stemCancel, g_stemActiveJobId,
-                                      session.currentPath);
-    }
-    else if (type == "STEM_SEPARATE_CANCEL")
-    {
-        stemcel::handleStemSeparateCancel(payload, g_stemBusy, g_stemCancel, g_stemActiveJobId);
-    }
-    else
-    {
-        return false;
-    }
-    return true;
-}
-
 bool dispatchUndo(const DispatchContext& ctx)
 {
     const auto& type = ctx.type;
@@ -1121,7 +1077,7 @@ void dispatchBridgeMessage(const juce::String& type, const juce::var& payload, s
                          dispatchTrack(ctx) || dispatchProjectFx(ctx) ||
                          dispatchWaveform(ctx) || dispatchProject(ctx) || dispatchMarker(ctx) ||
                          dispatchAudioDevice(ctx) || dispatchMidi(ctx) || dispatchMixdown(ctx) ||
-                         dispatchStem(ctx) || dispatchUndo(ctx) || dispatchTransition(ctx);
+                         dispatchUndo(ctx) || dispatchTransition(ctx);
     if (!handled)
     {
         stemcel::log::warn("bridge", "unhandled message type: " + type);
