@@ -4,6 +4,7 @@
 
 #include "TestRegistry.h"
 
+#include "BusGraph.h"
 #include "PluginChain.h"
 #include "PluginPlayHead.h"
 
@@ -17,7 +18,7 @@ namespace
 
 // Applies a fixed gain so a block's value identifies exactly which slots ran, and in what
 // order once the gains differ per slot.
-class FakeGainPlugin final : public juce::AudioPluginInstance
+class FakeGainPlugin : public juce::AudioPluginInstance
 {
 public:
     explicit FakeGainPlugin(float gainToApply, int latency = 0) : gain(gainToApply)
@@ -297,6 +298,68 @@ void testDetachedSlotsSurviveAChainRebuild()
     require(chain.detachSlot("missing") == nullptr, "detachSlot must tolerate an unknown id");
 }
 
+// One automatable parameter, as a hosted plugin exposes it to its host.
+class FakeParameter final : public juce::AudioPluginInstance::HostedParameter
+{
+public:
+    float getValue() const override { return value; }
+    void setValue(float newValue) override { value = newValue; }
+    float getDefaultValue() const override { return 0.0F; }
+    juce::String getName(int) const override { return "Cutoff"; }
+    juce::String getLabel() const override { return {}; }
+    float getValueForText(const juce::String& text) const override { return text.getFloatValue(); }
+    juce::String getParameterID() const override { return "cutoff"; }
+
+    float value = 0.0F;
+};
+
+class FakeParameterPlugin final : public FakeGainPlugin
+{
+public:
+    FakeParameterPlugin() : FakeGainPlugin(1.0F)
+    {
+        auto p = std::make_unique<FakeParameter>();
+        parameter = p.get();
+        addHostedParameter(std::move(p));
+    }
+    FakeParameter* parameter = nullptr;
+};
+
+// A plugin parameter's automation lane ("plugin:<slot>:<index>") moves that parameter of the
+// published instance along its curve as the timeline plays.
+void testPluginParameterFollowsItsAutomation()
+{
+    plugins::PluginChain chain;
+    chain.prepare(kRate, kBlock);
+    auto plugin = std::make_unique<FakeParameterPlugin>();
+    auto* fake = plugin.get();
+    chain.addSlot(std::make_unique<plugins::PluginSlot>(makeDescriptor("filter"), std::move(plugin)));
+    chain.publish();
+
+    TrackAutomationSnapshot snap;
+    BreakpointCurve curve(InterpDomain::linear);
+    curve.addPoint(0.0, 0.0F);
+    curve.addPoint(1000.0, 1.0F);
+    curve.finalise();
+    require(snap.setLane("plugin:filter:0", std::move(curve)), "a plugin lane id must be accepted");
+    require(!snap.setLane("plugin:filter:x", BreakpointCurve()), "a malformed plugin lane id must be refused");
+
+    BusGraph::applyPluginAutomation(snap, &chain, 500.0);
+    require(std::abs(fake->parameter->value - 0.5F) < 1.0e-3F, "halfway along the lane the parameter must be at 0.5");
+    BusGraph::applyPluginAutomation(snap, &chain, 1000.0);
+    require(std::abs(fake->parameter->value - 1.0F) < 1.0e-3F, "at the lane's end the parameter must be at 1");
+
+    // A lane for a slot that isn't in the chain is ignored, not a crash.
+    TrackAutomationSnapshot other;
+    BreakpointCurve flat(InterpDomain::linear);
+    flat.addPoint(0.0, 0.25F);
+    flat.addPoint(1000.0, 0.25F);
+    flat.finalise();
+    other.setLane("plugin:gone:0", std::move(flat));
+    BusGraph::applyPluginAutomation(other, &chain, 500.0);
+    require(std::abs(fake->parameter->value - 1.0F) < 1.0e-3F, "a lane for another slot must leave this one alone");
+}
+
 } // namespace
 
 void addPluginChainTests(std::vector<TestCase>& tests)
@@ -308,6 +371,7 @@ void addPluginChainTests(std::vector<TestCase>& tests)
     tests.push_back({"PluginChain prepares slots added after the chain", testSlotsArePreparedIncludingLateAdditions});
     tests.push_back({"PluginChain gives its slots the shared transport play head", testSlotsSeeTheSharedPlayHead});
     tests.push_back({"PluginChain keeps a detached slot alive across a rebuild", testDetachedSlotsSurviveAChainRebuild});
+    tests.push_back({"Plugin parameter automation moves the parameter", testPluginParameterFollowsItsAutomation});
 }
 
 } // namespace stemcel::tests
