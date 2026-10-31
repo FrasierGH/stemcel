@@ -21,6 +21,8 @@
 #include "UvrSeparator.h"
 #include "PreferencePages.h"
 #include "ScratchEditor.h"
+#include "SectionAnalyser.h"
+#include "SectionAnalysis.h"
 #include "WaveformStore.h"
 #include "Workspace.h"
 #include "Autosave.h"
@@ -92,6 +94,41 @@ bool writeTone(const juce::File& file, double frequency = 220.0)
         const auto v = static_cast<float>(0.4 * std::sin(2.0 * juce::MathConstants<double>::pi * frequency * i / kSampleRate));
         buffer.setSample(0, i, v);
         buffer.setSample(1, i, v);
+    }
+    return writer->writeFromAudioSampleBuffer(buffer, 0, samples);
+}
+
+// 32 bars at 120 BPM with an arrangement to find: hats alone (intro), a kick and bass on every
+// beat (drop), a mid pad with no kick (breakdown), then the kick again.
+bool writeArrangement(const juce::File& file)
+{
+    file.deleteFile();
+    std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream>(file);
+    const auto options = juce::AudioFormatWriterOptions{}.withSampleRate(kSampleRate).withNumChannels(2).withBitsPerSample(16);
+    std::unique_ptr<juce::AudioFormatWriter> writer(juce::WavAudioFormat().createWriterFor(stream, options));
+    if (writer == nullptr) return false;
+    constexpr double kBeat = 0.5;
+    const int samples = static_cast<int>(32 * 4 * kBeat * kSampleRate);
+    juce::AudioBuffer<float> buffer(2, samples);
+    juce::Random noise(7);
+    const double twoPi = juce::MathConstants<double>::twoPi;
+    for (int i = 0; i < samples; ++i)
+    {
+        const double t = static_cast<double>(i) / kSampleRate;
+        const int bar = static_cast<int>(t / (4 * kBeat));
+        const bool drop = (bar >= 8 && bar < 16) || bar >= 24;
+        const bool breakdown = bar >= 16 && bar < 24;
+        double v = (noise.nextFloat() * 2.0 - 1.0) * 0.03; // hats / air throughout
+        if (drop)
+        {
+            const double inBeat = std::fmod(t, kBeat);
+            v += 0.8 * std::exp(-inBeat * 18.0) * std::sin(twoPi * 55.0 * inBeat); // kick
+            v += 0.25 * std::sin(twoPi * 45.0 * t);                                  // bass
+        }
+        if (breakdown) v += 0.2 * std::sin(twoPi * 440.0 * t) + 0.1 * std::sin(twoPi * 660.0 * t);
+        const auto f = static_cast<float>(juce::jlimit(-1.0, 1.0, v));
+        buffer.setSample(0, i, f);
+        buffer.setSample(1, i, f);
     }
     return writer->writeFromAudioSampleBuffer(buffer, 0, samples);
 }
@@ -362,6 +399,17 @@ void SmokeTest::addSteps()
                      },
                      {}, [this](const juce::var&) { return rekordboxWritesOk; }});
 
+    // rekordbox's sections (from the fixture track's 3-band waveform) came with its import.
+    steps.push_back({"rekordbox sections", [] {}, {},
+                     [this](const juce::var&)
+                     {
+                         if (rekordboxTrackId == "skipped") return true;
+                         const auto* rb = model().findLibraryItem(rekordboxItemId);
+                         if (rb == nullptr || sections::of(*rb).empty()) return false;
+                         report.add("rekordbox track has " + juce::String(static_cast<int>(sections::of(*rb).size())) + " section(s)");
+                         return true;
+                     }});
+    steps.back().poll = true;
     steps.push_back({"save as",
                      [this, projectFile]
                      {
@@ -2043,6 +2091,69 @@ void SmokeTest::addTempoJourney()
                              if (file.openedOk()) juce::PNGImageFormat().writeImageToStream(image, file);
                          }
                          report.add("transition placed: in moved to " + juce::String(in->offsetMs, 0) + " ms, out ends " + juce::String(out->endMs(), 0));
+                         return true;
+                     }});
+    steps.back().poll = true;
+    // Stemcel's own sections find the drop and the breakdown of a generated arrangement.
+    steps.push_back({"sections",
+                     [this]
+                     {
+                         const auto file = workDir.getChildFile("Files").getChildFile("arrangement.wav");
+                         if (!writeArrangement(file)) return;
+                         ImportRequest request;
+                         request.file = file;
+                         request.hints.bpm = 120.0;
+                         importer.import(std::vector<ImportRequest>{request}, [this](const juce::StringArray& ids)
+                                         {
+                                             sectionItemId = ids[0];
+                                             sectionAnalyser = std::make_unique<SectionAnalyser>(engine, mirror, prefs);
+                                             sectionAnalyser->analyse(sectionItemId, true);
+                                         });
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         const auto* item = model().findLibraryItem(sectionItemId);
+                         if (item == nullptr) return false;
+                         const auto list = sections::of(*item);
+                         if (list.empty()) return false;
+                         juce::StringArray names;
+                         for (const auto& s : list) names.add(s.label + "@" + juce::String(s.startSec, 0));
+                         const bool found = names.joinIntoString(",").contains("Drop") && names.joinIntoString(",").contains("Breakdown");
+                         lastTempoLine = "sections " + names.joinIntoString(", ");
+                         if (found) report.add(lastTempoLine);
+                         return found;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 60000.0;
+    // The analysed arrangement on the timeline, for eyes: the strip along the top of its clip.
+    steps.push_back({"sections picture",
+                     [this]
+                     {
+                         const auto* item = model().findLibraryItem(sectionItemId);
+                         if (item == nullptr) return;
+                         const auto trackId = actions.addTrack();
+                         sectionClipId = actions.addClip(trackId, *model().findLibraryItem(sectionItemId), model().contentEndMs() + 4000.0);
+                         mirror.refreshNow();
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         // A timeline of its own over this project, scrolled to the clip.
+                         const auto* clip = model().findClip(sectionClipId);
+                         if (clip == nullptr) return false;
+                         TimelineViewState view;
+                         LiveState live(engine);
+                         WaveformStore waveforms(engine.host().peaksCache());
+                         TimelineView timeline(mirror, view, live, actions, waveforms);
+                         timeline.setSize(1200, 420);
+                         for (const auto& row : layoutRows(model()))
+                             if (row.trackId == clip->trackId) view.scrollY = juce::jmax(0, row.top - 10);
+                         view.pxPerSecond = 1000.0 / juce::jmax(1.0, clip->endMs() - clip->offsetMs) * 1100.0;
+                         view.scrollXPx = view.msToX(clip->offsetMs) + view.scrollXPx - 40.0;
+                         const auto image = timeline.createComponentSnapshot(timeline.getLocalBounds());
+                         juce::FileOutputStream out(workDir.getChildFile("sections.png"));
+                         if (out.openedOk()) juce::PNGImageFormat().writeImageToStream(image, out);
                          return true;
                      }});
     steps.back().poll = true;

@@ -6,6 +6,7 @@
 #include "BeatStutter.h"
 #include "Automation.h"
 #include "MixTransitions.h"
+#include "SectionAnalysis.h"
 #include "TransitionEditor.h"
 #include "Theme.h"
 
@@ -598,10 +599,44 @@ void TimelineView::paintClip(juce::Graphics& g, const ClipModel& clip, juce::Rec
             }
     }
 
+    paintClipSections(g, clip, r.withTrimmedTop(kClipHeaderPx), alpha);
+
     g.setColour(selected ? colours::zinc100 : palette.border.withAlpha(alpha));
     g.drawRoundedRectangle(r.reduced(0.5f), 3.0f, selected ? 2.0f : 1.0f);
 
     paintClipHeader(g, clip, header, palette.border, alpha);
+}
+
+// The source's arrangement sections, as a labelled strip along the top of the clip's body.
+void TimelineView::paintClipSections(juce::Graphics& g, const ClipModel& clip, juce::Rectangle<float> body, float alpha)
+{
+    const auto* item = model().findLibraryItem(clip.libraryItemId);
+    if (item == nullptr || body.getHeight() < 30.0f) return;
+    const auto list = sections::of(*item);
+    if (list.empty()) return;
+    const auto strip = body.withHeight(13.0f);
+    const double ratio = clip.effectiveTempoRatio > 0.0 ? clip.effectiveTempoRatio : 1.0;
+    auto toX = [&](double sourceSec)
+    { return static_cast<float>(view.msToX(clip.offsetMs + (sourceSec * 1000.0 - clip.inMs) / ratio)); };
+    g.saveState();
+    g.reduceClipRegion(strip.toNearestInt());
+    g.setFont(uiFont(9.0f, true));
+    for (const auto& s : list)
+    {
+        const float x0 = juce::jmax(strip.getX(), toX(s.startSec));
+        const float x1 = juce::jmin(strip.getRight(), toX(s.endSec));
+        if (x1 <= x0) continue;
+        const auto cell = juce::Rectangle<float>(x0, strip.getY(), x1 - x0, strip.getHeight());
+        const auto colour = sections::colourFor(s.kind);
+        g.setColour(colour.withAlpha(0.75f * alpha));
+        g.fillRect(cell.reduced(0.5f, 0.0f));
+        if (cell.getWidth() > 24.0f)
+        {
+            g.setColour(juce::Colours::white.withAlpha(0.95f * alpha));
+            g.drawText(sections::caption(s), cell.reduced(3.0f, 0.0f).toNearestInt(), juce::Justification::centredLeft, true);
+        }
+    }
+    g.restoreState();
 }
 
 std::vector<int> TimelineView::clipHeaderBadges(const ClipModel& clip) const
@@ -1875,6 +1910,29 @@ void TimelineView::showClipMenu(const juce::String& clipId, double atMs)
     const bool masterTempo = clip->warpMode != "repitch";
     menu.addItem("Master Tempo", true, masterTempo, [this, clipId, masterTempo] { actions.setClipMasterTempo(clipId, !masterTempo); });
     menu.addItem("Rename", [this, clipId] { startClipRename(clipId); });
+    // The source's arrangement: analysed (again), and its section starts as markers.
+    if (const auto* item = model().findLibraryItem(clip->libraryItemId); item != nullptr && onAnalyseSections)
+    {
+        juce::PopupMenu sectionsMenu;
+        sectionsMenu.addItem(sections::of(*item).empty() ? "Analyse Sections" : "Analyse Sections Again",
+                             [this, id = item->id] { onAnalyseSections(id); });
+        const auto list = sections::of(*item);
+        sectionsMenu.addItem("Add Sections as Markers", !list.empty(), false, [this, clipId, list]
+                             {
+                                 const auto* c = model().findClip(clipId);
+                                 if (c == nullptr) return;
+                                 const double ratio = c->effectiveTempoRatio > 0.0 ? c->effectiveTempoRatio : 1.0;
+                                 actions.engineClient().inUndoGroup("Add section markers", [&]
+                                 {
+                                     for (const auto& s : list)
+                                     {
+                                         const double at = c->offsetMs + (s.startSec * 1000.0 - c->inMs) / ratio;
+                                         if (at >= c->offsetMs && at < c->endMs()) actions.addMarker(at);
+                                     }
+                                 });
+                             });
+        menu.addSubMenu("Sections", sectionsMenu);
+    }
     juce::PopupMenu colour;
     colour.addItem("Track colour", [this, clipId] { actions.setClipColor(clipId, -1); });
     for (int i = 0; i < kPaletteSize; ++i)

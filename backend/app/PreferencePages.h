@@ -43,7 +43,8 @@ class TimelinePreferencesPage final : public juce::Component
   private:
     AppPreferences& prefs;
     juce::ToggleButton follow{"Follow playback"}, seedTempo{"Set project tempo from first clip"},
-        matchTempo{"Auto-warp clips to project tempo"}, align{"Align clips to the beat grid after analysis"};
+        matchTempo{"Auto-warp clips to project tempo"}, align{"Align clips to the beat grid after analysis"},
+        detectSections{"Detect song sections (intro, build, drop, breakdown) of imported tracks"};
     juce::Label skipLabel{{}, "Skip buttons"};
     juce::ComboBox skipTarget;
 };

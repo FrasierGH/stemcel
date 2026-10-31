@@ -14,7 +14,7 @@ Workspace::Workspace(EngineClient& engineClient, AppController& appController, A
     : engine(engineClient), controller(appController), prefs(preferences), mirror(engineClient), live(engineClient),
       actions(engineClient, mirror), waveforms(engineClient.host().peaksCache()), subscriptions(engineClient),
       importer(engineClient, mirror, sharedRekordbox()), audition(engineClient, importer),
-      stems(engineClient, mirror, actions, preferences),
+      stems(engineClient, mirror, actions, preferences), sectionAnalyser(engineClient, mirror, preferences),
       transport(mirror, view, live, actions, preferences), headers(mirror, view, live, actions),
       timeline(mirror, view, live, actions, waveforms)
 {
@@ -41,6 +41,8 @@ Workspace::Workspace(EngineClient& engineClient, AppController& appController, A
     actions.onNotify = notify;
     importer.onNotify = notify;
     stems.onNotify = notify;
+    sectionAnalyser.onNotify = notify;
+    timeline.onAnalyseSections = [this](const juce::String& itemId) { sectionAnalyser.analyse(itemId, true); };
     stems.onProgress = [this](double percent, const juce::String& stage)
     {
         if (libraryPanel == nullptr) return;
@@ -77,7 +79,8 @@ Workspace::Workspace(EngineClient& engineClient, AppController& appController, A
                                                                    if (tracks.size() >= 2 && mirror.model().contentEndMs() > before)
                                                                        timeline.revealRange(before, mirror.model().contentEndMs(), tracks[tracks.size() - 2].id);
                                                                },
-                                                               [this](const juce::String& vocal, const juce::String& beat) { mashup->start(vocal, beat); }});
+                                                               [this](const juce::String& vocal, const juce::String& beat) { mashup->start(vocal, beat); },
+                                                               [this](const juce::String& itemId) { sectionAnalyser.analyse(itemId, true); }});
     libraryPanel = panel.get();
     setBottomPanel(std::move(panel),
                    juce::jlimit(120, 700, static_cast<int>(prefs.get("ui", "nativeLibraryHeight", LibraryPanel::kDefaultHeight))));

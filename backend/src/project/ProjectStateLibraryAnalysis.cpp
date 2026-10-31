@@ -441,6 +441,22 @@ bool ProjectState::setLibraryItemCoverArtHidden(const juce::String& itemId, bool
     return false;
 }
 
+bool ProjectState::setLibraryItemSections(const juce::String& itemId, const juce::String& sectionsJson)
+{
+    auto library = root.getChildWithName(kLibrary);
+    if (!library.isValid()) return false;
+    for (int i = 0; i < library.getNumChildren(); ++i)
+    {
+        auto item = library.getChild(i);
+        if (item.getProperty(kId).toString() != itemId) continue;
+        // Kept as the JSON text, so the project file carries it as it came.
+        if (sectionsJson.isEmpty()) item.removeProperty(kSections, nullptr);
+        else item.setProperty(kSections, sectionsJson, nullptr);
+        return true;
+    }
+    return false;
+}
+
 bool ProjectState::setLibraryItemCoverArtOverride(const juce::String& itemId, const juce::String& coverFile)
 {
     auto library = root.getChildWithName(kLibrary);

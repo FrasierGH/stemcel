@@ -11,6 +11,7 @@
 #include "Stems.h"
 #include "ProjectModel.h"
 #include "TimelineActions.h"
+#include "SectionAnalyser.h"
 #include "TimelineView.h"
 #include "TrackHeaders.h"
 #include "TransportBar.h"
@@ -89,6 +90,7 @@ class Workspace final : public juce::Component, public juce::DragAndDropContaine
     AudioImporter importer;
     Audition audition;
     StemService stems;
+    SectionAnalyser sectionAnalyser;
     std::unique_ptr<MashupBuilder> mashup;
     struct PrefsWatcher final : juce::ChangeListener
     {

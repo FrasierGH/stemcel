@@ -83,6 +83,7 @@ class TimelineView final : public juce::Component,
     // Opens the inline name field over a clip's title strip.
     void startClipRename(const juce::String& clipId);
     std::function<void(const juce::String& clipId)> onSeparateStems;
+    std::function<void(const juce::String& itemId)> onAnalyseSections;
     std::function<void(const juce::String& clipId)> onOpenScratch;
     std::function<void(const juce::String& clipId, const juce::StringArray& channels)> onSplitChannels;
 
@@ -213,6 +214,7 @@ class TimelineView final : public juce::Component,
     std::pair<double, double> tempoDragRange; // the scale stays put while a point moves
 
     void paintMixTransitions(juce::Graphics& g);
+    void paintClipSections(juce::Graphics& g, const ClipModel& clip, juce::Rectangle<float> body, float alpha);
     // Where a recorded transition is drawn: its window over the outgoing and incoming clips,
     // the connector between them, and its name. Double-click any of it to edit.
     struct TransitionShape

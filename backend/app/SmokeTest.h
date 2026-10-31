@@ -106,6 +106,9 @@ class SmokeTest final : private juce::Timer
     juce::String automationTrackId;
     int automationStage = 0;
     juce::String nearOutClipId, nearInClipId;
+    juce::String sectionItemId, sectionClipId;
+    bool sectionRevealed = false;
+    std::unique_ptr<class SectionAnalyser> sectionAnalyser;
     juce::File rekordboxFixtureDb;
     juce::String rekordboxFixturePassphrase;
     juce::String rekordboxItemId;

@@ -780,6 +780,8 @@ if(STEMCEL_BUILD_NATIVE_APP)
         app/MediaStore.cpp
         app/MidiControllerActions.cpp
         app/Rekordbox.cpp
+        app/SectionAnalysis.cpp
+        app/SectionAnalyser.cpp
         app/RekordboxBrowser.cpp
         app/EngineClient.cpp
         app/ExportDialog.cpp
