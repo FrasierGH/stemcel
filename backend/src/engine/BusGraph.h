@@ -122,6 +122,10 @@ public:
     BusGraph();
     ~BusGraph() override = default;
 
+    // Moves each automated plugin parameter in `snap` to its curve's value at `ms` (the
+    // parameter's normalised 0..1), on the instances published in `chain`.
+    static void applyPluginAutomation(const TrackAutomationSnapshot& snap, const plugins::PluginChain* chain, double ms) noexcept;
+
     BusGraph(const BusGraph&) = delete;
     BusGraph& operator=(const BusGraph&) = delete;
 
@@ -362,7 +366,6 @@ private:
     float masterLevelTarget = 1.0F;
     Leveler* masterGlue = nullptr;
     void applyMasterAutomation(const TrackAutomationSnapshot* snap, juce::int64 subStartSamples, double rate) noexcept;
-    static void applyPluginAutomation(const TrackAutomationSnapshot& snap, const plugins::PluginChain* chain, double ms) noexcept;
     juce::AudioPlayHead* pluginPlayHead = nullptr;
     std::unordered_map<juce::String, const TrackAutomationSnapshot*> pendingAutomation;
     std::unordered_map<juce::String, const BeatRepeatSnapshot*> pendingBeatRepeats;

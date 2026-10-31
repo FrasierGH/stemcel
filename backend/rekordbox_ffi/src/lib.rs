@@ -426,7 +426,7 @@ fn analysis(share_root: &Path, analysis_path: &str) -> Value {
     let mut phrases_json = Vec::new();
     let mut mood = Value::Null;
     if analysis_path.is_empty() {
-        return json!({ "beats": beats_json, "phrases": phrases_json, "mood": mood });
+        return json!({ "beats": beats_json, "phrases": phrases_json, "mood": mood, "bands": [] });
     }
     let dat = rbl_anlz::resolve(share_root, analysis_path);
     let beats = Anlz::read(&dat).ok().and_then(|a| a.beat_grid()).unwrap_or_default();
@@ -456,7 +456,35 @@ fn analysis(share_root: &Path, analysis_path: &str) -> Value {
             }));
         }
     }
-    json!({ "beats": beats_json, "phrases": phrases_json, "mood": mood })
+    json!({ "beats": beats_json, "phrases": phrases_json, "mood": mood, "bands": bands(&dat) })
+}
+
+/// rekordbox's 3-band waveform (`PWV7` in the `.2EX` file: low, mid and high out of 127,
+/// 150 columns a second), averaged to two values a second and scaled to 0..1, as
+/// `[[low, mid, high], ...]`. Empty when the track has no such file.
+fn bands(dat: &Path) -> Value {
+    const COLUMNS_PER_SECOND: usize = 150;
+    const PER_SECOND: usize = 2;
+    let two_ex = rbl_anlz::sibling(dat, "2EX");
+    let Ok(anlz) = Anlz::read(&two_ex) else { return Value::Array(Vec::new()) };
+    let Some((stride, payload)) = anlz.waveform(b"PWV7") else { return Value::Array(Vec::new()) };
+    let stride = (stride as usize).max(3);
+    let columns: Vec<&[u8]> = payload.chunks_exact(stride).collect();
+    let step = COLUMNS_PER_SECOND / PER_SECOND;
+    let out: Vec<Value> = columns
+        .chunks(step)
+        .map(|chunk| {
+            let mut sum = [0.0f64; 3];
+            for column in chunk {
+                for (band, total) in sum.iter_mut().enumerate() {
+                    *total += f64::from(column[band] & 0x7f);
+                }
+            }
+            let n = chunk.len().max(1) as f64 * 127.0;
+            json!([sum[0] / n, sum[1] / n, sum[2] / n])
+        })
+        .collect();
+    Value::Array(out)
 }
 
 // ---------------------------------------------------------------------------------------
@@ -914,6 +942,13 @@ fn build_fixture(dir: &Path, audio: &str) -> Result<String, String> {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     std::fs::write(&dat, rbl_anlz::write::AnlzBuilder::new().beat_grid(&beats).finish()).map_err(|e| e.to_string())?;
+    // Four seconds of rekordbox's 3-band waveform: low band (a kick) throughout.
+    let columns: Vec<u8> = (0..600).flat_map(|_| [110u8, 40, 30]).collect();
+    std::fs::write(
+        rbl_anlz::sibling(&dat, "2EX"),
+        rbl_anlz::write::AnlzBuilder::new().waveform_scroll(b"PWV7", 3, &columns).finish(),
+    )
+    .map_err(|e| e.to_string())?;
     fixture::set_analysis_path(&location, 0, relative).map_err(|e| e.to_string())?;
     Ok(json!({
         "ok": true,

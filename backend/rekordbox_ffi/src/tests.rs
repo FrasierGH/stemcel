@@ -33,6 +33,13 @@ fn fixture_library(dir: &Path) -> LibraryLocation {
     let dat = rbl_anlz::resolve(&location.share_root, relative);
     std::fs::create_dir_all(dat.parent().unwrap()).unwrap();
     std::fs::write(&dat, rbl_anlz::write::AnlzBuilder::new().beat_grid(&beats).finish()).unwrap();
+    // Two seconds of rekordbox's 3-band waveform: all low band, then all high.
+    let mut columns = Vec::new();
+    for i in 0..300 {
+        columns.extend_from_slice(if i < 150 { &[127u8, 0, 0] } else { &[0u8, 0, 127] });
+    }
+    let two_ex = rbl_anlz::sibling(&dat, "2EX");
+    std::fs::write(&two_ex, rbl_anlz::write::AnlzBuilder::new().waveform_scroll(b"PWV7", 3, &columns).finish()).unwrap();
     fixture::set_analysis_path(&location, 0, relative).unwrap();
     location
 }
@@ -94,6 +101,10 @@ fn track_detail_reads_the_beat_grid() {
     assert_eq!(beats[0][0], 120);
     assert_eq!(beats[0][1], 1);
     assert_eq!(beats[0][2], 128.0);
+    let bands = detail["bands"].as_array().unwrap();
+    assert_eq!(bands.len(), 4, "two values a second");
+    assert!((bands[0][0].as_f64().unwrap() - 1.0).abs() < 1e-9, "the first second is all low band");
+    assert!((bands[3][2].as_f64().unwrap() - 1.0).abs() < 1e-9, "the last is all high");
 
     let missing = c("999999999");
     let none = take_json(unsafe { rbx_track_json(library, missing.as_ptr()) });

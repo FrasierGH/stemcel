@@ -1,6 +1,7 @@
 #include "ExportDialog.h"
 
 #include "Theme.h"
+#include "Tracklist.h"
 
 namespace stemcel::native
 {
@@ -14,6 +15,9 @@ const juce::StringArray kFormatLabels{"WAV", "MP3", "FLAC", "AIFF"};
 const juce::Array<int> kRates{44100, 48000};
 const juce::Array<int> kBitrates{128, 192, 320};
 const juce::StringArray kLengthModes{"fixed-duration", "trim-to-last-clip", "selection"};
+// Silence before the first sample, for players that clip a file's first moment.
+const juce::Array<int> kLeadInsMs{0, 100, 250, 500, 1000};
+const juce::StringArray kLeadInLabels{"None", "0.1 s", "0.25 s", "0.5 s", "1 s"};
 const juce::StringArray kLoudnessPresets{"off", "streaming-14", "apple-16", "broadcast-23", "analyze", "custom"};
 const juce::StringArray kLoudnessLabels{"None - export as-is",
                                         "Streaming -14 LUFS (Spotify, YouTube, SoundCloud, Tidal, Amazon)",
@@ -76,8 +80,15 @@ ExportDialog::ExportDialog(EngineClient& client, AppPreferences& preferences, co
                            std::function<void(const juce::String&, bool)> notifyFn)
     : engine(client), prefs(preferences), projectName(project.name), projectFile(project.filePath), bpm(project.bpm),
       barCounterStart(static_cast<int>(project.raw.getProperty("barCounterStart", 1))), lastClipEndMs(project.contentEndMs()),
-      selection(project.timelineSelection), notify(std::move(notifyFn)), subscriptions(client)
+      selection(project.timelineSelection), model(project), notify(std::move(notifyFn)), subscriptions(client)
 {
+    for (int i = 0; i < kLeadInLabels.size(); ++i) leadIn.addItem(kLeadInLabels[i], i + 1);
+    leadIn.setSelectedItemIndex(0, juce::dontSendNotification);
+    tracklistText.setMultiLine(true, false);
+    tracklistText.setReturnKeyStartsNewLine(true);
+    tracklistText.setScrollbarsShown(true);
+    tracklistText.setFont(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 12.0f, juce::Font::plain));
+    tracklistText.setTooltip("One line per track, as written to the .txt. Edit a line to fix a name.");
     for (int i = 0; i < kFormats.size(); ++i) formatBox.addItem(kFormatLabels[i], i + 1);
     for (int i = 0; i < kRates.size(); ++i) rate.addItem(juce::String(kRates[i]) + " Hz", i + 1);
     for (int i = 0; i < kBitrates.size(); ++i) bitrate.addItem(juce::String(kBitrates[i]) + " kbps", i + 1);
@@ -130,15 +141,31 @@ ExportDialog::ExportDialog(EngineClient& client, AppPreferences& preferences, co
         if (!allowed.isEmpty()) depth.setSelectedId(allowed.contains(previous) ? previous : allowed.getLast(), juce::dontSendNotification);
         updateEnablement();
     };
-    for (auto* c : {&rate, &depth, &bitrate, &length, &loudness}) c->onChange = [this] { updateEnablement(); };
-    for (auto* e : {&output, &startBar, &tail, &duration, &target, &ceiling}) e->onTextChange = [this] { updateEnablement(); };
-    for (auto* c : std::initializer_list<juce::Component*>{&formatBox, &rate, &depth, &bitrate, &length, &loudness, &dither, &browseButton})
+    for (auto* c : {&rate, &depth, &bitrate, &loudness}) c->onChange = [this] { updateEnablement(); };
+    for (auto* e : {&output, &tail, &target, &ceiling}) e->onTextChange = [this] { updateEnablement(); };
+    // What the tracklist's times depend on.
+    for (auto* c : {&length, &leadIn})
+        c->onChange = [this]
+        {
+            updateEnablement();
+            refreshTracklist();
+        };
+    for (auto* e : {&startBar, &duration})
+        e->onTextChange = [this]
+        {
+            updateEnablement();
+            refreshTracklist();
+        };
+    tracklistText.onTextChange = [this] { tracklistEdited = true; };
+    writeTracklist.onClick = [this] { updateEnablement(); };
+    for (auto* c : std::initializer_list<juce::Component*>{&formatBox, &rate, &depth, &bitrate, &length, &loudness, &dither, &browseButton,
+                                                          &leadIn, &writeTracklist, &tracklistText})
         addAndMakeVisible(c);
     for (auto* e : {&output, &startBar, &tail, &duration, &target, &ceiling, &title, &artist, &album, &year, &genre, &comment})
         addAndMakeVisible(e);
     for (auto* l : {&outputLabel, &formatLabel, &rateLabel, &depthLabel, &bitrateLabel, &startLabel, &startHint, &tailLabel,
                     &lengthLabel, &loudnessLabel, &targetLabel, &ceilingLabel, &titleLabel, &artistLabel, &albumLabel,
-                    &yearLabel, &genreLabel, &commentLabel})
+                    &yearLabel, &genreLabel, &commentLabel, &leadInLabel, &tracklistLabel})
     {
         styleLabel(*l);
         addAndMakeVisible(l);
@@ -183,8 +210,9 @@ ExportDialog::ExportDialog(EngineClient& client, AppPreferences& preferences, co
                                                              : "Export failed: " + p.getProperty("error", {}).toString(),
                                   {});
                      });
+    refreshTracklist();
     updateEnablement();
-    setSize(620, 560);
+    setSize(620, 680);
 }
 
 ExportDialog::~ExportDialog()
@@ -239,6 +267,10 @@ void ExportDialog::applyPersisted(const juce::String& json)
     if (const auto t = str("genre")) genre.setText(*t, false);
     if (const auto t = str("comment")) comment.setText(*t, false);
     if (const auto t = str("outputPath"); t && t->isNotEmpty()) output.setText(*t, false);
+    if (const int l = static_cast<int>(o.getProperty("leadInMs", -1)); kLeadInsMs.contains(l))
+        leadIn.setSelectedItemIndex(kLeadInsMs.indexOf(l), juce::dontSendNotification);
+    if (o.getProperty("writeTracklist", {}).isBool())
+        writeTracklist.setToggleState(static_cast<bool>(o.getProperty("writeTracklist", false)), juce::dontSendNotification);
 }
 
 juce::var ExportDialog::snapshot() const
@@ -265,6 +297,8 @@ juce::var ExportDialog::snapshot() const
     o->setProperty("year", year.getText());
     o->setProperty("genre", genre.getText());
     o->setProperty("comment", comment.getText());
+    o->setProperty("leadInMs", juce::roundToInt(leadInMs()));
+    o->setProperty("writeTracklist", writeTracklist.getToggleState());
     return juce::var(o);
 }
 
@@ -303,8 +337,24 @@ std::optional<double> ExportDialog::tailSeconds() const
     return n.has_value() && *n >= 0.0 && *n <= 60.0 ? n : std::nullopt;
 }
 
+double ExportDialog::leadInMs() const
+{
+    return kLeadInsMs[juce::jmax(0, leadIn.getSelectedItemIndex())];
+}
+
+// The tracklist for the span being exported, unless it was edited by hand.
+void ExportDialog::refreshTracklist()
+{
+    if (tracklistEdited) return;
+    const auto mode = kLengthModes[juce::jmax(0, length.getSelectedItemIndex())];
+    const double from = mode == "selection" && selection.has_value() ? selection->first : startBarMs();
+    const double to = durationMs().value_or(model.contentEndMs());
+    tracklistText.setText(tracklist::toText(tracklist::fromProject(model, from, to, leadInMs())), false);
+}
+
 void ExportDialog::updateEnablement()
 {
+    tracklistText.setEnabled(writeTracklist.getToggleState());
     const auto fmt = format();
     depth.setEnabled(fmt != "mp3");
     bitrate.setEnabled(fmt == "mp3");
@@ -382,6 +432,7 @@ void ExportDialog::start(const juce::File& file)
     p->setProperty("lengthMs", *lengthMs);
     const double startMs = mode == "selection" && selection.has_value() ? selection->first : startBarMs();
     if (startMs > 0.0) p->setProperty("startMs", startMs);
+    if (leadInMs() > 0.0) p->setProperty("leadInMs", leadInMs());
     if (fmt == "mp3")
         p->setProperty("bitrateKbps", kBitrates[juce::jmax(0, bitrate.getSelectedItemIndex())]);
     else
@@ -446,13 +497,20 @@ void ExportDialog::finished(bool ok, const juce::String& message, const juce::Fi
     if (!rendering) return;
     rendering = false;
     stopTimer();
-    if (notify) notify(message, !ok);
+    auto said = message;
+    if (ok && file.existsAsFile() && writeTracklist.getToggleState() && tracklistText.getText().trim().isNotEmpty())
+    {
+        const auto list = file.withFileExtension("txt");
+        if (list.replaceWithText(tracklistText.getText().trim() + "\n")) said << " with its tracklist";
+        else said << " (couldn't write " << list.getFileName() << ")";
+    }
+    if (notify) notify(said, !ok);
     if (ok && file.existsAsFile())
     {
         juce::AlertWindow::showAsync(juce::MessageBoxOptions()
                                          .withIconType(juce::MessageBoxIconType::InfoIcon)
                                          .withTitle("Export Mixdown")
-                                         .withMessage(message)
+                                         .withMessage(said)
                                          .withButton("Show file")
                                          .withButton("OK"),
                                      [file](int result)
@@ -519,6 +577,9 @@ void ExportDialog::resized()
         length.setBounds(r.removeFromLeft(220));
         r.removeFromLeft(10);
         duration.setBounds(r.removeFromLeft(90));
+        r.removeFromLeft(12);
+        leadInLabel.setBounds(r.removeFromLeft(56));
+        leadIn.setBounds(r);
     }
     loudness.setBounds(row(loudnessLabel));
     {
@@ -543,6 +604,9 @@ void ExportDialog::resized()
     }
     comment.setBounds(row(commentLabel));
     auto buttons = area.removeFromBottom(32);
+    writeTracklist.setBounds(row(tracklistLabel));
+    area.removeFromBottom(10);
+    tracklistText.setBounds(area.withTrimmedLeft(kLabelW));
     exportButton.setBounds(buttons.removeFromRight(110));
     buttons.removeFromRight(8);
     cancelButton.setBounds(buttons.removeFromRight(90));

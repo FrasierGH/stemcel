@@ -231,6 +231,10 @@ bool dispatchLibrary(const DispatchContext& ctx)
     {
         stemcel::handleLibraryItemSetCoverHidden(payload, projectState);
     }
+    else if (type == "LIBRARY_ITEM_SET_SECTIONS")
+    {
+        stemcel::handleLibraryItemSetSections(payload, projectState);
+    }
     else if (type == "LIBRARY_ITEM_SET_COVER_OVERRIDE")
     {
         stemcel::handleLibraryItemSetCoverOverride(payload, projectState);

@@ -524,6 +524,11 @@ juce::var ProjectState::libraryAsJson() const
         {
             obj->setProperty("coverArtHidden", true);
         }
+        if (item.hasProperty(kSections))
+        {
+            if (const auto sections = juce::JSON::parse(item.getProperty(kSections).toString()); sections.isArray())
+                obj->setProperty("sections", sections);
+        }
         if (item.hasProperty(kCoverArtOverride))
         {
             const auto coverFile = item.getProperty(kCoverArtOverride).toString();

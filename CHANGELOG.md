@@ -1,6 +1,27 @@
 # Changelog
 
-## 1.9.0
+## 0.1.0
+
+The first Stemcel release: the native app, renamed, relicensed (AGPL-3.0) and with its own logo.
+
+### Added
+
+- **Automation lanes** under every track behind an **A** button, several at once, for every track, master, effect and plugin parameter.
+- **Transitions** drawn across both tracks; any clip near another can take one, with a recommendation from the energy at the join.
+- **Transition editor** curves drawn by hand per option, on a beat and bar grid.
+- **Arrangement sections** (intro, build, drop, breakdown, outro, vocal) from rekordbox's phrases or Stemcel's own analysis.
+- **Export**: a lead-in of silence, and a tracklist `.txt` beside the file (artist and title from tags or a cleaned file name).
+- **Shortcuts**: Alt/Option-drag copies a clip, the middle mouse button pans, and A, C, K, N, E, X, `,`/`.`, arrows, Esc, Cmd/Ctrl+A and Cmd/Ctrl+J.
+- **Auto mix on drop**: dropping several tracks offers to mix them on two decks.
+- **Seamless save** of an open, saved project every three minutes.
+- **Fusion Dark** theme, and rekordbox library browsing and writes (with a backup before the first write of a session).
+
+### Changed
+
+- Stems use UVR's recommended models only; the built-in ONNX stem engine is gone.
+- The **Vol** button is replaced by per-clip **Edit Volume Envelope** and the track **A** button.
+
+## Before Stemcel: 1.9.0
 
 ### Added
 

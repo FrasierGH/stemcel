@@ -1,4 +1,5 @@
 #include "AudioImport.h"
+#include "SectionAnalysis.h"
 
 #include "AppPaths.h"
 #include "KeyDetection.h"
@@ -59,6 +60,7 @@ struct AudioImporter::Prepared
     juce::File cover;   // temp file holding the embedded picture, when any
     double bpm = 0.0;   // rekordbox's tempo, applied as a manual tempo
     double beatAnchorSec = 0.0;
+    juce::var sections; // rekordbox's phrases, as the item's arrangement sections
 };
 
 AudioImporter::AudioImporter(EngineClient& client, ProjectMirror& projectMirror, Rekordbox& rb)
@@ -190,6 +192,8 @@ AudioImporter::Prepared AudioImporter::prepare(const ImportRequest& request)
         const auto detail = rekordbox.trackDetail(request.hints.rekordboxId);
         p.bpm = detail.gridBpm().value_or(request.hints.bpm);
         p.beatAnchorSec = detail.firstDownbeatSec().value_or(0.0);
+        if (const auto list = sections::fromRekordbox(detail, p.bpm, p.beatAnchorSec, p.durationMs / 1000.0); !list.empty())
+            p.sections = sections::toVar(list);
     }
     else if (request.hints.bpm > 0.0)
     {
@@ -336,6 +340,7 @@ void AudioImporter::commit(std::vector<Prepared> prepared, const Done& done)
                 if (p.bpm > 0.0)
                     engine.send("LIBRARY_ITEM_SET_MANUAL_TEMPO",
                                 object({{"itemId", itemId}, {"bpm", p.bpm}, {"beatAnchorSec", p.beatAnchorSec}}));
+                if (p.sections.isArray()) engine.send("LIBRARY_ITEM_SET_SECTIONS", object({{"itemId", itemId}, {"sections", p.sections}}));
                 mirror.refreshNow();
                 itemIds.add(itemId);
                 log::info("import", "imported " + path + " as " + itemId + (p.bpm > 0.0 ? " bpm=" + juce::String(p.bpm, 2) : ""));

@@ -779,6 +779,10 @@ class ProjectState : public juce::ValueTree::Listener
     // User override to hide a library tile's cover art without deleting the shared media
     // store image (a per-item display flag persisted in the project; marks dirty).
     bool setLibraryItemCoverArtHidden(const juce::String& itemId, bool hidden);
+    // An item's arrangement sections (intro, build, drop, breakdown...), as the JSON array the
+    // app sends: derived from rekordbox's phrases or Stemcel's own analysis, not undoable.
+    // Empty clears them.
+    bool setLibraryItemSections(const juce::String& itemId, const juce::String& sectionsJson);
 
     // Per-item custom cover: the basename of an override image copied into the project's
     // covers dir, shown instead of the shared media-store cover. Empty clears it. Persisted
@@ -1106,6 +1110,7 @@ class ProjectState : public juce::ValueTree::Listener
     static const juce::Identifier kClipName;
     static const juce::Identifier kCollapsed;
     static const juce::Identifier kCoverArtHidden;
+    static const juce::Identifier kSections;
     static const juce::Identifier kCoverArtOverride;
     static const juce::Identifier kLibraryItemId;
 

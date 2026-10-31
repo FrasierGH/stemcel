@@ -3,6 +3,7 @@
 #include <juce_core/juce_core.h>
 #include <juce_events/juce_events.h>
 
+#include <array>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -111,6 +112,9 @@ struct RekordboxTrackDetail
     std::vector<RekordboxBeat> beats;
     std::vector<RekordboxPhrase> phrases;
     juce::String mood;
+    // rekordbox's 3-band waveform (low, mid, high, each 0..1), `bandsPerSecond` a second.
+    std::vector<std::array<float, 3>> bands;
+    double bandsPerSecond = 2.0;
 
     // The grid's tempo (its first beat's) and its first downbeat, when there is a grid.
     std::optional<double> gridBpm() const;

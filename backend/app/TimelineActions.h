@@ -28,6 +28,11 @@ class TimelineActions
     // Returns the new right-half clip id, or empty when refused.
     juce::String splitClipAt(const juce::String& clipId, double atMs);
     juce::String duplicateClip(const juce::String& clipId);
+    // A copy of the clip (its properties and envelope too) at `positionMs` on `trackId`.
+    juce::String duplicateClipTo(const juce::String& clipId, const juce::String& trackId, double positionMs);
+    // Joins clips that were cut from one another (same track and source, end to end in both
+    // the timeline and the source) back into one; returns how many joins.
+    int joinClips(const std::vector<juce::String>& clipIds);
     void removeClips(const std::vector<juce::String>& clipIds);
     void moveClip(const juce::String& clipId, double positionMs, const juce::String& trackId);
     // Trim in timeline terms: new timeline start and end; source window follows via the
@@ -69,6 +74,12 @@ class TimelineActions
                        const std::vector<automation::Point>& points, const juce::String& gestureId = {},
                        bool gestureEnd = true);
     void setAutomationLanes(const juce::String& trackId, const std::vector<automation::Lane>& lanes);
+    // Shows or hides a track's (or the master's) automation lanes: the A button and key.
+    // Hiding remembers which lanes were shown, to bring them back; a track opened for the
+    // first time shows a lane for each parameter it has points for, else its gain.
+    void toggleAutomation(const juce::String& trackId);
+    // The parameters a track has automation points for.
+    juce::StringArray automatedParams(const juce::String& trackId) const;
     void addBeatRepeat(const juce::String& trackId, double startBeat, double lengthBeats, const juce::String& division);
     void deleteBeatRepeat(const juce::String& trackId, const juce::String& regionId);
 
@@ -137,6 +148,7 @@ class TimelineActions
     EngineClient& engine;
     ProjectMirror& mirror;
     std::map<juce::String, juce::String> duplicateTailBySource;
+    std::map<juce::String, std::vector<automation::Lane>> hiddenLanes; // by track, while its automation is hidden
     struct ClipboardItem
     {
         ClipModel clip;

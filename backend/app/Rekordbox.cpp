@@ -393,6 +393,10 @@ RekordboxTrackDetail Rekordbox::trackDetail(const juce::String& trackId)
     detail.ok = static_cast<bool>(json.getProperty("ok", false));
     detail.error = str(json, "error");
     detail.mood = str(json, "mood");
+    if (const auto* bands = json.getProperty("bands", {}).getArray())
+        for (const auto& b : *bands)
+            if (const auto* three = b.getArray(); three != nullptr && three->size() >= 3)
+                detail.bands.push_back({static_cast<float>((*three)[0]), static_cast<float>((*three)[1]), static_cast<float>((*three)[2])});
     if (const auto* cues = json.getProperty("cues", {}).getArray())
         for (const auto& c : *cues)
         {

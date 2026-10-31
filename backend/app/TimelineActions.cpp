@@ -4,6 +4,7 @@
 #include "Log.h"
 
 #include <algorithm>
+#include <map>
 #include <set>
 #include <cmath>
 
@@ -331,21 +332,7 @@ juce::String TimelineActions::duplicateClip(const juce::String& clipId)
         }
     }
 
-    const auto newId = EngineClient::newId("clip");
-    engine.inUndoGroup("Duplicate clip",
-                       [&]
-                       {
-                           engine.send("CLIP_ADD", obj({{"trackId", clip.trackId},
-                                                        {"clipId", newId},
-                                                        {"libraryItemId", clip.libraryItemId},
-                                                        {"positionMs", newStart},
-                                                        {"inMs", clip.inMs},
-                                                        {"durationMs", clip.durationMs},
-                                                        {"colorIndex", clip.colorIndex >= 0 ? juce::var(clip.colorIndex)
-                                                                                             : juce::var()}}));
-                           replayClipProperties(clip, newId, /*includeLock*/ true);
-                           if (clip.envelope.size() >= 2) setClipEnvelope(newId, clip.envelope);
-                       });
+    const auto newId = duplicateClipTo(clipId, clip.trackId, newStart);
     duplicateTailBySource[clipId] = newId;
     return newId;
 }
@@ -362,6 +349,71 @@ void TimelineActions::removeClips(const std::vector<juce::String>& clipIds)
                        {
                            for (const auto& id : removable) engine.send("CLIP_REMOVE", obj({{"clipId", id}}));
                        });
+}
+
+juce::String TimelineActions::duplicateClipTo(const juce::String& clipId, const juce::String& trackId, double positionMs)
+{
+    const auto* found = model().findClip(clipId);
+    if (found == nullptr || model().findTrack(trackId) == nullptr) return {};
+    const ClipModel clip = *found;
+    const auto newId = EngineClient::newId("clip");
+    engine.inUndoGroup("Duplicate clip",
+                       [&]
+                       {
+                           engine.send("CLIP_ADD", obj({{"trackId", trackId},
+                                                        {"clipId", newId},
+                                                        {"libraryItemId", clip.libraryItemId},
+                                                        {"positionMs", juce::jmax(0.0, positionMs)},
+                                                        {"inMs", clip.inMs},
+                                                        {"durationMs", clip.durationMs},
+                                                        {"colorIndex", clip.colorIndex >= 0 ? juce::var(clip.colorIndex)
+                                                                                             : juce::var()}}));
+                           replayClipProperties(clip, newId, /*includeLock*/ true);
+                           if (clip.envelope.size() >= 2) setClipEnvelope(newId, clip.envelope);
+                       });
+    return newId;
+}
+
+int TimelineActions::joinClips(const std::vector<juce::String>& clipIds)
+{
+    // Selected clips by track, in timeline order.
+    std::map<juce::String, std::vector<ClipModel>> byTrack;
+    for (const auto& id : clipIds)
+        if (const auto* c = model().findClip(id); c != nullptr && !c->locked) byTrack[c->trackId].push_back(*c);
+    int joins = 0;
+    engine.inUndoGroup("Join clips",
+                       [&]
+                       {
+                           for (auto& [trackId, clips] : byTrack)
+                           {
+                               std::sort(clips.begin(), clips.end(), [](const ClipModel& a, const ClipModel& b) { return a.offsetMs < b.offsetMs; });
+                               for (size_t i = 0; i + 1 < clips.size();)
+                               {
+                                   auto& a = clips[i];
+                                   const auto& b = clips[i + 1];
+                                   const bool sameCut = a.libraryItemId == b.libraryItemId && a.reversed == b.reversed
+                                                        && std::abs(a.endMs() - b.offsetMs) < 1.0
+                                                        && std::abs(a.inMs + a.durationMs - b.inMs) < 1.0
+                                                        && std::abs(effectiveRatio(a) - effectiveRatio(b)) < 1e-6
+                                                        && std::abs(a.semitones - b.semitones) < 1e-6;
+                                   if (!sameCut)
+                                   {
+                                       ++i;
+                                       continue;
+                                   }
+                                   // The right piece goes; the left one grows over where it was.
+                                   const double end = b.endMs();
+                                   removeClips({b.id});
+                                   trimClip(a.id, a.offsetMs, end);
+                                   a.durationMs += b.durationMs;
+                                   a.effectiveDurationMs = end - a.offsetMs;
+                                   clips.erase(clips.begin() + static_cast<std::ptrdiff_t>(i + 1));
+                                   ++joins;
+                               }
+                           }
+                       });
+    if (joins == 0) notify("Nothing to join: select clips split from one another, end to end.", false);
+    return joins;
 }
 
 void TimelineActions::moveClip(const juce::String& clipId, double positionMs, const juce::String& trackId)
@@ -874,6 +926,36 @@ void TimelineActions::setAutomation(const juce::String& trackId, const juce::Str
 void TimelineActions::setAutomationLanes(const juce::String& trackId, const std::vector<automation::Lane>& lanes)
 {
     engine.send("TRACK_SET_AUTOMATION_LANE_VIEW", obj({{"trackId", trackId}, {"lanes", automation::toVar(lanes)}}));
+}
+
+juce::StringArray TimelineActions::automatedParams(const juce::String& trackId) const
+{
+    juce::StringArray out;
+    const auto* track = trackId == kMasterTrackId ? &model().master : model().findTrack(trackId);
+    if (track == nullptr) return out;
+    if (const auto* curves = track->raw.getProperty("automation", {}).getArray())
+        for (const auto& curve : *curves)
+            if (const auto* points = curve.getProperty("points", {}).getArray(); points != nullptr && !points->isEmpty())
+                out.addIfNotAlreadyThere(curve.getProperty("paramId", {}).toString());
+    return out;
+}
+
+void TimelineActions::toggleAutomation(const juce::String& trackId)
+{
+    const auto* track = trackId == kMasterTrackId ? &model().master : model().findTrack(trackId);
+    if (track == nullptr) return;
+    if (auto shown = automation::lanesOf(*track); !shown.empty())
+    {
+        hiddenLanes[trackId] = std::move(shown);
+        setAutomationLanes(trackId, {});
+        return;
+    }
+    std::vector<automation::Lane> next;
+    if (const auto it = hiddenLanes.find(trackId); it != hiddenLanes.end()) next = it->second;
+    if (next.empty())
+        for (const auto& id : automatedParams(trackId)) next.push_back({id, automation::kDefaultLaneHeight});
+    if (next.empty()) next.push_back({"level", automation::kDefaultLaneHeight});
+    setAutomationLanes(trackId, next);
 }
 
 // ── clipboard ───────────────────────────────────────────────────────────────

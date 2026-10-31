@@ -62,6 +62,8 @@ struct LibraryContext
     std::function<void(std::vector<juce::String> itemIds, bool reorder, const juce::String& style, bool matchKeys)> autoMix;
     // The vocals of one track over the instrumental of another (MashupBuilder).
     std::function<void(const juce::String& vocalItemId, const juce::String& beatItemId)> mashup;
+    // Stemcel's own analysis of a track's sections (SectionAnalyser), run again.
+    std::function<void(const juce::String& itemId)> analyseSections;
 };
 
 class LibraryItemsView;
@@ -76,6 +78,9 @@ class LibraryPanel final : public juce::Component, public juce::FileDragAndDropT
   public:
     explicit LibraryPanel(LibraryContext context);
     ~LibraryPanel() override;
+    // The Track FX and Project FX tabs' panels (TrackFxView, ProjectFxView).
+    juce::Component* trackFxPanel() const { return trackFx.get(); }
+    juce::Component* projectFxPanel() const { return projectFx.get(); }
 
     void paint(juce::Graphics&) override;
     void resized() override;

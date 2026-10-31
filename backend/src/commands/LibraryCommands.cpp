@@ -387,6 +387,20 @@ void handleLibraryItemSetCoverHidden(const juce::var& payload, ProjectState& pro
     projectState.setLibraryItemCoverArtHidden(itemId, hidden);
 }
 
+void handleLibraryItemSetSections(const juce::var& payload, ProjectState& projectState)
+{
+    const juce::String itemId = tryGetRequiredString(payload, "itemId").value_or(juce::String{});
+    const auto sections = payload.getProperty("sections", {});
+    const int count = sections.isArray() ? sections.getArray()->size() : 0;
+    stemcel::log::info("bridge", "recv LIBRARY_ITEM_SET_SECTIONS itemId=" + itemId + " sections=" + juce::String(count));
+    if (itemId.isEmpty())
+    {
+        stemcel::log::warn("bridge", "LIBRARY_ITEM_SET_SECTIONS missing itemId");
+        return;
+    }
+    projectState.setLibraryItemSections(itemId, count > 0 ? juce::JSON::toString(sections, true) : juce::String{});
+}
+
 void handleLibraryItemSetCoverOverride(const juce::var& payload, ProjectState& projectState)
 {
     const juce::String itemId = tryGetRequiredString(payload, "itemId").value_or(juce::String{});

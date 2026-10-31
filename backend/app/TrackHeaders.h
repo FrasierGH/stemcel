@@ -8,14 +8,16 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <functional>
 #include <map>
 #include <memory>
 
 namespace stemcel::native
 {
 
-// One track's header: colour, name, mute/solo, volume, pan and meter (the renderer's
-// TrackHeaderPanel row).
+// One track's header: colour, name, automation (A), mute/solo, gain, pan and meter (the
+// renderer's TrackHeaderPanel row), and beside each automation lane its header: the
+// parameter it shows (click to change), + for another lane and x to close it.
 class TrackHeaderRow final : public juce::Component
 {
   public:
@@ -44,10 +46,13 @@ class TrackHeaderRow final : public juce::Component
 
     juce::Label name;
     juce::String storedName, shownName; // the track's name, and what the label shows for it
+    juce::TextButton automationButton{"A"};
     juce::TextButton mute{"M"};
     juce::TextButton solo{"S"};
     juce::Slider volume{juce::Slider::LinearHorizontal, juce::Slider::NoTextBox};
     juce::Slider pan{juce::Slider::LinearHorizontal, juce::Slider::NoTextBox};
+    // What each slider is, and its value while it is dragged.
+    juce::Label gainCaption{{}, "Gain"}, panCaption{{}, "Pan"};
     int colourIndex = 0;
     int clipLaneHeight = 0;
     int displayIndex = 0;
@@ -59,6 +64,17 @@ class TrackHeaderRow final : public juce::Component
     void toggleLane(const juce::String& paramId);
     juce::String laneCaption(const juce::String& paramId) const;
     void addPluginLaneMenus(juce::PopupMenu& menu);
+    // The parameters a lane can show: those with points first, then the track's (or the
+    // master's), then each plugin's. `chosen` gets the one picked.
+    void addParamItems(juce::PopupMenu& menu, const juce::String& current, std::function<void(const juce::String&)> chosen);
+    void showLaneParamMenu(const juce::String& laneParam, bool adding);
+    juce::StringArray automated; // parameters with points
+    struct LaneHit
+    {
+        juce::String paramId;
+        juce::Rectangle<int> caption, add, close;
+    };
+    std::vector<LaneHit> laneHits;
     bool isSilenced = false;
     juce::Rectangle<int> meterArea;
     juce::Rectangle<int> swatchArea;

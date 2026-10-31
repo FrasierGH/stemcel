@@ -57,6 +57,9 @@ class TrackFxView final : public juce::Component, private juce::ChangeListener
     ~TrackFxView() override;
     void paint(juce::Graphics&) override;
     void resized() override;
+    // Each knob shown (by project-state key) with the automation lane that drives it (empty
+    // when none does).
+    std::vector<std::pair<juce::String, juce::String>> knobAutomation() const;
 
   private:
     void changeListenerCallback(juce::ChangeBroadcaster*) override;
@@ -81,6 +84,8 @@ class ProjectFxView final : public juce::Component, private juce::ChangeListener
     ~ProjectFxView() override;
     void paint(juce::Graphics&) override;
     void resized() override;
+    // Each knob shown with the master automation lane that drives it (empty when none does).
+    std::vector<std::pair<juce::String, juce::String>> knobAutomation() const;
 
   private:
     void changeListenerCallback(juce::ChangeBroadcaster*) override;

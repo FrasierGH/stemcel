@@ -11,7 +11,7 @@ endif()
 set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS version for the backend")
 
 project(StemcelBackend
-    VERSION 1.9.0
+    VERSION 0.1.0
     DESCRIPTION "Stemcel headless audio backend"
     LANGUAGES C CXX)
 
@@ -780,6 +780,9 @@ if(STEMCEL_BUILD_NATIVE_APP)
         app/MediaStore.cpp
         app/MidiControllerActions.cpp
         app/Rekordbox.cpp
+        app/SectionAnalysis.cpp
+        app/SectionAnalyser.cpp
+        app/Tracklist.cpp
         app/RekordboxBrowser.cpp
         app/EngineClient.cpp
         app/ExportDialog.cpp

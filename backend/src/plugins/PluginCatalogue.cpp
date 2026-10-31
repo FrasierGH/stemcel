@@ -165,6 +165,21 @@ std::unique_ptr<juce::AudioPluginInstance> PluginCatalogue::createInstance(
     return formatManager.createPluginInstance(description, sampleRate, blockSize, errorMessage);
 }
 
+int PluginCatalogue::forgetPluginsIn(const juce::File& folder)
+{
+    int removed = 0;
+    for (const auto& type : knownPlugins.getTypes())
+    {
+        if (!juce::File::isAbsolutePath(type.fileOrIdentifier)) continue;
+        const juce::File file(type.fileOrIdentifier);
+        if (file != folder && !file.isAChildOf(folder)) continue;
+        knownPlugins.removeType(type);
+        ++removed;
+    }
+    if (removed > 0) saveKnownPlugins();
+    return removed;
+}
+
 int PluginCatalogue::removeUninstalledPlugins()
 {
     // The catalogue is a cache that JUCE only ever adds to, so a plugin uninstalled from the

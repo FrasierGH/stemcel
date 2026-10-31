@@ -6,6 +6,7 @@
 #include "BeatStutter.h"
 #include "Automation.h"
 #include "MixTransitions.h"
+#include "SectionAnalysis.h"
 #include "TransitionEditor.h"
 #include "Theme.h"
 
@@ -560,6 +561,15 @@ void TimelineView::paintClip(juce::Graphics& g, const ClipModel& clip, juce::Rec
         }
     }
 
+    // The clip whose envelope is being edited and has none yet: its unity line, to click on.
+    if (view.envelopeClipId == clip.id && clip.envelope.size() < 2)
+    {
+        const auto body = r.withTrimmedTop(kClipHeaderPx);
+        const float y = body.getBottom() - body.getHeight() / 1.5f;
+        g.setColour(colours::amber400.withAlpha(0.8f));
+        const float dashes[] = {4.0f, 3.0f};
+        g.drawDashedLine({body.getX(), y, body.getRight(), y}, dashes, 2, 1.5f);
+    }
     // Volume envelope, drawn over the body.
     if (clip.envelope.size() >= 2)
     {
@@ -577,7 +587,7 @@ void TimelineView::paintClip(juce::Graphics& g, const ClipModel& clip, juce::Rec
         }
         g.setColour(colours::amber400.withAlpha(0.8f * alpha));
         g.strokePath(env, juce::PathStrokeType(1.5f));
-        if (view.volumeMode)
+        if (view.envelopeClipId == clip.id)
             for (const auto& p : clip.envelope)
             {
                 const float x = body.getX() + static_cast<float>(p.timeMs / juce::jmax(1.0, clip.effectiveDurationMs)) * body.getWidth();
@@ -589,10 +599,44 @@ void TimelineView::paintClip(juce::Graphics& g, const ClipModel& clip, juce::Rec
             }
     }
 
+    paintClipSections(g, clip, r.withTrimmedTop(kClipHeaderPx), alpha);
+
     g.setColour(selected ? colours::zinc100 : palette.border.withAlpha(alpha));
     g.drawRoundedRectangle(r.reduced(0.5f), 3.0f, selected ? 2.0f : 1.0f);
 
     paintClipHeader(g, clip, header, palette.border, alpha);
+}
+
+// The source's arrangement sections, as a labelled strip along the top of the clip's body.
+void TimelineView::paintClipSections(juce::Graphics& g, const ClipModel& clip, juce::Rectangle<float> body, float alpha)
+{
+    const auto* item = model().findLibraryItem(clip.libraryItemId);
+    if (item == nullptr || body.getHeight() < 30.0f) return;
+    const auto list = sections::of(*item);
+    if (list.empty()) return;
+    const auto strip = body.withHeight(13.0f);
+    const double ratio = clip.effectiveTempoRatio > 0.0 ? clip.effectiveTempoRatio : 1.0;
+    auto toX = [&](double sourceSec)
+    { return static_cast<float>(view.msToX(clip.offsetMs + (sourceSec * 1000.0 - clip.inMs) / ratio)); };
+    g.saveState();
+    g.reduceClipRegion(strip.toNearestInt());
+    g.setFont(uiFont(9.0f, true));
+    for (const auto& s : list)
+    {
+        const float x0 = juce::jmax(strip.getX(), toX(s.startSec));
+        const float x1 = juce::jmin(strip.getRight(), toX(s.endSec));
+        if (x1 <= x0) continue;
+        const auto cell = juce::Rectangle<float>(x0, strip.getY(), x1 - x0, strip.getHeight());
+        const auto colour = sections::colourFor(s.kind);
+        g.setColour(colour.withAlpha(0.75f * alpha));
+        g.fillRect(cell.reduced(0.5f, 0.0f));
+        if (cell.getWidth() > 24.0f)
+        {
+            g.setColour(juce::Colours::white.withAlpha(0.95f * alpha));
+            g.drawText(sections::caption(s), cell.reduced(3.0f, 0.0f).toNearestInt(), juce::Justification::centredLeft, true);
+        }
+    }
+    g.restoreState();
 }
 
 std::vector<int> TimelineView::clipHeaderBadges(const ClipModel& clip) const
@@ -734,7 +778,7 @@ void TimelineView::paint(juce::Graphics& g)
                 if (r.getRight() < 0.0f || r.getX() > static_cast<float>(getWidth())) continue;
                 const bool dragging = drag != DragKind::none && drag != DragKind::seek && drag != DragKind::range
                                       && drag != DragKind::marker && c.id == dragClipId;
-                paintClip(g, c, r, silenced, trackColor, dragging ? 0.35f : 1.0f);
+                paintClip(g, c, r, silenced, trackColor, dragging && !dragDuplicates ? 0.35f : 1.0f);
             }
 
             // Crossfades: the overlap between each transition's two clips.
@@ -842,32 +886,144 @@ void TimelineView::paintMixTransitions(juce::Graphics& g)
                 }
     const auto* list = model().raw.getProperty("mixTransitions", {}).getArray();
     if (list == nullptr) return;
-    g.setFont(uiFont(9.0f, true));
+    const auto violet = colours::violet500;
     for (const auto& t : *list)
-        if (const auto bar = transitionBar(t))
+    {
+        const auto shape = transitionShape(t);
+        if (!shape) continue;
+        // The window over both clips, the outgoing one fading out and the incoming one in.
+        for (const auto& [area, outgoing] : {std::pair{shape->out, true}, std::pair{shape->in, false}})
         {
-            g.setColour(colours::violet500.withAlpha(0.85f));
-            g.fillRoundedRectangle(*bar, 3.0f);
-            g.setColour(colours::zinc100);
-            g.drawText(juce::String(juce::CharPointer_UTF8("\xe2\x87\x84 ")) + mix::labelOf(t), bar->reduced(4.0f, 0.0f).toNearestInt(),
-                       juce::Justification::centredLeft, true);
+            if (area.isEmpty()) continue;
+            g.setColour(violet.withAlpha(0.18f));
+            g.fillRect(area);
+            g.setColour(violet.withAlpha(0.7f));
+            g.drawRect(area, 1.0f);
+            juce::Path fade;
+            const auto body = area.reduced(2.0f, 6.0f);
+            constexpr int kSteps = 24;
+            for (int i = 0; i <= kSteps; ++i)
+            {
+                const float u = static_cast<float>(i) / kSteps;
+                // Equal-power shape: the curve the default blend follows.
+                const float gain = outgoing ? std::cos(u * juce::MathConstants<float>::halfPi)
+                                            : std::sin(u * juce::MathConstants<float>::halfPi);
+                const float x = body.getX() + u * body.getWidth();
+                const float y = body.getBottom() - gain * body.getHeight();
+                if (i == 0) fade.startNewSubPath(x, y);
+                else fade.lineTo(x, y);
+            }
+            g.setColour(colours::zinc100.withAlpha(0.85f));
+            g.strokePath(fade, juce::PathStrokeType(1.6f));
         }
+        if (!shape->connector.isEmpty())
+        {
+            g.setColour(violet.withAlpha(0.55f));
+            g.fillRect(shape->connector);
+        }
+        g.setColour(violet.withAlpha(0.95f));
+        g.fillRoundedRectangle(shape->pill, 4.0f);
+        g.setColour(colours::zinc100);
+        g.setFont(uiFont(10.0f, true));
+        g.drawText(juce::String(juce::CharPointer_UTF8("\xe2\x87\x84 ")) + mix::labelOf(t), shape->pill.reduced(5.0f, 0.0f).toNearestInt(),
+                   juce::Justification::centred, true);
+    }
 }
 
-std::optional<juce::Rectangle<float>> TimelineView::transitionBar(const juce::var& record) const
+std::optional<TimelineView::TransitionShape> TimelineView::transitionShape(const juce::var& record) const
 {
     const auto* in = model().findClip(record.getProperty("inClipId", {}).toString());
     const auto* out = model().findClip(record.getProperty("outClipId", {}).toString());
     if (in == nullptr || out == nullptr) return std::nullopt;
+    const auto x0 = static_cast<float>(view.msToX(static_cast<double>(record.getProperty("startMs", 0.0))));
+    const auto x1 = juce::jmax(x0 + 4.0f, static_cast<float>(view.msToX(static_cast<double>(record.getProperty("endMs", 0.0)))));
+    std::optional<juce::Rectangle<float>> outArea, inArea;
     for (const auto& row : rows)
+    {
+        if (row.trackId == out->trackId)
+        {
+            const auto b = clipBounds(*out, row);
+            outArea = juce::Rectangle<float>(x0, b.getY(), x1 - x0, b.getHeight()).getIntersection(b);
+        }
         if (row.trackId == in->trackId)
         {
-            const auto x0 = static_cast<float>(view.msToX(static_cast<double>(record.getProperty("startMs", 0.0))));
-            const auto x1 = static_cast<float>(view.msToX(static_cast<double>(record.getProperty("endMs", 0.0))));
-            const auto y = static_cast<float>(row.top + row.clipHeight + view.headerHeight() - view.scrollY) - 24.0f;
-            return juce::Rectangle<float>(x0, y, juce::jmax(4.0f, x1 - x0), 12.0f);
+            const auto b = clipBounds(*in, row);
+            inArea = juce::Rectangle<float>(x0, b.getY(), x1 - x0, b.getHeight()).getIntersection(b);
         }
-    return std::nullopt;
+    }
+    if (!outArea || !inArea) return std::nullopt;
+    TransitionShape shape{*outArea, *inArea, {}, {}};
+    // The connector runs between the two clips across whatever rows lie between them.
+    const auto& upper = outArea->getY() <= inArea->getY() ? *outArea : *inArea;
+    const auto& lower = outArea->getY() <= inArea->getY() ? *inArea : *outArea;
+    const float cx = (x0 + x1) / 2.0f;
+    if (lower.getY() > upper.getBottom()) shape.connector = {cx - 3.0f, upper.getBottom(), 6.0f, lower.getY() - upper.getBottom()};
+    // The name straddles the join: across the boundary between the two clips.
+    const float pillWidth = juce::jlimit(70.0f, 240.0f, x1 - x0);
+    const float boundary = lower.getY() > upper.getBottom() ? (upper.getBottom() + lower.getY()) / 2.0f : upper.getBottom();
+    shape.pill = {cx - pillWidth / 2.0f, boundary - 9.0f, pillWidth, 18.0f};
+    return shape;
+}
+
+std::vector<std::pair<juce::String, juce::String>> TimelineView::nearbyPairs(const juce::String& clipId) const
+{
+    std::vector<std::pair<juce::String, juce::String>> out;
+    const auto* clip = model().findClip(clipId);
+    if (clip == nullptr) return out;
+    const auto curve = model().tempoCurve();
+    constexpr double kReachBeats = 16.0 * 4.0;
+    const ClipModel* next = nullptr;
+    const ClipModel* previous = nullptr;
+    double nextGap = kReachBeats, previousGap = kReachBeats;
+    for (const auto& track : model().tracks)
+    {
+        if (track.id == clip->trackId) continue;
+        for (const auto& other : track.clips)
+        {
+            if (other.offsetMs < clip->endMs() && clip->offsetMs < other.endMs()) continue; // overlapping: pairsFor's
+            if (const double gap = curve.beatAt(other.offsetMs) - curve.beatAt(clip->endMs()); gap >= 0.0 && gap <= nextGap)
+            {
+                nextGap = gap;
+                next = &other;
+            }
+            if (const double gap = curve.beatAt(clip->offsetMs) - curve.beatAt(other.endMs()); gap >= 0.0 && gap <= previousGap)
+            {
+                previousGap = gap;
+                previous = &other;
+            }
+        }
+    }
+    if (next != nullptr) out.emplace_back(clip->id, next->id);
+    if (previous != nullptr) out.emplace_back(previous->id, clip->id);
+    return out;
+}
+
+void TimelineView::applyTransitionPlacing(const juce::String& outId, const juce::String& inId, const juce::String& presetId)
+{
+    const auto* out = model().findClip(outId);
+    const auto* in = model().findClip(inId);
+    const auto* preset = mix::find(presetId);
+    if (out == nullptr || in == nullptr || preset == nullptr) return;
+    if (mix::overlap(*out, *in))
+    {
+        mix::apply(actions.engineClient(), actions, model(), outId, inId, presetId);
+        return;
+    }
+    // The incoming clip moves so it starts the preset's bars before the outgoing one ends, on
+    // a bar, and at least a bar into the outgoing clip.
+    const auto curve = model().tempoCurve();
+    const double endBeat = curve.beatAt(out->endMs());
+    double startBeat = std::round((endBeat - preset->bars * 4.0) / 4.0) * 4.0;
+    startBeat = juce::jmax(startBeat, std::ceil(curve.beatAt(out->offsetMs) / 4.0) * 4.0 + 4.0);
+    if (startBeat >= endBeat) startBeat = endBeat - 4.0;
+    const double offsetMs = juce::jmax(0.0, curve.msAtBeat(startBeat));
+    const auto trackId = in->trackId;
+    actions.engineClient().inUndoGroup("Transition", [&]
+    {
+        actions.moveClip(inId, offsetMs, trackId);
+        mirror.refreshNow();
+        mix::apply(actions.engineClient(), actions, model(), outId, inId, presetId);
+    });
 }
 
 // ── tempo lane ──────────────────────────────────────────────────────────────
@@ -1039,8 +1195,19 @@ void TimelineView::mouseDown(const juce::MouseEvent& e)
 {
     grabKeyboardFocus();
     drag = DragKind::none;
+    dragDuplicates = false;
     rangePreview.reset();
     const double ms = juce::jmax(0.0, view.xToMs(e.x));
+
+    // The middle button pans, anywhere, selecting and moving nothing (FL Studio's grab).
+    if (e.mods.isMiddleButtonDown())
+    {
+        drag = DragKind::pan;
+        panStartScrollX = view.scrollXPx;
+        panStartScrollY = view.scrollY;
+        setMouseCursor(juce::MouseCursor::DraggingHandCursor);
+        return;
+    }
 
     if (tempoLaneMouseDown(e)) return;
     if (e.y < VS::kRulerHeight)
@@ -1102,7 +1269,8 @@ void TimelineView::mouseDown(const juce::MouseEvent& e)
         return;
     }
 
-    if (const auto hit = clipAt(e.getPosition()); hit.has_value() && view.volumeMode && !e.mods.isPopupMenu() && !hit->clip->locked)
+    if (const auto hit = clipAt(e.getPosition()); hit.has_value() && hit->clip->id == view.envelopeClipId && !e.mods.isPopupMenu()
+                                                   && !hit->clip->locked)
     {
         const auto& clip = *hit->clip;
         const auto body = hit->bounds.withTrimmedTop(kClipHeaderPx);
@@ -1145,8 +1313,10 @@ void TimelineView::mouseDown(const juce::MouseEvent& e)
             showClipMenu(clip.id, ms);
             return;
         }
-        if (clip.locked) return;
+        if (clip.locked && !(e.mods.isAltDown() && hit->edge == DragKind::move)) return;
         drag = hit->edge;
+        // Alt/Option-drag copies the clip (Logic, Ableton); a locked clip can still be copied.
+        dragDuplicates = drag == DragKind::move && e.mods.isAltDown();
         dragClipId = clip.id;
         dragAnchorMs = ms;
         dragOriginStartMs = clip.offsetMs;
@@ -1168,7 +1338,16 @@ void TimelineView::mouseDown(const juce::MouseEvent& e)
 void TimelineView::mouseDrag(const juce::MouseEvent& e)
 {
     const double ms = juce::jmax(0.0, view.xToMs(e.x));
-    const bool free = e.mods.isAltDown();
+    if (drag == DragKind::pan)
+    {
+        view.scrollXPx = panStartScrollX - e.getDistanceFromDragStartX();
+        view.scrollY = panStartScrollY - e.getDistanceFromDragStartY();
+        clampScroll();
+        view.changed();
+        return;
+    }
+    // Cmd/Ctrl drags off the grid (Alt too, except on a clip, where Alt copies it).
+    const bool free = e.mods.isCommandDown() || e.mods.isCtrlDown() || (e.mods.isAltDown() && drag != DragKind::move);
     auto snapped = [&](double t) { return free ? juce::jmax(0.0, t) : actions.snap(t); };
     if (tempoDragIndex >= 0 && tempoDragIndex < static_cast<int>(tempoDraft.size()))
     {
@@ -1281,6 +1460,7 @@ void TimelineView::mouseDrag(const juce::MouseEvent& e)
         dragPreviewEndMs = juce::jmax(snapped(dragOriginEndMs + (ms - dragAnchorMs)), dragOriginStartMs + 10.0);
         repaint();
         break;
+    case DragKind::pan:
     case DragKind::none:
         break;
     }
@@ -1327,7 +1507,25 @@ void TimelineView::mouseUp(const juce::MouseEvent& e)
         actions.setAutomation(autoTrackId, autoParamId, autoPoints, autoGestureId, true);
         autoGestureId.clear();
         break;
+    case DragKind::pan:
+        persistView();
+        setMouseCursor(juce::MouseCursor::NormalCursor);
+        break;
     case DragKind::move:
+        if (dragDuplicates)
+        {
+            if (moved)
+            {
+                const auto copy = actions.duplicateClipTo(dragClipId, dragPreviewTrackId, dragPreviewStartMs);
+                if (copy.isNotEmpty())
+                {
+                    view.selectedClipIds = {copy};
+                    view.selectedTrackId = dragPreviewTrackId;
+                    view.changed();
+                }
+            }
+            break;
+        }
         if (moved
             && (std::abs(dragPreviewStartMs - dragOriginStartMs) > 0.01
                 || dragPreviewTrackId != (model().findClip(dragClipId) != nullptr
@@ -1371,14 +1569,14 @@ void TimelineView::mouseDoubleClick(const juce::MouseEvent& e)
     if (tempoLaneDoubleClick(e)) return;
     if (const auto* list = model().raw.getProperty("mixTransitions", {}).getArray())
         for (const auto& t : *list)
-            if (const auto bar = transitionBar(t); bar.has_value() && bar->expanded(0.0f, 2.0f).contains(e.position))
+            if (const auto shape = transitionShape(t); shape.has_value() && shape->contains(e.position))
             {
                 drag = DragKind::none;
                 TransitionEditor::show(mirror, actions, t.getProperty("outClipId", {}).toString(), t.getProperty("inClipId", {}).toString());
                 return;
             }
-    if (view.volumeMode)
-        if (const auto hit = clipAt(e.getPosition()))
+    if (view.envelopeClipId.isNotEmpty())
+        if (const auto hit = clipAt(e.getPosition()); hit.has_value() && hit->clip->id == view.envelopeClipId)
         {
             auto points = hit->clip->envelope;
             const int index = envelopePointAt(*hit->clip, hit->bounds.withTrimmedTop(kClipHeaderPx), e.getPosition());
@@ -1740,11 +1938,42 @@ void TimelineView::showClipMenu(const juce::String& clipId, double atMs)
     menu.addItem("Split Here", atMs > clip->offsetMs && atMs < clip->endMs() && !clip->locked, false,
                  [this, clipId, atMs] { actions.splitClipAt(clipId, actions.snap(atMs)); });
     menu.addItem("Duplicate", [this, clipId] { actions.duplicateClip(clipId); });
+    // Clicks on the clip add and drag gain points; double-click one to remove it.
+    menu.addItem("Edit Volume Envelope", !clip->locked, view.envelopeClipId == clipId,
+                 [this, clipId]
+                 {
+                     view.envelopeClipId = view.envelopeClipId == clipId ? juce::String() : clipId;
+                     view.changed();
+                     repaint();
+                 });
     menu.addItem(clip->locked ? "Unlock" : "Lock", [this, clipId, locked = clip->locked] { actions.setClipLocked(clipId, !locked); });
     // Key lock, as on a DJ deck: off, a tempo change moves the pitch with it.
     const bool masterTempo = clip->warpMode != "repitch";
     menu.addItem("Master Tempo", true, masterTempo, [this, clipId, masterTempo] { actions.setClipMasterTempo(clipId, !masterTempo); });
     menu.addItem("Rename", [this, clipId] { startClipRename(clipId); });
+    // The source's arrangement: analysed (again), and its section starts as markers.
+    if (const auto* item = model().findLibraryItem(clip->libraryItemId); item != nullptr && onAnalyseSections)
+    {
+        juce::PopupMenu sectionsMenu;
+        sectionsMenu.addItem(sections::of(*item).empty() ? "Analyse Sections" : "Analyse Sections Again",
+                             [this, id = item->id] { onAnalyseSections(id); });
+        const auto list = sections::of(*item);
+        sectionsMenu.addItem("Add Sections as Markers", !list.empty(), false, [this, clipId, list]
+                             {
+                                 const auto* c = model().findClip(clipId);
+                                 if (c == nullptr) return;
+                                 const double ratio = c->effectiveTempoRatio > 0.0 ? c->effectiveTempoRatio : 1.0;
+                                 actions.engineClient().inUndoGroup("Add section markers", [&]
+                                 {
+                                     for (const auto& s : list)
+                                     {
+                                         const double at = c->offsetMs + (s.startSec * 1000.0 - c->inMs) / ratio;
+                                         if (at >= c->offsetMs && at < c->endMs()) actions.addMarker(at);
+                                     }
+                                 });
+                             });
+        menu.addSubMenu("Sections", sectionsMenu);
+    }
     juce::PopupMenu colour;
     colour.addItem("Track colour", [this, clipId] { actions.setClipColor(clipId, -1); });
     for (int i = 0; i < kPaletteSize; ++i)
@@ -1793,28 +2022,33 @@ void TimelineView::showClipMenu(const juce::String& clipId, double atMs)
         menu.addSubMenu("Key", keyMenu);
     }
 
-    // DJ transitions with the clips this one overlaps on other tracks.
-    const auto pairs = mix::pairsFor(model(), clipId);
-    if (!pairs.empty())
+    // DJ transitions: with the clips this one overlaps on other tracks, and the nearest ones
+    // it could hand over to or take over from (they move into place when one is applied).
+    auto pairs = mix::pairsFor(model(), clipId);
+    const auto nearby = nearbyPairs(clipId);
+    pairs.insert(pairs.end(), nearby.begin(), nearby.end());
     {
         juce::PopupMenu transitions;
+        if (pairs.empty())
+            transitions.addItem("No clip on another track within 16 bars", false, false, [] {});
         for (const auto& [outId, inId] : pairs)
         {
             const auto* other = model().findClip(outId == clipId ? inId : outId);
             const auto* record = mix::recordFor(model(), outId, inId);
             const auto current = record != nullptr ? record->getProperty("preset", {}).toString() : juce::String();
             juce::PopupMenu presetsMenu;
+            juce::String recommended;
             {
                 const auto* outClip = model().findClip(outId);
                 const auto* inClip = model().findClip(inId);
                 const auto pick = automix::choose(model(), waveforms, outClip != nullptr ? model().findLibraryItem(outClip->libraryItemId) : nullptr,
                                                   inClip != nullptr ? model().findLibraryItem(inClip->libraryItemId) : nullptr, {}, "Auto",
                                                   outClip != nullptr ? static_cast<int>(std::lround(outClip->semitones)) : 0,
-                                                  inClip != nullptr ? static_cast<int>(std::lround(inClip->semitones)) : 0);
+                                                  inClip != nullptr ? static_cast<int>(std::lround(inClip->semitones)) : 0, outClip, inClip);
                 const auto* picked = mix::find(pick.presetId);
-                presetsMenu.addItem("Auto: " + (picked != nullptr ? picked->name : pick.presetId) + " (" + pick.why + ")",
-                                    [this, outId = outId, inId = inId, id = pick.presetId]
-                                    { mix::apply(actions.engineClient(), actions, model(), outId, inId, id); });
+                recommended = pick.presetId;
+                presetsMenu.addItem("Recommended: " + (picked != nullptr ? picked->name : pick.presetId) + " (" + pick.why + ")",
+                                    [this, outId = outId, inId = inId, id = pick.presetId] { applyTransitionPlacing(outId, inId, id); });
                 presetsMenu.addSeparator();
             }
             for (const auto& category : mix::categories())
@@ -1823,22 +2057,28 @@ void TimelineView::showClipMenu(const juce::String& clipId, double atMs)
                 for (const auto& p : mix::presets())
                     if (p.category == category)
                         sub.addItem(p.name, true, p.id == current,
-                                    [this, outId = outId, inId = inId, id = p.id]
-                                    { mix::apply(actions.engineClient(), actions, model(), outId, inId, id); });
+                                    [this, outId = outId, inId = inId, id = p.id] { applyTransitionPlacing(outId, inId, id); });
                 presetsMenu.addSubMenu(category, sub);
             }
             presetsMenu.addSeparator();
             presetsMenu.addItem(record != nullptr ? "Edit Transition..." : "New Transition (Out and In)...",
-                                [this, outId = outId, inId = inId] { TransitionEditor::show(mirror, actions, outId, inId); });
+                                [this, outId = outId, inId = inId, recommended]
+                                {
+                                    // Clips that do not overlap yet are placed with the recommendation first.
+                                    const auto* o = model().findClip(outId);
+                                    const auto* i = model().findClip(inId);
+                                    if (o != nullptr && i != nullptr && !mix::overlap(*o, *i)) applyTransitionPlacing(outId, inId, recommended);
+                                    TransitionEditor::show(mirror, actions, outId, inId);
+                                });
             if (record != nullptr && mix::find(current) != nullptr)
                 presetsMenu.addItem("Copy Transition", [preset = current] { mix::copyPreset(preset); });
             if (const auto* copied = mix::find(mix::copiedPreset()))
                 presetsMenu.addItem("Paste Transition (" + copied->name + ")", [this, outId = outId, inId = inId, id = copied->id]
-                                    { mix::apply(actions.engineClient(), actions, model(), outId, inId, id); });
+                                    { applyTransitionPlacing(outId, inId, id); });
             if (record != nullptr)
                 presetsMenu.addItem("Remove Transition", [this, id = record->getProperty("id", {}).toString()]
                                     { mix::remove(actions.engineClient(), actions, model(), id); });
-            const auto otherName = other != nullptr && other->name.isNotEmpty() ? other->name : juce::String("the overlapping clip");
+            const auto otherName = other != nullptr && other->name.isNotEmpty() ? other->name : juce::String("the other clip");
             if (pairs.size() == 1) transitions = presetsMenu;
             else transitions.addSubMenu((outId == clipId ? "Into " : "From ") + otherName, presetsMenu);
         }

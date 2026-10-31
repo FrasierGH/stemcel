@@ -21,6 +21,12 @@
 #include "UvrSeparator.h"
 #include "PreferencePages.h"
 #include "ScratchEditor.h"
+#include "SectionAnalyser.h"
+#include "SectionAnalysis.h"
+#include "FxPanels.h"
+#include "PluginCatalogue.h"
+#include "TrackAutomationSnapshot.h"
+#include "Tracklist.h"
 #include "WaveformStore.h"
 #include "Workspace.h"
 #include "Autosave.h"
@@ -92,6 +98,41 @@ bool writeTone(const juce::File& file, double frequency = 220.0)
         const auto v = static_cast<float>(0.4 * std::sin(2.0 * juce::MathConstants<double>::pi * frequency * i / kSampleRate));
         buffer.setSample(0, i, v);
         buffer.setSample(1, i, v);
+    }
+    return writer->writeFromAudioSampleBuffer(buffer, 0, samples);
+}
+
+// 32 bars at 120 BPM with an arrangement to find: hats alone (intro), a kick and bass on every
+// beat (drop), a mid pad with no kick (breakdown), then the kick again.
+bool writeArrangement(const juce::File& file, float level = 1.0f)
+{
+    file.deleteFile();
+    std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream>(file);
+    const auto options = juce::AudioFormatWriterOptions{}.withSampleRate(kSampleRate).withNumChannels(2).withBitsPerSample(16);
+    std::unique_ptr<juce::AudioFormatWriter> writer(juce::WavAudioFormat().createWriterFor(stream, options));
+    if (writer == nullptr) return false;
+    constexpr double kBeat = 0.5;
+    const int samples = static_cast<int>(32 * 4 * kBeat * kSampleRate);
+    juce::AudioBuffer<float> buffer(2, samples);
+    juce::Random noise(7);
+    const double twoPi = juce::MathConstants<double>::twoPi;
+    for (int i = 0; i < samples; ++i)
+    {
+        const double t = static_cast<double>(i) / kSampleRate;
+        const int bar = static_cast<int>(t / (4 * kBeat));
+        const bool drop = (bar >= 8 && bar < 16) || bar >= 24;
+        const bool breakdown = bar >= 16 && bar < 24;
+        double v = (noise.nextFloat() * 2.0 - 1.0) * 0.03; // hats / air throughout
+        if (drop)
+        {
+            const double inBeat = std::fmod(t, kBeat);
+            v += 0.8 * std::exp(-inBeat * 18.0) * std::sin(twoPi * 55.0 * inBeat); // kick
+            v += 0.25 * std::sin(twoPi * 45.0 * t);                                  // bass
+        }
+        if (breakdown) v += 0.2 * std::sin(twoPi * 440.0 * t) + 0.1 * std::sin(twoPi * 660.0 * t);
+        const auto f = static_cast<float>(juce::jlimit(-1.0, 1.0, v)) * level;
+        buffer.setSample(0, i, f);
+        buffer.setSample(1, i, f);
     }
     return writer->writeFromAudioSampleBuffer(buffer, 0, samples);
 }
@@ -362,6 +403,17 @@ void SmokeTest::addSteps()
                      },
                      {}, [this](const juce::var&) { return rekordboxWritesOk; }});
 
+    // rekordbox's sections (from the fixture track's 3-band waveform) came with its import.
+    steps.push_back({"rekordbox sections", [] {}, {},
+                     [this](const juce::var&)
+                     {
+                         if (rekordboxTrackId == "skipped") return true;
+                         const auto* rb = model().findLibraryItem(rekordboxItemId);
+                         if (rb == nullptr || sections::of(*rb).empty()) return false;
+                         report.add("rekordbox track has " + juce::String(static_cast<int>(sections::of(*rb).size())) + " section(s)");
+                         return true;
+                     }});
+    steps.back().poll = true;
     steps.push_back({"save as",
                      [this, projectFile]
                      {
@@ -580,6 +632,42 @@ void SmokeTest::addSteps()
                          return recovered.filePath == projectFile.getFullPathName() && clip != nullptr
                                 && std::abs(clip->offsetMs - 3500.0) < 1.0;
                      }});
+    // The tracklist's reading of file names that carry no tags.
+    steps.push_back({"tracklist names",
+                     [] {},
+                     {},
+                     [this](const juce::var&)
+                     {
+                         const std::vector<std::array<const char*, 3>> cases{
+                             {"01 - Daft Punk - One More Time.mp3", "Daft Punk", "One More Time"},
+                             {"Fred again.._-_Delilah (pull me out of this) [Official Video].wav", "Fred again..", "Delilah (pull me out of this)"},
+                             {"A1 Bicep - Glue (Extended Mix) (320kbps).flac", "Bicep", "Glue (Extended Mix)"},
+                             {"Skrillex – Rumble (feat. Fred again..) [HQ].mp3", "Skrillex feat. Fred again..", "Rumble"},
+                             {"Kölsch - Grey (Original Mix) [KOMPAKT123].aiff", "Kölsch", "Grey (Original Mix)"},
+                             {"Strobe (Club Edit) - deadmau5.mp3", "deadmau5", "Strobe (Club Edit)"},
+                             {"Losing It by Fisher.mp3", "Fisher", "Losing It"},
+                             {"Stand by Me.mp3", "", "Stand by Me"},
+                             {"50 Cent - In Da Club (Lyrics).mp3", "50 Cent", "In Da Club"},
+                             {"track_07_final_master.wav", "", "track 07 final master"},
+                             {"Title ft. Someone - www.musicsite.com.mp3", "", ""},
+                         };
+                         juce::StringArray wrong;
+                         for (const auto& [name, artist, title] : cases)
+                         {
+                             const auto g = tracklist::fromFileName(juce::String::fromUTF8(name));
+                             // The last case only has to come out without the site.
+                             if (juce::String(title).isEmpty())
+                             {
+                                 if ((g.artist + g.title).containsIgnoreCase("musicsite")) wrong.add(juce::String::fromUTF8(name));
+                                 continue;
+                             }
+                             if (g.artist != juce::String::fromUTF8(artist) || g.title != juce::String::fromUTF8(title))
+                                 wrong.add(juce::String::fromUTF8(name) + " -> [" + g.artist + "] [" + g.title + "]");
+                         }
+                         if (!wrong.isEmpty()) lastTempoLine = "tracklist: " + wrong.joinIntoString("; ");
+                         else report.add("tracklist names: " + juce::String(static_cast<int>(cases.size())) + " read");
+                         return wrong.isEmpty();
+                     }});
     steps.push_back({"export mixdown",
                      [this]
                      {
@@ -602,6 +690,41 @@ void SmokeTest::addSteps()
                          if (reader == nullptr || expectedMixSeconds <= 1.0) return false;
                          const double seconds = static_cast<double>(reader->lengthInSamples) / reader->sampleRate;
                          return seconds >= expectedMixSeconds - 0.01 && seconds < expectedMixSeconds + 0.5;
+                     }});
+
+    // Half a second of silence before the first sample, and the tracklist's times after it.
+    steps.push_back({"export with lead-in",
+                     [this]
+                     {
+                         mirror.refreshNow();
+                         expectedMixSeconds = model().contentEndMs() / 1000.0;
+                         engine.send("MIXDOWN_START", object({{"outputPath", workDir.getChildFile("mixdown-leadin.wav").getFullPathName()},
+                                                              {"format", "wav"},
+                                                              {"sampleRate", 44100},
+                                                              {"bitDepth", 24},
+                                                              {"leadInMs", 500.0},
+                                                              {"lengthMode", "trim-to-last-clip"}}));
+                     },
+                     "MIXDOWN_DONE",
+                     [this](const juce::var&)
+                     {
+                         juce::AudioFormatManager formats;
+                         formats.registerBasicFormats();
+                         std::unique_ptr<juce::AudioFormatReader> reader(
+                             formats.createReaderFor(workDir.getChildFile("mixdown-leadin.wav")));
+                         if (reader == nullptr) return false;
+                         const double seconds = static_cast<double>(reader->lengthInSamples) / reader->sampleRate;
+                         const bool lengthOk = seconds >= expectedMixSeconds + 0.49 && seconds < expectedMixSeconds + 1.0;
+                         juce::AudioBuffer<float> head(2, 22050);
+                         reader->read(&head, 0, 22050, 0, true, true);
+                         const bool silent = head.getMagnitude(0, 22050) == 0.0f;
+                         const auto entries = tracklist::fromProject(model(), 0.0, model().contentEndMs(), 500.0);
+                         const auto text = tracklist::toText(entries);
+                         const bool listOk = !entries.empty() && entries.front().atMs >= 500.0 && text.startsWith("00:00  ");
+                         lastTempoLine = "lead-in " + juce::String(seconds - expectedMixSeconds, 3) + " s extra, silent " +
+                                         (silent ? "yes" : "no") + "; tracklist " + text.replace("\n", " | ");
+                         if (lengthOk && silent && listOk) report.add(lastTempoLine);
+                         return lengthOk && silent && listOk;
                      }});
 
     // Save what the M4 steps did, so the workspace snapshot shows lanes and regions.
@@ -1562,6 +1685,49 @@ void SmokeTest::addTempoJourney()
                      }});
     steps.back().poll = true;
     // Scrolled to the join, so the picture shows it.
+    // A curve drawn by hand in the editor (the In's fader): its points, with their shapes, are
+    // what the incoming track's lane gets over the window, and the transition keeps them.
+    steps.push_back({"transition drawn by hand",
+                     [this]
+                     {
+                         if (const auto* list = model().raw.getProperty("mixTransitions", {}).getArray())
+                             for (const auto& t : *list)
+                                 if (t.getProperty("id", {}).toString() == mixTransitionId)
+                                 {
+                                     TransitionEditor editor(mirror, actions, t.getProperty("outClipId", {}).toString(),
+                                                             t.getProperty("inClipId", {}).toString());
+                                     editor.drawByHandForTest(false, "level", {{0.0, -60.0, "slowStart", 0.3},
+                                                                               {0.5, -6.0, "smooth", 0.0},
+                                                                               {1.0, 0.0, "linear", 0.0}});
+                                     mirror.refreshNow();
+                                     const auto image = editor.createComponentSnapshot(editor.getLocalBounds());
+                                     juce::FileOutputStream out(workDir.getChildFile("transition-editor-manual.png"));
+                                     if (out.openedOk()) juce::PNGImageFormat().writeImageToStream(image, out);
+                                 }
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         if (const auto* list = model().raw.getProperty("mixTransitions", {}).getArray())
+                             for (const auto& t : *list)
+                                 if (t.getProperty("id", {}).toString() == mixTransitionId)
+                                 {
+                                     const auto* in = model().findClip(t.getProperty("inClipId", {}).toString());
+                                     const auto* track = in != nullptr ? model().findTrack(in->trackId) : nullptr;
+                                     const double start = static_cast<double>(t.getProperty("startMs", 0.0));
+                                     const double end = static_cast<double>(t.getProperty("endMs", 0.0));
+                                     const double middle = start + 0.5 * (end - start);
+                                     bool found = false;
+                                     if (track != nullptr)
+                                         for (const auto& p : automation::pointsOf(*track, "level"))
+                                             found = found || (std::abs(p.timeMs - middle) < 2.0 && std::abs(p.value + 6.0) < 0.01 && p.curve == "smooth");
+                                     const bool kept = t.getProperty("settings", {}).getProperty("in", {}).getProperty("manual", {}).hasProperty("level");
+                                     if (found && kept) report.add("transition drawn by hand: in fader point at the middle, -6 dB, smooth");
+                                     return found && kept;
+                                 }
+                         return false;
+                     }});
+    steps.back().poll = true;
     steps.push_back({"reveal transition",
                      [this]
                      {
@@ -1621,6 +1787,121 @@ void SmokeTest::addTempoJourney()
                      }});
     steps.back().poll = true;
     steps.back().timeoutMs = 300000.0;
+    // An installed plugin's parameter follows its automation lane while the timeline plays
+    // (with the scan above: STEMCEL_SMOKE_PLUGIN_SCAN=1). STEMCEL_SMOKE_PLUGIN_DIR adds a
+    // folder of plugins to scan first, for a machine with no effect plugin installed.
+    steps.push_back({"installed plugin folder",
+                     [this]
+                     {
+                         const auto dir = juce::SystemStats::getEnvironmentVariable("STEMCEL_SMOKE_PLUGIN_DIR", {});
+                         pluginDirScanDone = std::make_shared<std::atomic<bool>>(pluginScanSkipped || dir.isEmpty());
+                         if (pluginDirScanDone->load()) return;
+                         engine.host().engine().pluginCatalogue().startScan(
+                             juce::FileSearchPath(dir), [](plugins::ScanProgress) {},
+                             [done = pluginDirScanDone](bool) { done->store(true); });
+                     },
+                     {},
+                     [this](const juce::var&) { return pluginDirScanDone != nullptr && pluginDirScanDone->load(); }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 120000.0;
+    steps.push_back({"installed plugin automation",
+                     [this]
+                     {
+                         pluginTests.clear();
+                         pluginAutoStage = 0;
+                         if (pluginScanSkipped) return;
+                         mirror.refreshNow();
+                         pluginAutoTrackId.clear();
+                         for (const auto& t : model().tracks)
+                             if (!t.clips.empty() && pluginAutoTrackId.isEmpty()) pluginAutoTrackId = t.id;
+                         // Every effect the scan found, all on one track.
+                         for (const auto& d : engine.host().engine().pluginCatalogue().getKnownPlugins())
+                         {
+                             if (d.isInstrument) continue;
+                             PluginTest test;
+                             test.identifier = d.fileOrIdentifier;
+                             test.name = d.name + " (" + d.pluginFormatName + ")";
+                             test.plainName = d.name;
+                             pluginTests.push_back(test);
+                             engine.send("TRACK_ADD_PLUGIN", object({{"trackId", pluginAutoTrackId}, {"identifier", d.fileOrIdentifier}}));
+                         }
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         if (pluginScanSkipped) return true;
+                         if (pluginTests.empty())
+                         {
+                             report.add("SKIP installed plugin automation: no effect plugin installed");
+                             return true;
+                         }
+                         auto& audio = engine.host().engine();
+                         if (pluginAutoStage == 0)
+                         {
+                             // Each plugin's slot, by name, once the project shows it.
+                             mirror.refreshNow();
+                             const auto* track = model().findTrack(pluginAutoTrackId);
+                             const auto* slots = track != nullptr ? track->raw.getProperty("plugins", {}).getArray() : nullptr;
+                             if (slots == nullptr) return false;
+                             for (auto& test : pluginTests)
+                                 for (const auto& slot : *slots)
+                                     if (test.slotId.isEmpty() && slot.getProperty("name", {}).toString() == test.plainName)
+                                     {
+                                         bool taken = false;
+                                         for (const auto& other : pluginTests) taken = taken || other.slotId == slot.getProperty("slotId", {}).toString();
+                                         if (!taken) test.slotId = slot.getProperty("slotId", {}).toString();
+                                     }
+                             for (const auto& test : pluginTests)
+                                 if (test.slotId.isEmpty()) return false;
+                             // Every parameter to the far end of its range from where it is: exact
+                             // for stepped parameters (on/off, choices, integers) as well.
+                             const double end = model().contentEndMs() + 60000.0;
+                             for (auto& test : pluginTests)
+                             {
+                                 test.names = audio.getTrackPluginParameterNames(pluginAutoTrackId, test.slotId);
+                                 for (int i = 0; i < test.names.size(); ++i)
+                                 {
+                                     const float before = audio.getTrackPluginParameterValue(pluginAutoTrackId, test.slotId, i).value_or(0.0f);
+                                     const float target = before < 0.5f ? 1.0f : 0.0f;
+                                     test.targets.push_back(target);
+                                     actions.setAutomation(pluginAutoTrackId, automation::pluginParamId(test.slotId, i), {{0.0, target}, {end, target}});
+                                 }
+                             }
+                             actions.seek(0.0);
+                             actions.play();
+                             pluginAutoPlayedAt = juce::Time::getMillisecondCounter();
+                             pluginAutoStage = 1;
+                             return false;
+                         }
+                         if (juce::Time::getMillisecondCounter() - pluginAutoPlayedAt < 1500) return false;
+                         actions.stop();
+                         bool all = true;
+                         for (const auto& test : pluginTests)
+                         {
+                             juce::StringArray missed;
+                             for (int i = 0; i < test.names.size(); ++i)
+                             {
+                                 const auto now = audio.getTrackPluginParameterValue(pluginAutoTrackId, test.slotId, i);
+                                 if (!now.has_value() || std::abs(*now - test.targets[static_cast<size_t>(i)]) > 0.02f)
+                                     missed.add(test.names[i] + "=" + (now.has_value() ? juce::String(*now, 3) : juce::String("?")));
+                             }
+                             const int followed = test.names.size() - missed.size();
+                             all = all && missed.isEmpty() && test.names.size() > 0;
+                             report.add("installed plugin automation: " + test.name + " " + juce::String(followed) + "/" + juce::String(test.names.size())
+                                        + " parameters followed their lanes (" + test.names.joinIntoString(", ") + ")"
+                                        + (missed.isEmpty() ? juce::String() : "; missed " + missed.joinIntoString(", ")));
+                             // Leave the project as it was for the steps after.
+                             for (int i = 0; i < test.names.size(); ++i)
+                                 actions.setAutomation(pluginAutoTrackId, automation::pluginParamId(test.slotId, i), {});
+                             engine.send("TRACK_REMOVE_PLUGIN", object({{"trackId", pluginAutoTrackId}, {"slotId", test.slotId}}));
+                         }
+                         // Plugins scanned from the test's own folder leave the user's plugin list as it was.
+                         if (const auto dir = juce::SystemStats::getEnvironmentVariable("STEMCEL_SMOKE_PLUGIN_DIR", {}); dir.isNotEmpty())
+                             audio.pluginCatalogue().forgetPluginsIn(juce::File(dir));
+                         return all;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 60000.0;
     // Drag and drop onto the timeline through its own target callbacks (drag move, then drop),
     // as a library tile, a Files row and the area below the tracks deliver them.
     auto dropOnTimeline = [this](const juce::var& description, bool belowTracks)
@@ -1716,6 +1997,54 @@ void SmokeTest::addTempoJourney()
                                          && glue.size() == 2;
                          if (ok) report.add(lastTempoLine);
                          return ok;
+                     }});
+    steps.back().poll = true;
+    // The A button: a track with no lanes opens on its gain; hiding and showing again brings
+    // back what was shown. A picture of the open lanes, for eyes.
+    steps.push_back({"automation toggle",
+                     [this]
+                     {
+                         if (model().tracks.size() < 2) return;
+                         automationTrackId = model().tracks[1].id;
+                         actions.setAutomationLanes(automationTrackId, {});
+                         actions.toggleAutomation(automationTrackId);
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         const auto* track = model().findTrack(automationTrackId);
+                         if (track == nullptr) return false;
+                         const auto lanes = automation::lanesOf(*track);
+                         switch (automationStage)
+                         {
+                         case 0:
+                             if (lanes.size() != 1 || lanes.front().paramId != "level") return false;
+                             actions.setAutomationLanes(automationTrackId, {{"level", automation::kDefaultLaneHeight},
+                                                                             {"pan", automation::kDefaultLaneHeight}});
+                             automationStage = 1;
+                             return false;
+                         case 1:
+                             if (lanes.size() != 2) return false;
+                             if (auto* window = juce::TopLevelWindow::getTopLevelWindow(0))
+                             {
+                                 const auto image = window->createComponentSnapshot(window->getLocalBounds());
+                                 juce::FileOutputStream out(workDir.getChildFile("automation-lanes.png"));
+                                 if (out.openedOk()) juce::PNGImageFormat().writeImageToStream(image, out);
+                             }
+                             actions.toggleAutomation(automationTrackId);
+                             automationStage = 2;
+                             return false;
+                         case 2:
+                             if (!lanes.empty()) return false;
+                             actions.toggleAutomation(automationTrackId);
+                             automationStage = 3;
+                             return false;
+                         default:
+                             if (lanes.size() != 2 || lanes[1].paramId != "pan") return false;
+                             actions.setAutomationLanes(automationTrackId, {});
+                             report.add("automation toggle: gain lane, hidden, restored with pan");
+                             return true;
+                         }
                      }});
     steps.back().poll = true;
     // Beat stutter: a build-up from bar 3 lays four repeats down, the last at 1/32.
@@ -1894,6 +2223,380 @@ void SmokeTest::addTempoJourney()
                                          + juce::String(tabsTracksBefore) + "), tab 2 parked=" + (tabs.size() == 2 && tabs[1].parked.existsAsFile() ? "yes" : "no");
                          if (ok) report.add(lastTempoLine);
                          return ok;
+                     }});
+    steps.back().poll = true;
+    // A recommended transition between clips on two tracks that do not overlap yet: the
+    // incoming clip moves into place and the preset applies, drawn across both tracks.
+    steps.push_back({"transition into a later clip",
+                     [this]
+                     {
+                         // Every model pointer is fetched again after a refresh: it rebuilds the model.
+                         auto* timeline = findDescendant<TimelineView>(juce::TopLevelWindow::getTopLevelWindow(0));
+                         if (timeline == nullptr || model().findLibraryItem(tempoItemIds[0]) == nullptr
+                             || model().findLibraryItem(tempoItemIds[1]) == nullptr)
+                             return;
+                         // After everything else, so no other clip is nearer.
+                         const double after = model().contentEndMs() + 60000.0;
+                         const auto outTrack = actions.addTrack();
+                         nearOutClipId = actions.addClip(outTrack, *model().findLibraryItem(tempoItemIds[0]), after);
+                         mirror.refreshNow();
+                         const auto* outClip = model().findClip(nearOutClipId);
+                         if (outClip == nullptr) return;
+                         const auto curve = model().tempoCurve();
+                         const double inAt = curve.msAtBeat(curve.beatAt(outClip->endMs()) + 16.0);
+                         const auto inTrack = actions.addTrack();
+                         nearInClipId = actions.addClip(inTrack, *model().findLibraryItem(tempoItemIds[1]), inAt);
+                         mirror.refreshNow();
+                         // The timeline reads the workspace's copy of the model: bring it up to date.
+                         if (auto* workspace = findDescendant<Workspace>(juce::TopLevelWindow::getTopLevelWindow(0)))
+                             workspace->projectMirror().refreshNow();
+                         const auto pairs = timeline->nearbyPairs(nearOutClipId);
+                         if (std::find(pairs.begin(), pairs.end(), std::pair{nearOutClipId, nearInClipId}) == pairs.end())
+                         {
+                             report.add("transition into a later clip: not found among " + juce::String(static_cast<int>(pairs.size())) + " nearby");
+                             return;
+                         }
+                         timeline->applyTransitionPlacing(nearOutClipId, nearInClipId, "smoothBlend");
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         const auto* out = model().findClip(nearOutClipId);
+                         const auto* in = model().findClip(nearInClipId);
+                         if (out == nullptr || in == nullptr || !mix::overlap(*out, *in) || mix::recordFor(model(), nearOutClipId, nearInClipId) == nullptr)
+                             return false;
+                         auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
+                         auto* workspace = window != nullptr ? findDescendant<Workspace>(window) : nullptr;
+                         auto* timeline = window != nullptr ? findDescendant<TimelineView>(window) : nullptr;
+                         if (workspace != nullptr && timeline != nullptr)
+                         {
+                             auto& view = workspace->viewState();
+                             for (const auto& row : layoutRows(model()))
+                                 if (row.trackId == out->trackId) view.scrollY = juce::jmax(0, row.top - 20);
+                             view.scrollXPx = juce::jmax(0.0, in->offsetMs / 1000.0 * view.pxPerSecond - 300.0);
+                             timeline->clampScroll();
+                             view.changed();
+                             const auto image = window->createComponentSnapshot(window->getLocalBounds());
+                             juce::FileOutputStream file(workDir.getChildFile("transition-band.png"));
+                             if (file.openedOk()) juce::PNGImageFormat().writeImageToStream(image, file);
+                         }
+                         report.add("transition placed: in moved to " + juce::String(in->offsetMs, 0) + " ms, out ends " + juce::String(out->endMs(), 0));
+                         return true;
+                     }});
+    steps.back().poll = true;
+    // Every parameter there is to tweak can be automated: each knob of Track FX and Project FX
+    // has a lane, every track and master lane is stored and understood by the audio engine, and
+    // every parameter a transition writes is one of them.
+    steps.push_back({"every parameter automatable",
+                     [this]
+                     {
+                         juce::StringArray problems;
+                         auto engineKnows = [](const juce::String& id)
+                         {
+                             AutomationParam p{};
+                             return automationParamFromString(id, p);
+                         };
+                         auto isTrackParam = [](const juce::String& id)
+                         {
+                             for (const auto& p : automation::params())
+                                 if (id == p.id) return true;
+                             return false;
+                         };
+                         auto isMasterParam = [](const juce::String& id)
+                         {
+                             for (const auto& p : automation::masterParams())
+                                 if (id == p.id) return true;
+                             return false;
+                         };
+                         // The panels as the app shows them.
+                         int knobCount = 0;
+                         auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
+                         auto* library = window != nullptr ? findDescendant<LibraryPanel>(window) : nullptr;
+                         auto* trackFx = library != nullptr ? dynamic_cast<TrackFxView*>(library->trackFxPanel()) : nullptr;
+                         auto* projectFx = library != nullptr ? dynamic_cast<ProjectFxView*>(library->projectFxPanel()) : nullptr;
+                         if (trackFx == nullptr || projectFx == nullptr) problems.add("FX panels not found");
+                         else
+                         {
+                             for (const auto& [knob, lane] : trackFx->knobAutomation())
+                             {
+                                 ++knobCount;
+                                 if (!isTrackParam(lane) || !engineKnows(lane)) problems.add("track knob " + knob + " -> '" + lane + "'");
+                             }
+                             for (const auto& [knob, lane] : projectFx->knobAutomation())
+                             {
+                                 ++knobCount;
+                                 if (!isMasterParam(lane) || !engineKnows(lane)) problems.add("project knob " + knob + " -> '" + lane + "'");
+                             }
+                         }
+                         // Every track lane and every master lane, written and read back from the project.
+                         auto& project = engine.host().project();
+                         mirror.refreshNow();
+                         const auto laneTrack = model().tracks.empty() ? juce::String() : model().tracks.front().id;
+                         for (const auto& p : automation::params())
+                         {
+                             actions.setAutomation(laneTrack, p.id, {{0.0, p.min}, {1000.0, p.max}});
+                             if (!engineKnows(p.id) || project.getTrackAutomation(laneTrack, p.id).size() != 2) problems.add(juce::String("track lane ") + p.id);
+                             actions.setAutomation(laneTrack, p.id, {});
+                         }
+                         for (const auto& p : automation::masterParams())
+                         {
+                             actions.setAutomation(kMasterTrackId, p.id, {{0.0, p.min}, {1000.0, p.max}});
+                             if (!engineKnows(p.id) || project.getTrackAutomation(kMasterTrackId, p.id).size() != 2) problems.add(juce::String("master lane ") + p.id);
+                             actions.setAutomation(kMasterTrackId, p.id, {});
+                         }
+                         // What transitions write: every preset's halves and every kind of half.
+                         std::set<juce::String> written;
+                         for (const auto& preset : mix::presets())
+                         {
+                             for (const auto& s : preset.out) written.insert(s.param);
+                             for (const auto& s : preset.in) written.insert(s.param);
+                         }
+                         for (const auto& kind : mix::halfKinds())
+                             for (const auto& s : mix::shapesFor(kind.defaults, kind.outgoing)) written.insert(s.param);
+                         for (const auto& id : written)
+                             if (!isTrackParam(id) || !engineKnows(id)) problems.add("transition writes '" + id + "'");
+                         // The engine has no parameter the lanes leave out.
+                         const int engineParams = static_cast<int>(AutomationParam::count_);
+                         const int laneParams = static_cast<int>(automation::params().size() + automation::masterParams().size());
+                         // "level" is a lane on both a track and the master: one engine parameter.
+                         if (laneParams - 1 != engineParams)
+                             problems.add("engine has " + juce::String(engineParams) + " parameters, lanes " + juce::String(laneParams - 1));
+                         juce::StringArray writtenList;
+                         for (const auto& id : written) writtenList.add(id);
+                         everyParamLine = juce::String(knobCount) + " FX knobs, " + juce::String(static_cast<int>(automation::params().size()))
+                                          + " track lanes, " + juce::String(static_cast<int>(automation::masterParams().size()))
+                                          + " master lanes, transitions write {" + writtenList.joinIntoString(", ") + "}; "
+                                          + (problems.isEmpty() ? juce::String("all automatable") : "problems: " + problems.joinIntoString("; "));
+                         everyParamOk = problems.isEmpty() && knobCount > 0;
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         report.add(everyParamLine);
+                         return everyParamOk;
+                     }});
+    // Shortcuts on the live timeline: Alt-drag copies a clip, the middle button pans, N turns
+    // snapping off, and Cmd/Ctrl+J joins a clip split in two.
+    steps.push_back({"shortcuts view",
+                     [this]
+                     {
+                         shortcutStartMs = juce::Time::getMillisecondCounter();
+                         auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
+                         auto* workspace = window != nullptr ? findDescendant<Workspace>(window) : nullptr;
+                         if (workspace == nullptr) return;
+                         workspace->projectMirror().refreshNow();
+                         const auto* clip = workspace->projectMirror().model().findClip(nearOutClipId);
+                         if (clip == nullptr) return;
+                         // The clip 300 px wide, from x = 100.
+                         auto& view = workspace->viewState();
+                         view.pxPerSecond = 300.0 / juce::jmax(0.5, clip->effectiveDurationMs / 1000.0);
+                         view.scrollXPx = clip->offsetMs / 1000.0 * view.pxPerSecond - 100.0;
+                         for (const auto& row : layoutRows(workspace->projectMirror().model()))
+                             if (row.trackId == clip->trackId) view.scrollY = juce::jmax(0, row.top - 20);
+                         view.changed();
+                     },
+                     {},
+                     [this](const juce::var&) { return juce::Time::getMillisecondCounter() - shortcutStartMs > 400; }});
+    steps.back().poll = true;
+    steps.push_back({"alt-drag, pan and snap key",
+                     [this]
+                     {
+                         auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
+                         auto* workspace = window != nullptr ? findDescendant<Workspace>(window) : nullptr;
+                         auto* timeline = window != nullptr ? findDescendant<TimelineView>(window) : nullptr;
+                         if (workspace == nullptr || timeline == nullptr) return;
+                         auto& wsMirror = workspace->projectMirror();
+                         wsMirror.refreshNow();
+                         const auto* clip = wsMirror.model().findClip(nearOutClipId);
+                         if (clip == nullptr) return;
+                         auto& view = workspace->viewState();
+                         float y = -1.0f;
+                         for (const auto& row : layoutRows(wsMirror.model()))
+                             if (row.trackId == clip->trackId)
+                             {
+                                 y = static_cast<float>(row.top + view.headerHeight() - view.scrollY + row.clipHeight / 2);
+                                 shortcutClipsBefore = static_cast<int>(wsMirror.model().findTrack(row.trackId)->clips.size());
+                             }
+                         if (y < 0.0f) return;
+                         shortcutOriginMs = clip->offsetMs;
+                         mirror.refreshNow();
+                         snapBefore = actions.snapGrid();
+                         const auto x = static_cast<float>(view.msToX(clip->offsetMs)) + 50.0f;
+                         auto event = [timeline](juce::Point<float> at, juce::Point<float> from, juce::ModifierKeys mods, bool dragged)
+                         {
+                             const auto now = juce::Time::getCurrentTime();
+                             return juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(), at, mods, 1.0f, 0.0f, 0.0f, 0.0f,
+                                                     0.0f, timeline, timeline, now, from, now, 1, dragged);
+                         };
+                         // Alt-drag 400 px right: a copy past the clip's end, the clip where it was.
+                         const juce::Point<float> from{x, y}, to{x + 400.0f, y};
+                         const juce::ModifierKeys alt(juce::ModifierKeys::altModifier | juce::ModifierKeys::leftButtonModifier);
+                         timeline->mouseDown(event(from, from, alt, false));
+                         timeline->mouseDrag(event(to, from, alt, true));
+                         timeline->mouseUp(event(to, from, juce::ModifierKeys(juce::ModifierKeys::altModifier), true));
+                         // The middle button 120 px right: the view moves 120 px back.
+                         timeline->clampScroll();
+                         panScrollBefore = view.scrollXPx;
+                         const juce::ModifierKeys middle(juce::ModifierKeys::middleButtonModifier);
+                         const juce::Point<float> grab{180.0f, y}, release{300.0f, y};
+                         timeline->mouseDown(event(grab, grab, middle, false));
+                         timeline->mouseDrag(event(release, grab, middle, true));
+                         panScrollAfter = view.scrollXPx;
+                         timeline->mouseUp(event(release, grab, {}, true));
+                         workspace->keyPressed(juce::KeyPress('n', {}, 'n'));
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         mirror.refreshNow();
+                         const auto* clip = model().findClip(nearOutClipId);
+                         if (clip == nullptr) return false;
+                         const auto* track = model().findTrack(clip->trackId);
+                         shortcutCopyId.clear();
+                         for (const auto& c : track->clips)
+                             if (c.id != clip->id && c.libraryItemId == clip->libraryItemId && c.offsetMs >= clip->endMs() - 1.0) shortcutCopyId = c.id;
+                         const bool copied = static_cast<int>(track->clips.size()) == shortcutClipsBefore + 1 && shortcutCopyId.isNotEmpty()
+                                             && std::abs(clip->offsetMs - shortcutOriginMs) < 0.5;
+                         const bool panned = std::abs(panScrollAfter - panScrollBefore + 120.0) < 1.0;
+                         const auto grid = actions.snapGrid();
+                         const bool snapToggled = snapBefore != "free" ? grid == "free" : grid != "free";
+                         lastTempoLine = juce::String("shortcuts: copy ") + (copied ? "yes" : "no") + ", pan "
+                                         + juce::String(panScrollAfter - panScrollBefore, 1) + " px, snap " + snapBefore + " -> " + grid;
+                         if (copied && panned && snapToggled)
+                         {
+                             report.add(lastTempoLine);
+                             actions.setSnapGrid(snapBefore);
+                         }
+                         return copied && panned && snapToggled;
+                     }});
+    steps.back().poll = true;
+    steps.push_back({"join clips",
+                     [this]
+                     {
+                         mirror.refreshNow();
+                         const auto* copy = model().findClip(shortcutCopyId);
+                         if (copy == nullptr) return;
+                         shortcutJoinEndMs = copy->endMs();
+                         const auto right = actions.splitClipAt(shortcutCopyId, copy->offsetMs + copy->effectiveDurationMs / 2.0);
+                         mirror.refreshNow();
+                         shortcutJoins = actions.joinClips({shortcutCopyId, right});
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         mirror.refreshNow();
+                         const auto* copy = model().findClip(shortcutCopyId);
+                         const bool ok = shortcutJoins == 1 && copy != nullptr && std::abs(copy->endMs() - shortcutJoinEndMs) < 1.0;
+                         if (ok) report.add("join clips: one clip again, to " + juce::String(shortcutJoinEndMs, 0) + " ms");
+                         return ok;
+                     }});
+    steps.back().poll = true;
+    // Two files dropped at once: the prompt, answered "as dropped", mixes them on two decks.
+    steps.push_back({"auto mix on drop",
+                     [this]
+                     {
+                         auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
+                         auto* workspace = window != nullptr ? findDescendant<Workspace>(window) : nullptr;
+                         if (workspace == nullptr) return;
+                         const auto a = workDir.getChildFile("Files").getChildFile("drop-a.wav");
+                         const auto b = workDir.getChildFile("Files").getChildFile("drop-b.wav");
+                         if (!writeArrangement(a, 1.0f) || !writeArrangement(b, 0.8f)) return;
+                         mirror.refreshNow();
+                         dropTracksBefore = static_cast<int>(model().tracks.size());
+                         dropPromptSeen = false;
+                         workspace->importAndPlace({{a, {}}, {b, {}}}, {}, 0.0);
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         if (!dropPromptSeen)
+                         {
+                             if (auto* alert = dynamic_cast<juce::AlertWindow*>(juce::ModalComponentManager::getInstance()->getModalComponent(0)))
+                             {
+                                 dropPromptSeen = true;
+                                 alert->exitModalState(2); // Auto Mix (As Dropped)
+                             }
+                             return false;
+                         }
+                         mirror.refreshNow();
+                         const auto& m = model();
+                         if (static_cast<int>(m.tracks.size()) < dropTracksBefore + 2) return false;
+                         const auto& deckA = m.tracks[m.tracks.size() - 2];
+                         const auto& deckB = m.tracks.back();
+                         if (deckA.clips.size() != 1 || deckB.clips.size() != 1) return false;
+                         const auto* itemA = m.findLibraryItem(deckA.clips[0].libraryItemId);
+                         const auto* itemB = m.findLibraryItem(deckB.clips[0].libraryItemId);
+                         const bool files = itemA != nullptr && itemB != nullptr && itemA->displayName().contains("drop-a")
+                                            && itemB->displayName().contains("drop-b");
+                         const bool joined = mix::recordFor(m, deckA.clips[0].id, deckB.clips[0].id) != nullptr;
+                         lastTempoLine = "auto mix on drop: " + deckA.name + " / " + deckB.name + ", files " + (files ? "yes" : "no")
+                                         + ", transition " + (joined ? "yes" : "no");
+                         if (files && joined) report.add(lastTempoLine);
+                         return files && joined;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 60000.0;
+    // Stemcel's own sections find the drop and the breakdown of a generated arrangement.
+    steps.push_back({"sections",
+                     [this]
+                     {
+                         const auto file = workDir.getChildFile("Files").getChildFile("arrangement.wav");
+                         if (!writeArrangement(file)) return;
+                         ImportRequest request;
+                         request.file = file;
+                         request.hints.bpm = 120.0;
+                         importer.import(std::vector<ImportRequest>{request}, [this](const juce::StringArray& ids)
+                                         {
+                                             sectionItemId = ids[0];
+                                             sectionAnalyser = std::make_unique<SectionAnalyser>(engine, mirror, prefs);
+                                             sectionAnalyser->analyse(sectionItemId, true);
+                                         });
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         const auto* item = model().findLibraryItem(sectionItemId);
+                         if (item == nullptr) return false;
+                         const auto list = sections::of(*item);
+                         if (list.empty()) return false;
+                         juce::StringArray names;
+                         for (const auto& s : list) names.add(s.label + "@" + juce::String(s.startSec, 0));
+                         const bool found = names.joinIntoString(",").contains("Drop") && names.joinIntoString(",").contains("Breakdown");
+                         lastTempoLine = "sections " + names.joinIntoString(", ");
+                         if (found) report.add(lastTempoLine);
+                         return found;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 60000.0;
+    // The analysed arrangement on the timeline, for eyes: the strip along the top of its clip.
+    steps.push_back({"sections picture",
+                     [this]
+                     {
+                         const auto* item = model().findLibraryItem(sectionItemId);
+                         if (item == nullptr) return;
+                         const auto trackId = actions.addTrack();
+                         sectionClipId = actions.addClip(trackId, *model().findLibraryItem(sectionItemId), model().contentEndMs() + 4000.0);
+                         mirror.refreshNow();
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         // A timeline of its own over this project, scrolled to the clip.
+                         const auto* clip = model().findClip(sectionClipId);
+                         if (clip == nullptr) return false;
+                         TimelineViewState view;
+                         LiveState live(engine);
+                         WaveformStore waveforms(engine.host().peaksCache());
+                         TimelineView timeline(mirror, view, live, actions, waveforms);
+                         timeline.setSize(1200, 420);
+                         for (const auto& row : layoutRows(model()))
+                             if (row.trackId == clip->trackId) view.scrollY = juce::jmax(0, row.top - 10);
+                         view.pxPerSecond = 1000.0 / juce::jmax(1.0, clip->endMs() - clip->offsetMs) * 1100.0;
+                         view.scrollXPx = view.msToX(clip->offsetMs) + view.scrollXPx - 40.0;
+                         const auto image = timeline.createComponentSnapshot(timeline.getLocalBounds());
+                         juce::FileOutputStream out(workDir.getChildFile("sections.png"));
+                         if (out.openedOk()) juce::PNGImageFormat().writeImageToStream(image, out);
+                         return true;
                      }});
     steps.back().poll = true;
     steps.push_back({"remove transition",

@@ -4,6 +4,8 @@
 #include "Theme.h"
 #include "TimelineView.h"
 
+#include <algorithm>
+
 namespace stemcel::native
 {
 namespace
@@ -41,10 +43,21 @@ TrackHeaderRow::TrackHeaderRow(TimelineActions& timelineActions, TimelineViewSta
     };
     addAndMakeVisible(name);
 
-    for (auto* b : {&mute, &solo})
+    for (auto* b : {&automationButton, &mute, &solo})
     {
         b->setClickingTogglesState(false);
         addAndMakeVisible(b);
+    }
+    automationButton.setColour(juce::TextButton::buttonOnColourId, colours::sky600);
+    automationButton.setTooltip("Automation: show or hide this track's lanes (A)");
+    automationButton.onClick = [this] { actions.toggleAutomation(trackId); };
+    for (auto* l : {&gainCaption, &panCaption})
+    {
+        l->setFont(uiFont(10.0f));
+        l->setColour(juce::Label::textColourId, colours::textFaint);
+        l->setJustificationType(juce::Justification::centredLeft);
+        l->setInterceptsMouseClicks(false, false);
+        addAndMakeVisible(l);
     }
     mute.setColour(juce::TextButton::buttonOnColourId, colours::amber500);
     solo.setColour(juce::TextButton::buttonOnColourId, colours::sky600);
@@ -56,9 +69,12 @@ TrackHeaderRow::TrackHeaderRow(TimelineActions& timelineActions, TimelineViewSta
     // Sent on every change; the engine folds a drag's worth into one undo step.
     volume.onValueChange = [this]
     {
-        volume.setTooltip("Volume " + db::format(db::linearToDb(sliderToGain(volume.getValue()))));
+        const auto text = db::format(db::linearToDb(sliderToGain(volume.getValue())));
+        volume.setTooltip("Gain " + text + " (double-click for 0 dB)");
+        if (volume.isMouseButtonDown()) gainCaption.setText(text, juce::dontSendNotification);
         actions.setTrackGain(trackId, sliderToGain(volume.getValue()));
     };
+    volume.onDragEnd = [this] { gainCaption.setText("Gain", juce::dontSendNotification); };
     addAndMakeVisible(volume);
 
     pan.setRange(-1.0, 1.0);
@@ -66,10 +82,12 @@ TrackHeaderRow::TrackHeaderRow(TimelineActions& timelineActions, TimelineViewSta
     pan.onValueChange = [this]
     {
         const double v = pan.getValue();
-        pan.setTooltip(std::abs(v) < 0.005 ? juce::String("Pan centre")
-                                           : "Pan " + juce::String(std::abs(v) * 100.0, 0) + (v < 0 ? "% L" : "% R"));
+        const auto text = std::abs(v) < 0.005 ? juce::String("C") : juce::String(std::abs(v) * 100.0, 0) + (v < 0 ? " L" : " R");
+        pan.setTooltip("Pan " + text + " (double-click to centre)");
+        if (pan.isMouseButtonDown()) panCaption.setText(text, juce::dontSendNotification);
         actions.setTrackPan(trackId, v);
     };
+    pan.onDragEnd = [this] { panCaption.setText("Pan", juce::dontSendNotification); };
     addAndMakeVisible(pan);
 }
 
@@ -79,7 +97,11 @@ void TrackHeaderRow::update(const TrackModel& track, int displayIndex, bool sile
     clipLaneHeight = clipHeight;
     lanes = automation::lanesOf(track);
     plugins = track.raw.getProperty("plugins", {});
-    for (auto* c : std::initializer_list<juce::Component*>{&mute, &solo, &volume, &pan}) c->setVisible(!isMaster());
+    for (auto* c : std::initializer_list<juce::Component*>{&mute, &solo, &volume, &pan, &gainCaption, &panCaption})
+        c->setVisible(!isMaster());
+    automated = actions.automatedParams(track.id);
+    automationButton.setToggleState(!lanes.empty(), juce::dontSendNotification);
+    automationButton.setTooltip(lanes.empty() ? "Show automation (A)" : "Hide automation (A)");
     this->displayIndex = displayIndex;
     colourIndex = track.colorIndex >= 0 ? track.colorIndex : displayIndex;
     isSilenced = silenced;
@@ -93,7 +115,7 @@ void TrackHeaderRow::update(const TrackModel& track, int displayIndex, bool sile
     solo.setTooltip(track.soloed ? "Unsolo" : "Solo");
     if (!volume.isMouseButtonDown()) volume.setValue(gainToSlider(track.gain), juce::dontSendNotification);
     if (!pan.isMouseButtonDown()) pan.setValue(track.pan, juce::dontSendNotification);
-    volume.setTooltip("Volume " + db::format(db::linearToDb(track.gain)));
+    volume.setTooltip("Gain " + db::format(db::linearToDb(track.gain)) + " (double-click for 0 dB)");
     repaint();
 }
 
@@ -113,19 +135,52 @@ void TrackHeaderRow::paint(juce::Graphics& g)
     }
     paintMeter(g);
 
-    // Automation lane captions, beside the lanes in the timeline.
+    // Pan's centre, under the slider.
+    if (pan.isVisible())
+    {
+        const auto b = pan.getBounds();
+        g.setColour(colours::textFaint);
+        g.fillRect(b.getCentreX(), b.getBottom() - 3, 1, 3);
+    }
+
+    // Each automation lane's header, beside the lane in the timeline: its parameter (a
+    // dropdown), + for another lane, x to close it.
+    laneHits.clear();
     int y = clipLaneHeight;
     for (const auto& lane : lanes)
     {
-        const auto* param = automation::find(lane.paramId);
         auto r = juce::Rectangle<int>(0, y, getWidth(), lane.heightPx);
         g.setColour(colours::zinc950);
         g.fillRect(r.withTrimmedLeft(swatchArea.getRight()));
         g.setColour(colours::border);
         g.drawHorizontalLine(y, 0.0f, static_cast<float>(getWidth()));
+        auto top = r.reduced(10, 6).removeFromTop(18);
+        LaneHit hit{lane.paramId, {}, {}, {}};
+        hit.close = top.removeFromRight(18);
+        top.removeFromRight(4);
+        hit.add = top.removeFromRight(18);
+        top.removeFromRight(6);
+        hit.caption = top;
+        g.setColour(colours::zinc800);
+        g.fillRoundedRectangle(hit.caption.toFloat(), 3.0f);
         g.setColour(colours::amber400);
         g.setFont(uiFont(12.0f));
-        g.drawText(param != nullptr ? laneCaption(lane.paramId) : lane.paramId, r.reduced(12, 6), juce::Justification::topLeft);
+        g.drawText(laneCaption(lane.paramId), hit.caption.reduced(6, 0).withTrimmedRight(12), juce::Justification::centredLeft, true);
+        {
+            const auto c = hit.caption.toFloat().withLeft(static_cast<float>(hit.caption.getRight() - 14)).getCentre();
+            juce::Path arrow;
+            arrow.addTriangle(c.x - 3.5f, c.y - 1.5f, c.x + 3.5f, c.y - 1.5f, c.x, c.y + 2.5f);
+            g.fillPath(arrow);
+        }
+        for (const auto& [box, glyph] : {std::pair{hit.add, "+"}, std::pair{hit.close, "x"}})
+        {
+            g.setColour(colours::zinc800);
+            g.fillRoundedRectangle(box.toFloat(), 3.0f);
+            g.setColour(colours::textDim);
+            g.setFont(uiFont(12.0f, true));
+            g.drawText(glyph, box, juce::Justification::centred);
+        }
+        laneHits.push_back(hit);
         y += lane.heightPx;
     }
 }
@@ -161,15 +216,24 @@ void TrackHeaderRow::resized()
     area.removeFromRight(4);
     area.removeFromLeft(2);
     auto top = area.removeFromTop(22);
-    solo.setBounds(top.removeFromRight(24));
-    top.removeFromRight(4);
-    mute.setBounds(top.removeFromRight(24));
+    if (!isMaster())
+    {
+        solo.setBounds(top.removeFromRight(24));
+        top.removeFromRight(4);
+        mute.setBounds(top.removeFromRight(24));
+        top.removeFromRight(4);
+    }
+    automationButton.setBounds(top.removeFromRight(24));
     top.removeFromRight(4);
     name.setBounds(top);
     area.removeFromTop(8);
-    volume.setBounds(area.removeFromTop(18));
+    auto gainRow = area.removeFromTop(18);
+    gainCaption.setBounds(gainRow.removeFromLeft(34));
+    volume.setBounds(gainRow);
     area.removeFromTop(4);
-    pan.setBounds(area.removeFromTop(18));
+    auto panRow = area.removeFromTop(18);
+    panCaption.setBounds(panRow.removeFromLeft(34));
+    pan.setBounds(panRow);
 }
 
 bool resizeZone(int y, int clipHeight)
@@ -205,6 +269,24 @@ void TrackHeaderRow::mouseDown(const juce::MouseEvent& e)
     }
     view.selectedTrackId = trackId;
     view.changed();
+    for (const auto& hit : laneHits)
+    {
+        if (hit.caption.contains(e.getPosition()))
+        {
+            showLaneParamMenu(hit.paramId, false);
+            return;
+        }
+        if (hit.add.contains(e.getPosition()))
+        {
+            showLaneParamMenu(hit.paramId, true);
+            return;
+        }
+        if (hit.close.contains(e.getPosition()))
+        {
+            toggleLane(hit.paramId);
+            return;
+        }
+    }
     if (e.mods.isPopupMenu())
     {
         showMenu();
@@ -272,6 +354,79 @@ void TrackHeaderRow::addPluginLaneMenus(juce::PopupMenu& menu)
         if (names.isEmpty()) sub.addItem(s.getProperty("unresolved", false) ? "Not installed" : "No parameters", false, false, [] {});
         menu.addSubMenu(pluginName, sub);
     }
+}
+
+void TrackHeaderRow::addParamItems(juce::PopupMenu& menu, const juce::String& current,
+                                   std::function<void(const juce::String&)> chosen)
+{
+    // Those with points first: what a transition or an earlier edit wrote.
+    if (!automated.isEmpty())
+    {
+        menu.addSectionHeader("Automated");
+        for (const auto& id : automated)
+            menu.addItem(laneCaption(id), true, id == current, [chosen, id] { chosen(id); });
+        menu.addSeparator();
+    }
+    for (const auto& p : isMaster() ? automation::masterParams() : automation::params())
+        if (!automated.contains(p.id))
+            menu.addItem(p.label, true, current == p.id, [chosen, id = juce::String(p.id)] { chosen(id); });
+    const auto* list = plugins.getArray();
+    if (list == nullptr || list->isEmpty()) return;
+    menu.addSeparator();
+    for (const auto& s : *list)
+    {
+        const auto slotId = s.getProperty("slotId", {}).toString();
+        const auto pluginName = s.getProperty("name", "Plugin").toString();
+        const auto names = actions.engineClient().host().engine().getTrackPluginParameterNames(trackId, slotId);
+        juce::PopupMenu sub;
+        constexpr int kBlock = 32;
+        for (int start = 0; start < names.size(); start += kBlock)
+        {
+            juce::PopupMenu block;
+            for (int i = start; i < juce::jmin(names.size(), start + kBlock); ++i)
+            {
+                const auto id = automation::pluginParamId(slotId, i);
+                block.addItem(names[i], true, id == current, [chosen, id, caption = pluginName + ": " + names[i]]
+                              {
+                                  automation::namePluginParam(id, caption);
+                                  chosen(id);
+                              });
+            }
+            if (names.size() <= kBlock) sub = block;
+            else sub.addSubMenu(juce::String(start + 1) + "-" + juce::String(juce::jmin(names.size(), start + kBlock)), block);
+        }
+        if (names.isEmpty()) sub.addItem(s.getProperty("unresolved", false) ? "Not installed" : "No parameters", false, false, [] {});
+        menu.addSubMenu(pluginName, sub);
+    }
+}
+
+void TrackHeaderRow::showLaneParamMenu(const juce::String& laneParam, bool adding)
+{
+    juce::PopupMenu menu;
+    const auto id = trackId;
+    auto current = lanes;
+    addParamItems(menu, adding ? juce::String() : laneParam,
+                  [this, id, laneParam, adding, current](const juce::String& picked)
+                  {
+                      auto next = current;
+                      const auto at = std::find_if(next.begin(), next.end(), [&](const auto& l) { return l.paramId == laneParam; });
+                      const bool shown = std::any_of(next.begin(), next.end(), [&](const auto& l) { return l.paramId == picked; });
+                      if (adding)
+                      {
+                          // A new lane below this one (or nothing new, when it is already shown).
+                          if (!shown) next.insert(at == next.end() ? next.end() : at + 1, {picked, automation::kDefaultLaneHeight});
+                      }
+                      else if (at != next.end() && picked != laneParam)
+                      {
+                          // This lane shows the picked parameter; a lane already showing it goes.
+                          if (shown)
+                              next.erase(std::remove_if(next.begin(), next.end(), [&](const auto& l) { return l.paramId == picked; }), next.end());
+                          const auto here = std::find_if(next.begin(), next.end(), [&](const auto& l) { return l.paramId == laneParam; });
+                          if (here != next.end()) here->paramId = picked;
+                      }
+                      actions.setAutomationLanes(id, next);
+                  });
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this).withMousePosition());
 }
 
 // In place, as the renderer's track header does: Return or clicking away commits, Escape cancels.

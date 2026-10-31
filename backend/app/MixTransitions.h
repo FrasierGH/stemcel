@@ -7,11 +7,13 @@
 // automation (so it can be seen and edited afterwards) and records which preset joins the two
 // clips (MIX_TRANSITION_SET), all as one undo step.
 
+#include "Automation.h"
 #include "EngineClient.h"
 #include "ProjectModel.h"
 
 #include <juce_core/juce_core.h>
 
+#include <map>
 #include <optional>
 #include <vector>
 
@@ -23,10 +25,13 @@ namespace mix
 {
 // One automation parameter's shape over the window: (position 0..1, value in the parameter's
 // own units). Two points at the same position are a step (the second lands a millisecond later).
+// A curve drawn by hand also carries its points with their segment shapes (`shaped`, timeMs
+// being the position 0..1), written as they are; `points` then samples it, for drawing.
 struct Shape
 {
     juce::String param;
     std::vector<std::pair<double, double>> points;
+    std::vector<automation::Point> shaped;
 };
 
 enum class Extra
@@ -101,6 +106,9 @@ struct Half
     double killDb = -40.0;          // how far a band goes down
     juce::String effect = "none";   // Outs: echo, reverb or crush, thrown over the span
     Extra extra = Extra::none;      // Outs: brake, backspin or loopRoll at the clip's end
+    // Curves drawn by hand, by parameter (timeMs is the position 0..1 across the window):
+    // they replace what the options above would write for that parameter.
+    std::map<juce::String, std::vector<automation::Point>> manual;
 
     juce::var toVar() const;
     static Half fromVar(const juce::var& v);
@@ -117,6 +125,9 @@ const HalfKind* findHalf(const juce::String& id);
 
 // The automation a half writes on its track (window-relative points).
 std::vector<Shape> shapesFor(const Half& h, bool outgoing);
+// A starting point for drawing `param` by hand: the curve the options write now, thinned to a
+// few points (or a flat line at the parameter's default over the half's span).
+std::vector<automation::Point> manualSeed(const Half& h, bool outgoing, const juce::String& param);
 
 // Both sides of one join, with the window-level tempo ramp.
 struct Join

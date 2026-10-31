@@ -198,6 +198,9 @@ class AudioEngine : private AudioEngineGraphState,
                                           const juce::String& slotId);
     /** Message thread: an insert's parameter names, in index order (for automation lanes). */
     juce::StringArray getTrackPluginParameterNames(const juce::String& trackId, const juce::String& slotId);
+    /** Message thread: an insert parameter's current normalised value (0..1), or nothing when
+     *  the slot or index is unknown. Read-only; for checks and display. */
+    std::optional<float> getTrackPluginParameterValue(const juce::String& trackId, const juce::String& slotId, int index);
 
     /** Replaces a track's whole insert chain from persisted slots. Idempotent, so load,
      *  undo/redo, and a full engine rebuild can all share it. Slots whose plugin is not in

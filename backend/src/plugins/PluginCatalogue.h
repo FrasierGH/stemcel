@@ -50,6 +50,9 @@ class PluginCatalogue
 
     // Forgets every plugin that previously failed so the next scan retries it.
     void clearBlacklist();
+    // Forgets (and saves without) every plugin whose binary lies inside `folder`; answers how
+    // many. For a scan of a folder outside the standard places that should leave no trace.
+    int forgetPluginsIn(const juce::File& folder);
 
     std::unique_ptr<juce::AudioPluginInstance> createInstance(const juce::PluginDescription& description,
                                                               double sampleRate, int blockSize,

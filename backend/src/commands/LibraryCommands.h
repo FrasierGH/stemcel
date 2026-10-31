@@ -27,6 +27,8 @@ void handleLibraryReanalyse(const juce::var& payload, AudioEngine& engine, Proje
                             BridgeServer& bridge, juce::ThreadPool& peakPool, const DecodedCache& decodedCache);
 void handleLibraryItemSetAudioType(const juce::var& payload, ProjectState& projectState);
 void handleLibraryItemSetCoverHidden(const juce::var& payload, ProjectState& projectState);
+// {itemId, sections: [{startSec, endSec, label, kind, ...}]}; an empty list clears them.
+void handleLibraryItemSetSections(const juce::var& payload, ProjectState& projectState);
 void handleLibraryItemSetCoverOverride(const juce::var& payload, ProjectState& projectState);
 void handleLibraryItemSetManualTempo(const juce::var& payload, AudioEngine& engine,
                                      ProjectState& projectState, BridgeServer& bridge);

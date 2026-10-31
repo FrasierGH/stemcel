@@ -130,6 +130,9 @@ TimelinePreferencesPage::TimelinePreferencesPage(AppPreferences& preferences) : 
     toggle(seedTempo, "seedProjectTempoFromFirstClip", true);
     toggle(matchTempo, "matchProjectTempoOnDrop", true);
     toggle(align, "alignClipsToGridOnAnalysis", true);
+    toggle(detectSections, "detectSections", false);
+    detectSections.setTooltip("Stemcel's own analysis, stored in the project and cached in ~/Stemcel/Analysis. Tracks from "
+                              "rekordbox use rekordbox's phrases. Nothing is written to rekordbox.");
     styleLabel(skipLabel);
     fillCombo(skipTarget, {"markers", "timelineEnds"},
               {"Markers - Step through timeline markers", "Timeline ends - Jump to project start / end"},
@@ -146,7 +149,7 @@ TimelinePreferencesPage::TimelinePreferencesPage(AppPreferences& preferences) : 
 void TimelinePreferencesPage::resized()
 {
     auto area = getLocalBounds().reduced(16);
-    for (auto* b : {&follow, &seedTempo, &matchTempo, &align})
+    for (auto* b : {&follow, &seedTempo, &matchTempo, &align, &detectSections})
     {
         b->setBounds(area.removeFromTop(26));
         area.removeFromTop(4);
