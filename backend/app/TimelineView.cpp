@@ -814,7 +814,8 @@ void TimelineView::paint(juce::Graphics& g)
                 auto r = clipBounds(c, row);
                 if (r.getRight() < 0.0f || r.getX() > static_cast<float>(getWidth())) continue;
                 const bool dragging = drag != DragKind::none && drag != DragKind::seek && drag != DragKind::range
-                                      && drag != DragKind::marker && c.id == dragClipId;
+                                      && drag != DragKind::marker && drag != DragKind::pan && drag != DragKind::transitionMove
+                                      && drag != DragKind::transitionStart && drag != DragKind::transitionEnd && c.id == dragClipId;
                 paintClip(g, c, r, silenced, trackColor, dragging && !dragDuplicates ? 0.35f : 1.0f);
             }
 
@@ -925,7 +926,8 @@ void TimelineView::paintMixTransitions(juce::Graphics& g)
     const auto violet = colours::violet500;
     for (const auto& t : *list)
     {
-        const auto shape = transitionShape(t);
+        const bool dragging = txPreview.has_value() && t.getProperty("id", {}) == txDragRecord.getProperty("id", {});
+        const auto shape = transitionShape(t, dragging ? txPreview : std::nullopt);
         if (!shape) continue;
         // The window over both clips, the outgoing one fading out and the incoming one in.
         for (const auto& [area, outgoing] : {std::pair{shape->out, true}, std::pair{shape->in, false}})
@@ -966,25 +968,30 @@ void TimelineView::paintMixTransitions(juce::Graphics& g)
     }
 }
 
-std::optional<TimelineView::TransitionShape> TimelineView::transitionShape(const juce::var& record) const
+std::optional<TimelineView::TransitionShape> TimelineView::transitionShape(const juce::var& record,
+                                                                          std::optional<std::pair<double, double>> window) const
 {
     const auto* in = model().findClip(record.getProperty("inClipId", {}).toString());
     const auto* out = model().findClip(record.getProperty("outClipId", {}).toString());
     if (in == nullptr || out == nullptr) return std::nullopt;
-    const auto x0 = static_cast<float>(view.msToX(static_cast<double>(record.getProperty("startMs", 0.0))));
-    const auto x1 = juce::jmax(x0 + 4.0f, static_cast<float>(view.msToX(static_cast<double>(record.getProperty("endMs", 0.0)))));
+    const double startMs = window ? window->first : static_cast<double>(record.getProperty("startMs", 0.0));
+    const double endMs = window ? window->second : static_cast<double>(record.getProperty("endMs", 0.0));
+    const auto x0 = static_cast<float>(view.msToX(startMs));
+    const auto x1 = juce::jmax(x0 + 4.0f, static_cast<float>(view.msToX(endMs)));
+    // Across each track's clip row over the window: it may run past the clips at the join,
+    // over the clips that sit end to end with them.
     std::optional<juce::Rectangle<float>> outArea, inArea;
     for (const auto& row : rows)
     {
         if (row.trackId == out->trackId)
         {
             const auto b = clipBounds(*out, row);
-            outArea = juce::Rectangle<float>(x0, b.getY(), x1 - x0, b.getHeight()).getIntersection(b);
+            outArea = juce::Rectangle<float>(x0, b.getY(), x1 - x0, b.getHeight());
         }
         if (row.trackId == in->trackId)
         {
             const auto b = clipBounds(*in, row);
-            inArea = juce::Rectangle<float>(x0, b.getY(), x1 - x0, b.getHeight()).getIntersection(b);
+            inArea = juce::Rectangle<float>(x0, b.getY(), x1 - x0, b.getHeight());
         }
     }
     if (!outArea || !inArea) return std::nullopt;
@@ -999,6 +1006,48 @@ std::optional<TimelineView::TransitionShape> TimelineView::transitionShape(const
     const float boundary = lower.getY() > upper.getBottom() ? (upper.getBottom() + lower.getY()) / 2.0f : upper.getBottom();
     shape.pill = {cx - pillWidth / 2.0f, boundary - 9.0f, pillWidth, 18.0f};
     return shape;
+}
+
+std::optional<std::pair<juce::var, TimelineView::DragKind>> TimelineView::transitionHandleAt(juce::Point<float> p) const
+{
+    const auto* list = model().raw.getProperty("mixTransitions", {}).getArray();
+    if (list == nullptr) return std::nullopt;
+    constexpr float kGrab = 5.0f;
+    for (const auto& t : *list)
+    {
+        const auto shape = transitionShape(t);
+        if (!shape) continue;
+        if (shape->pill.contains(p)) return std::make_pair(t, DragKind::transitionMove);
+        const auto* out = model().findClip(t.getProperty("outClipId", {}).toString());
+        const auto* in = model().findClip(t.getProperty("inClipId", {}).toString());
+        for (const auto& [area, clip] : {std::pair{shape->out, out}, std::pair{shape->in, in}})
+        {
+            if (area.isEmpty() || p.y < area.getY() || p.y > area.getBottom()) continue;
+            const auto clipStartX = static_cast<float>(view.msToX(clip->offsetMs));
+            const auto clipEndX = static_cast<float>(view.msToX(clip->endMs()));
+            const auto onClipEdge = [&](float x) { return std::abs(x - clipStartX) < 3.0f || std::abs(x - clipEndX) < 3.0f; };
+            if (std::abs(p.x - area.getX()) <= kGrab && !onClipEdge(area.getX())) return std::make_pair(t, DragKind::transitionStart);
+            if (std::abs(p.x - area.getRight()) <= kGrab && !onClipEdge(area.getRight())) return std::make_pair(t, DragKind::transitionEnd);
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<juce::Rectangle<float>> TimelineView::transitionArea(const juce::String& transitionId, bool outgoing) const
+{
+    if (const auto* list = model().raw.getProperty("mixTransitions", {}).getArray())
+        for (const auto& t : *list)
+            if (t.getProperty("id", {}).toString() == transitionId)
+                if (const auto shape = transitionShape(t)) return outgoing ? shape->out : shape->in;
+    return std::nullopt;
+}
+
+void TimelineView::retimeTransitions(const juce::String& clipId, double oldStartMs, double oldEndMs)
+{
+    juce::StringArray removed;
+    mix::retimeAfterClipEdit(actions.engineClient(), actions, model(), clipId, oldStartMs, oldEndMs, removed);
+    if (!removed.isEmpty() && actions.onNotify)
+        actions.onNotify("Removed transition " + removed.joinIntoString(", ") + ": its clips no longer meet", false);
 }
 
 std::vector<std::pair<juce::String, juce::String>> TimelineView::nearbyPairs(const juce::String& clipId) const
@@ -1305,6 +1354,25 @@ void TimelineView::mouseDown(const juce::MouseEvent& e)
         return;
     }
 
+    // A transition's label moves it; its band edges stretch it (snapped; Cmd/Ctrl frees it).
+    if (!e.mods.isPopupMenu())
+        if (const auto handle = transitionHandleAt(e.getPosition().toFloat()))
+        {
+            const auto* out = model().findClip(handle->first.getProperty("outClipId", {}).toString());
+            const auto* in = model().findClip(handle->first.getProperty("inClipId", {}).toString());
+            if (out != nullptr && in != nullptr)
+            {
+                drag = handle->second;
+                txDragRecord = handle->first;
+                txOriginWindow = {static_cast<double>(txDragRecord.getProperty("startMs", 0.0)),
+                                  static_cast<double>(txDragRecord.getProperty("endMs", 0.0))};
+                txLimits = mix::windowLimits(model(), *out, *in);
+                txPreview.reset();
+                dragAnchorMs = ms;
+                return;
+            }
+        }
+
     if (const auto hit = clipAt(e.getPosition()); hit.has_value() && hit->clip->id == view.envelopeClipId && !e.mods.isPopupMenu()
                                                    && !hit->clip->locked)
     {
@@ -1489,6 +1557,28 @@ void TimelineView::mouseDrag(const juce::MouseEvent& e)
         repaint();
         break;
     }
+    case DragKind::transitionMove:
+    case DragKind::transitionStart:
+    case DragKind::transitionEnd:
+    {
+        if (e.getDistanceFromDragStart() <= kDragThresholdPx) return;
+        constexpr double kShortestMs = 50.0;
+        const double delta = ms - dragAnchorMs;
+        auto [start, end] = txOriginWindow;
+        if (drag == DragKind::transitionMove)
+        {
+            const double length = end - start;
+            start = juce::jlimit(txLimits.first, juce::jmax(txLimits.first, txLimits.second - length), snapped(start + delta));
+            end = start + length;
+        }
+        else if (drag == DragKind::transitionStart)
+            start = juce::jlimit(txLimits.first, juce::jmax(txLimits.first, end - kShortestMs), snapped(start + delta));
+        else
+            end = juce::jlimit(juce::jmin(txLimits.second, start + kShortestMs), txLimits.second, snapped(end + delta));
+        txPreview = std::make_pair(start, end);
+        repaint();
+        break;
+    }
     case DragKind::trimStart:
         dragPreviewStartMs = juce::jmin(snapped(dragOriginStartMs + (ms - dragAnchorMs)), dragOriginEndMs - 10.0);
         repaint();
@@ -1568,17 +1658,36 @@ void TimelineView::mouseUp(const juce::MouseEvent& e)
                 || dragPreviewTrackId != (model().findClip(dragClipId) != nullptr
                                               ? model().findClip(dragClipId)->trackId
                                               : dragPreviewTrackId)))
-            actions.moveClip(dragClipId, dragPreviewStartMs, dragPreviewTrackId);
+            actions.engineClient().inUndoGroup("Move clip",
+                                               [&]
+                                               {
+                                                   actions.moveClip(dragClipId, dragPreviewStartMs, dragPreviewTrackId);
+                                                   mirror.refreshNow();
+                                                   retimeTransitions(dragClipId, dragOriginStartMs, dragOriginEndMs);
+                                               });
         break;
     case DragKind::trimStart:
     case DragKind::trimEnd:
         if (moved)
-        {
-            actions.trimClip(dragClipId, dragPreviewStartMs, dragPreviewEndMs);
-            // A trim into a neighbour crossfades the pair (renderer: maybeCreateTransitionAfterTrim).
-            mirror.refreshNow();
-            actions.maybeCreateTransitionAfterTrim(dragClipId, kind == DragKind::trimEnd);
-        }
+            actions.engineClient().inUndoGroup("Trim clip",
+                                               [&]
+                                               {
+                                                   actions.trimClip(dragClipId, dragPreviewStartMs, dragPreviewEndMs);
+                                                   // A trim into a neighbour crossfades the pair (renderer: maybeCreateTransitionAfterTrim).
+                                                   mirror.refreshNow();
+                                                   actions.maybeCreateTransitionAfterTrim(dragClipId, kind == DragKind::trimEnd);
+                                                   mirror.refreshNow();
+                                                   retimeTransitions(dragClipId, dragOriginStartMs, dragOriginEndMs);
+                                               });
+        break;
+    case DragKind::transitionMove:
+    case DragKind::transitionStart:
+    case DragKind::transitionEnd:
+        if (txPreview.has_value()
+            && (std::abs(txPreview->first - txOriginWindow.first) > 0.5 || std::abs(txPreview->second - txOriginWindow.second) > 0.5))
+            mix::reapply(actions.engineClient(), actions, model(), txDragRecord, *txPreview);
+        txPreview.reset();
+        txDragRecord = juce::var();
         break;
     case DragKind::none:
         break;
@@ -1592,6 +1701,12 @@ void TimelineView::mouseMove(const juce::MouseEvent& e)
     {
         setMouseCursor(markerAt(e.getPosition()) != nullptr ? juce::MouseCursor::LeftRightResizeCursor
                                                             : juce::MouseCursor::PointingHandCursor);
+        return;
+    }
+    if (const auto handle = transitionHandleAt(e.getPosition().toFloat()))
+    {
+        setMouseCursor(handle->second == DragKind::transitionMove ? juce::MouseCursor::DraggingHandCursor
+                                                                   : juce::MouseCursor::LeftRightResizeCursor);
         return;
     }
     const auto hit = clipAt(e.getPosition());

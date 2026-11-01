@@ -552,6 +552,115 @@ bool apply(EngineClient& engine, TimelineActions& actions, const ProjectModel& m
     return true;
 }
 
+std::optional<std::pair<double, double>> windowOf(const ProjectModel& model, const juce::String& outClipId,
+                                                  const juce::String& inClipId)
+{
+    if (const auto* record = recordFor(model, outClipId, inClipId))
+    {
+        const double start = record->getProperty("startMs", 0.0);
+        const double end = record->getProperty("endMs", 0.0);
+        if (end > start) return std::make_pair(start, end);
+    }
+    const auto* out = model.findClip(outClipId);
+    const auto* in = model.findClip(inClipId);
+    return out != nullptr && in != nullptr ? overlap(*out, *in) : std::nullopt;
+}
+
+namespace
+{
+// The run of clips that sit end to end with `clip` on its track (gaps under 5 ms), as a span.
+std::pair<double, double> chainOf(const ProjectModel& model, const ClipModel& clip)
+{
+    constexpr double kTouchMs = 5.0;
+    double start = clip.offsetMs, end = clip.endMs();
+    const auto* track = model.findTrack(clip.trackId);
+    if (track == nullptr) return {start, end};
+    for (bool grew = true; grew;)
+    {
+        grew = false;
+        for (const auto& c : track->clips)
+        {
+            if (std::abs(c.endMs() - start) < kTouchMs && c.offsetMs < start)
+            {
+                start = c.offsetMs;
+                grew = true;
+            }
+            if (std::abs(c.offsetMs - end) < kTouchMs && c.endMs() > end)
+            {
+                end = c.endMs();
+                grew = true;
+            }
+        }
+    }
+    return {start, end};
+}
+} // namespace
+
+std::pair<double, double> windowLimits(const ProjectModel& model, const ClipModel& out, const ClipModel& in)
+{
+    const auto a = chainOf(model, out);
+    const auto b = chainOf(model, in);
+    return {juce::jmax(a.first, b.first), juce::jmin(a.second, b.second)};
+}
+
+bool reapply(EngineClient& engine, TimelineActions& actions, const ProjectModel& model, const juce::var& record,
+             std::pair<double, double> window)
+{
+    const auto outId = record.getProperty("outClipId", {}).toString();
+    const auto inId = record.getProperty("inClipId", {}).toString();
+    const auto settings = record.getProperty("settings", {});
+    if (settings.isObject() && (settings.hasProperty("out") || settings.hasProperty("in")))
+        return applyJoin(engine, actions, model, outId, inId, joinOf(record), window);
+    return apply(engine, actions, model, outId, inId, record.getProperty("preset", {}).toString(), window);
+}
+
+void retimeAfterClipEdit(EngineClient& engine, TimelineActions& actions, const ProjectModel& model, const juce::String& clipId,
+                         double oldStartMs, double oldEndMs, juce::StringArray& removed)
+{
+    const auto* list = model.raw.getProperty("mixTransitions", {}).getArray();
+    const auto* clip = model.findClip(clipId);
+    if (list == nullptr || clip == nullptr) return;
+    constexpr double kOnEdgeMs = 2.0;   // a window edge this near a clip edge was on it
+    constexpr double kShortestMs = 50.0;
+    const bool moved = std::abs((clip->endMs() - clip->offsetMs) - (oldEndMs - oldStartMs)) < 1.0
+                       && std::abs(clip->offsetMs - oldStartMs) >= 1.0;
+    // Copies: re-applying rebuilds the model's list under us.
+    std::vector<juce::var> records(list->begin(), list->end());
+    for (const auto& record : records)
+    {
+        const auto outId = record.getProperty("outClipId", {}).toString();
+        const auto inId = record.getProperty("inClipId", {}).toString();
+        if (outId != clipId && inId != clipId) continue;
+        const auto* out = model.findClip(outId);
+        const auto* in = model.findClip(inId);
+        if (out == nullptr || in == nullptr) continue;
+        const double oldStart = record.getProperty("startMs", 0.0), oldEnd = record.getProperty("endMs", 0.0);
+        double start = oldStart, end = oldEnd;
+        if (moved)
+        {
+            const double delta = clip->offsetMs - oldStartMs;
+            start += delta;
+            end += delta;
+        }
+        else
+        {
+            if (outId == clipId && std::abs(oldEnd - oldEndMs) < kOnEdgeMs) end = clip->endMs();
+            if (inId == clipId && std::abs(oldStart - oldStartMs) < kOnEdgeMs) start = clip->offsetMs;
+        }
+        const auto limits = windowLimits(model, *out, *in);
+        start = juce::jmax(start, limits.first);
+        end = juce::jmin(end, limits.second);
+        if (end - start < kShortestMs)
+        {
+            removed.add(labelOf(record));
+            remove(engine, actions, model, record.getProperty("id", {}).toString());
+            continue;
+        }
+        if (std::abs(start - oldStart) > 0.5 || std::abs(end - oldEnd) > 0.5)
+            reapply(engine, actions, model, record, {start, end});
+    }
+}
+
 void remove(EngineClient& engine, TimelineActions& actions, const ProjectModel& model, const juce::String& transitionId)
 {
     if (const auto* list = model.raw.getProperty("mixTransitions", {}).getArray())
@@ -1005,12 +1114,12 @@ juce::String labelOf(const juce::var& record)
 }
 
 bool applyJoin(EngineClient& engine, TimelineActions& actions, const ProjectModel& model, const juce::String& outClipId,
-               const juce::String& inClipId, const Join& join)
+               const juce::String& inClipId, const Join& join, std::optional<std::pair<double, double>> window)
 {
     const auto* out = model.findClip(outClipId);
     const auto* in = model.findClip(inClipId);
     if (out == nullptr || in == nullptr) return false;
-    const auto window = overlap(*out, *in);
+    if (!window.has_value()) window = windowOf(model, outClipId, inClipId);
     if (!window.has_value()) return false;
     const double start = window->first;
     const double end = window->second;

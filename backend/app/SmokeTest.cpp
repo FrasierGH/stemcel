@@ -2285,6 +2285,79 @@ void SmokeTest::addTempoJourney()
                          return true;
                      }});
     steps.back().poll = true;
+    // A transition follows its clips and takes a new window: shortening the outgoing clip pulls
+    // the window's end (which sat on the clip's end) in with it, then the start dragged a bar
+    // later is written there.
+    steps.push_back({"transition follows and drags",
+                     [this]
+                     {
+                         mirror.refreshNow();
+                         txStage = 0;
+                         const auto* record = mix::recordFor(model(), nearOutClipId, nearInClipId);
+                         const auto* out = model().findClip(nearOutClipId);
+                         if (record == nullptr || out == nullptr) return;
+                         const double barMs = 240000.0 / model().bpm;
+                         txOldStart = out->offsetMs;
+                         txOldEnd = out->endMs();
+                         txExpectEnd = txOldEnd - 2.0 * barMs;
+                         actions.trimClip(nearOutClipId, out->offsetMs, txExpectEnd);
+                         mirror.refreshNow();
+                         juce::StringArray removed;
+                         mix::retimeAfterClipEdit(engine, actions, model(), nearOutClipId, txOldStart, txOldEnd, removed);
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         mirror.refreshNow();
+                         const auto* record = mix::recordFor(model(), nearOutClipId, nearInClipId);
+                         if (record == nullptr) return false;
+                         const double start = record->getProperty("startMs", 0.0), end = record->getProperty("endMs", 0.0);
+                         const double barMs = 240000.0 / model().bpm;
+                         auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
+                         auto* workspace = window != nullptr ? findDescendant<Workspace>(window) : nullptr;
+                         auto* timeline = window != nullptr ? findDescendant<TimelineView>(window) : nullptr;
+                         if (workspace == nullptr || timeline == nullptr) return false;
+                         if (txStage == 0)
+                         {
+                             if (std::abs(end - txExpectEnd) > 1.0) return false;
+                             txFollowLine = "end followed the clip to " + juce::String(end, 0) + " ms";
+                             // On screen, so its label can be dragged.
+                             workspace->projectMirror().refreshNow();
+                             if (const auto* out = model().findClip(nearOutClipId)) timeline->revealRange(start, end, out->trackId);
+                             txStartedAt = juce::Time::getMillisecondCounter();
+                             txStage = 1;
+                             return false;
+                         }
+                         if (txStage == 1)
+                         {
+                             if (juce::Time::getMillisecondCounter() - txStartedAt < 300) return false;
+                             // Its start edge on the outgoing clip's row (on the incoming row that edge is the
+                             // clip's own, for trimming), dragged right by a bar's width: the window starts a bar later.
+                             const auto area = timeline->transitionArea(record->getProperty("id", {}).toString(), true);
+                             if (!area) return false;
+                             const auto label = std::optional<juce::Point<float>>(juce::Point<float>{area->getX() + 1.0f, area->getCentreY()});
+                             const auto& view = workspace->viewState();
+                             const auto dx = static_cast<float>(barMs / 1000.0 * view.pxPerSecond);
+                             const auto now = juce::Time::getCurrentTime();
+                             auto event = [&](juce::Point<float> at, bool dragged)
+                             {
+                                 return juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(), at,
+                                                         juce::ModifierKeys(juce::ModifierKeys::leftButtonModifier), 1.0f, 0.0f, 0.0f, 0.0f,
+                                                         0.0f, timeline, timeline, now, *label, now, 1, dragged);
+                             };
+                             const juce::Point<float> to{label->x + dx, label->y};
+                             txExpectStart = start + barMs;
+                             timeline->mouseDown(event(*label, false));
+                             timeline->mouseDrag(event(to, true));
+                             timeline->mouseUp(event(to, true));
+                             txStage = 2;
+                             return false;
+                         }
+                         if (std::abs(start - txExpectStart) > 1.0) return false;
+                         report.add("transition " + txFollowLine + "; its start edge dragged a bar later to " + juce::String(start, 0) + " ms");
+                         return true;
+                     }});
+    steps.back().poll = true;
     // Every parameter there is to tweak can be automated: each knob of Track FX and Project FX
     // has a lane, every track and master lane is stored and understood by the audio engine, and
     // every parameter a transition writes is one of them.

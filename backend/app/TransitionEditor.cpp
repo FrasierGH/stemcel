@@ -486,7 +486,7 @@ double TransitionEditor::windowBars() const
     const auto* out = m.findClip(outClipId);
     const auto* in = m.findClip(inClipId);
     if (out == nullptr || in == nullptr) return 0.0;
-    const auto window = mix::overlap(*out, *in);
+    const auto window = mix::windowOf(m, outClipId, inClipId);
     if (!window.has_value()) return 0.0;
     const auto curve = m.tempoCurve();
     return (curve.beatAt(window->second) - curve.beatAt(window->first)) / 4.0;

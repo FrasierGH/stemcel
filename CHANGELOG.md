@@ -9,6 +9,7 @@
 - **Resizable panes**: drag the bar above the library or mixer, beside the track headers, and the bottom edge of an automation lane. The transition editor's window resizes.
 - **Glue makeup**: Glue makes up what it takes off (up to 12 dB) and a Makeup knob adds more; both can be automated on the master.
 - **Clip gain**: a gain slider in the clip editor (-24 to +12 dB), shown in the clip's header.
+- **Transitions you can drag**: drag a transition's label to move it, or its edges to shorten or lengthen it, across clips that sit end to end on a track. A transition follows its clips: moving one carries it along, and lengthening the outgoing clip stretches a transition that ended with it.
 
 ### Changed
 

@@ -90,6 +90,8 @@ class TimelineView final : public juce::Component,
     // Zoom keeping `anchorMs` under the same x (or the playhead/centre when unset).
     void zoomBy(double factor, std::optional<double> anchorMs = std::nullopt);
     void zoomToFit();
+    // Where a transition is drawn on the outgoing (or incoming) clip's row, if it is on screen.
+    std::optional<juce::Rectangle<float>> transitionArea(const juce::String& transitionId, bool outgoing) const;
     // The furthest the view zooms out: half the zoom that fits the whole project (and never
     // closer than 1.25 px/s), so a long mix always fits with room to spare.
     double minPxPerSecond() const;
@@ -115,7 +117,10 @@ class TimelineView final : public juce::Component,
         automationBend,
         envelopePoint,
         marker,
-        pan // middle button held: the view follows the mouse
+        pan, // middle button held: the view follows the mouse
+        transitionMove,  // a transition's label, dragged: the window moves
+        transitionStart, // a transition's left edge
+        transitionEnd    // its right edge
     };
 
     struct ClipHit
@@ -239,7 +244,17 @@ class TimelineView final : public juce::Component,
             return out.contains(p) || in.contains(p) || connector.contains(p) || pill.contains(p);
         }
     };
-    std::optional<TransitionShape> transitionShape(const juce::var& record) const;
+    // `window` stands in for the record's own while it is being dragged.
+    std::optional<TransitionShape> transitionShape(const juce::var& record,
+                                                   std::optional<std::pair<double, double>> window = std::nullopt) const;
+    // The transition handle under `p`: the label (move) or a band edge (resize). An edge that
+    // lies on a clip's own edge is left to trimming that clip.
+    std::optional<std::pair<juce::var, DragKind>> transitionHandleAt(juce::Point<float> p) const;
+    // A clip moved or trimmed: its transitions follow (mix::retimeAfterClipEdit).
+    void retimeTransitions(const juce::String& clipId, double oldStartMs, double oldEndMs);
+    juce::var txDragRecord;
+    std::pair<double, double> txOriginWindow{0.0, 0.0}, txLimits{0.0, 0.0};
+    std::optional<std::pair<double, double>> txPreview;
 
     juce::String transitionDropClipId; // the clip a dragged transition would land on
 
