@@ -840,8 +840,11 @@ std::vector<TempoPoint> ProjectState::getClipSourceTempo(const juce::String& cli
     const auto clip = findClip(clipId);
     if (!clip.isValid()) return points;
     if (const auto* list = clip.getProperty(kSourceTempo).getArray())
+    {
+        points.reserve(static_cast<size_t>(list->size()));
         for (const auto& p : *list)
             points.push_back({static_cast<double>(p.getProperty("sourceMs", 0.0)), static_cast<double>(p.getProperty("bpm", 0.0))});
+    }
     return points;
 }
 

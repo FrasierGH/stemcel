@@ -24,7 +24,7 @@ double percentile(std::vector<double> values, double p)
 {
     if (values.empty()) return 0.0;
     std::sort(values.begin(), values.end());
-    const auto i = static_cast<size_t>(juce::jlimit(0.0, 1.0, p) * static_cast<double>(values.size() - 1) + 0.5);
+    const auto i = static_cast<size_t>(std::lround(juce::jlimit(0.0, 1.0, p) * static_cast<double>(values.size() - 1)));
     return values[std::min(i, values.size() - 1)];
 }
 } // namespace
@@ -92,6 +92,7 @@ TempoDriftResult analyseTempoDriftSamples(const std::vector<float>& mono, double
     // beats are placeholders, not the recording's, so they go.
     {
         std::vector<double> strengths;
+        strengths.reserve(frames.size());
         for (const int f : frames) strengths.push_back(odf[static_cast<size_t>(f)]);
         const double floor = 0.5 * percentile(strengths, 0.5);
         const auto strong = [&](int f) { return odf[static_cast<size_t>(f)] >= floor; };
@@ -100,17 +101,20 @@ TempoDriftResult analyseTempoDriftSamples(const std::vector<float>& mono, double
         frames = first < last ? std::vector<int>(first, last) : std::vector<int>{};
     }
     if (frames.size() < 16) return result;
+    result.beatsSec.reserve(frames.size());
     for (const int f : frames) result.beatsSec.push_back((static_cast<double>(f) - kOdfGroupDelayFrames) / envRate);
 
     // A tempo per bar (four beats), at the bar's middle. A bar far off both its neighbours (a
     // missed or doubled beat) takes their median; real drift, even a sharp turn, is kept.
     std::vector<TempoDriftResult::Point> bars;
+    bars.reserve(result.beatsSec.size() / 4 + 1);
     for (size_t i = 0; i + 4 < result.beatsSec.size(); i += 4)
     {
         const double span = result.beatsSec[i + 4] - result.beatsSec[i];
         if (span > 0.0) bars.push_back({(result.beatsSec[i] + result.beatsSec[i + 4]) / 2.0, 240.0 / span});
     }
     if (bars.size() < 4) return result;
+    result.curve.reserve(bars.size());
     for (size_t i = 0; i < bars.size(); ++i)
     {
         std::vector<double> w;
@@ -121,6 +125,7 @@ TempoDriftResult analyseTempoDriftSamples(const std::vector<float>& mono, double
         result.curve.push_back({bars[i].sec, outlier ? median : bars[i].bpm});
     }
     std::vector<double> tempos;
+    tempos.reserve(result.curve.size());
     for (const auto& p : result.curve) tempos.push_back(p.bpm);
     result.mainBpm = percentile(tempos, 0.5);
     result.driftPercent = (percentile(tempos, 0.95) - percentile(tempos, 0.05)) / result.mainBpm * 100.0;
