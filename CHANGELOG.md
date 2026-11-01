@@ -16,6 +16,8 @@
 ### Changed
 
 - The playhead is drawn exactly where it is repainted, at 60 Hz, so no trail is left behind it.
+- rekordbox: a drive holding exports in both `PIONEER` and `.PIONEER` is offered, reading the newer one (and not written to until one is removed); a desktop library left on a drive beside a newer export is set aside for the export; drives' exports are listed first, and what each drive holds is logged.
+- rekordbox intelligent playlists list the tracks their rules admit.
 
 ### Removed
 

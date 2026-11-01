@@ -241,3 +241,58 @@ fn a_device_export_opens_and_takes_playlist_edits() {
     }
     let _ = track_id;
 }
+
+fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), &target).unwrap();
+        }
+    }
+}
+
+fn set_age(dir: &std::path::Path, seconds_ago: u64) {
+    let when = std::time::SystemTime::now() - std::time::Duration::from_secs(seconds_ago);
+    for name in ["export.pdb", "exportLibrary.db"] {
+        let path = dir.join("rekordbox").join(name);
+        if path.is_file() {
+            std::fs::File::options().write(true).open(&path).unwrap().set_modified(when).unwrap();
+        }
+    }
+}
+
+// A drive with exports in both PIONEER and .PIONEER (rbxport refuses the pair): it opens,
+// reads the newer one, and is not written to.
+#[test]
+fn a_drive_with_both_export_folders_opens_the_newer() {
+    let dir = tempfile::tempdir().unwrap();
+    let audio = dir.path().join("source.wav");
+    std::fs::write(&audio, wav_bytes()).unwrap();
+    let stick = dir.path().join("stick");
+    let built = take_json(unsafe {
+        rbx_build_device_fixture(c(stick.to_str().unwrap()).as_ptr(), c(audio.to_str().unwrap()).as_ptr())
+    });
+    assert_eq!(built["ok"], true, "{built}");
+    copy_dir(&stick.join("PIONEER"), &stick.join(".PIONEER"));
+    set_age(&stick.join("PIONEER"), 3600);
+    set_age(&stick.join(".PIONEER"), 0);
+    assert!(device_library::read(&stick, Format::OneLibrary).is_err(), "rbxport refuses the pair on its own");
+    assert!(device_database(&stick, Format::OneLibrary).to_string_lossy().contains(".PIONEER"), "the newer folder is the one read");
+
+    for format in ["oneLibrary", "deviceLibrary"] {
+        let mut error: *mut c_char = std::ptr::null_mut();
+        let library = unsafe { rbx_open_device(c(stick.to_str().unwrap()).as_ptr(), c(format).as_ptr(), &mut error) };
+        assert!(!library.is_null(), "{format}: {}", take_json_text(error));
+        let snapshot = take_json(unsafe { rbx_snapshot_json(library) });
+        let track = &snapshot["tracks"][0];
+        assert_eq!(track["title"], "Stick Track");
+        assert!(std::path::Path::new(track["path"].as_str().unwrap()).is_file(), "tracks resolve on the drive: {track}");
+        let refusal = take_json(unsafe { rbx_write_refusal_json(library) });
+        assert_eq!(refusal["ok"], false, "{format}: writes are refused while both folders hold exports");
+        unsafe { rbx_close(library) };
+    }
+}

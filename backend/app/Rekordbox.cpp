@@ -282,17 +282,12 @@ std::vector<RekordboxSource> Rekordbox::listSources()
     std::vector<RekordboxSource> out(1); // this computer
     if (functions == nullptr || functions->devices == nullptr) return out;
     const auto json = juce::JSON::parse(callJson([&] { return functions->devices(); }));
-    if (const auto* drives = json.getProperty("driveLibraries", {}).getArray())
-        for (const auto& d : *drives)
-        {
-            RekordboxSource source;
-            source.kind = RekordboxSource::Kind::drive;
-            source.name = str(d, "name");
-            source.masterDb = juce::File(str(d, "masterDb"));
-            out.push_back(source);
-        }
+    // Exports first: on a drive that also keeps an older desktop library, the export is the
+    // one in use (that library is left out of the list altogether).
     if (const auto* devices = json.getProperty("devices", {}).getArray())
         for (const auto& d : *devices)
+        {
+            log::info("rekordbox", "drive " + str(d, "name") + ": " + str(d, "contents"));
             if (const auto* formats = d.getProperty("formats", {}).getArray())
                 for (const auto& format : *formats)
                 {
@@ -303,6 +298,16 @@ std::vector<RekordboxSource> Rekordbox::listSources()
                     source.format = format.toString();
                     out.push_back(source);
                 }
+        }
+    if (const auto* drives = json.getProperty("driveLibraries", {}).getArray())
+        for (const auto& d : *drives)
+        {
+            RekordboxSource source;
+            source.kind = RekordboxSource::Kind::drive;
+            source.name = str(d, "name");
+            source.masterDb = juce::File(str(d, "masterDb"));
+            out.push_back(source);
+        }
     return out;
 }
 
