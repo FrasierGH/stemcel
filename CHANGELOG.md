@@ -9,6 +9,7 @@
 - **Resizable panes**: drag the bar above the library or mixer, beside the track headers, and the bottom edge of an automation lane. The transition editor's window resizes.
 - **Glue makeup**: Glue makes up what it takes off (up to 12 dB) and a Makeup knob adds more; both can be automated on the master.
 - **Clip gain**: a gain slider in the clip editor (-24 to +12 dB), shown in the clip's header.
+- **BPM variability check** (clip and library menus): follows the beats through the whole recording and shows its tempo bar by bar, with the stretches that stray from its main tempo shaded. A drifting clip can then be **auto-warped** to the main tempo (each beat lands on the grid), have the **project tempo follow it** (its measured tempo becomes the tempo map over the clip, which plays as recorded), or have its **warp edited by hand** on the graph.
 - **Transitions you can drag**: drag a transition's label to move it, or its edges to shorten or lengthen it, across clips that sit end to end on a track. A transition follows its clips: moving one carries it along, and lengthening the outgoing clip stretches a transition that ended with it.
 
 ### Changed

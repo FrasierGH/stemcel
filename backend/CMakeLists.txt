@@ -452,6 +452,7 @@ add_library(stemcel_backend_core STATIC
     src/dsp/BpmDetector.cpp
     src/dsp/BpmAnalysisHelpers.cpp
     src/dsp/BpmAudioLoader.cpp
+    src/dsp/TempoDrift.cpp
     src/dsp/MiniBpmEstimator.cpp
     src/dsp/PercussiveEmphasis.cpp
     src/dsp/LoudnessAnalyzer.cpp
@@ -783,6 +784,7 @@ if(STEMCEL_BUILD_NATIVE_APP)
         app/SectionAnalysis.cpp
         app/SectionAnalyser.cpp
         app/Tracklist.cpp
+        app/TempoReport.cpp
         app/RekordboxBrowser.cpp
         app/EngineClient.cpp
         app/ExportDialog.cpp

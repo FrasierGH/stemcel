@@ -913,6 +913,7 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
         if (isFile) menu.addItem("Reanalyse File", [this, id] { reanalyse(id); });
         if (item->kind == "source" && ctx.analyseSections != nullptr)
             menu.addItem("Analyse Sections", [this, id] { ctx.analyseSections(id); });
+        if (isFile && ctx.tempoReport != nullptr) menu.addItem("BPM Variability Check...", [this, id] { ctx.tempoReport(id); });
         if (isFile)
             menu.addItem("Add to rekordbox", ctx.rekordbox.isAvailable(), false, [this] { addToRekordbox(); });
         if (item->kind == "source" || item->kind == "sample")

@@ -72,8 +72,10 @@ void ProjectState::scaleTempoMap(double factor)
 double ProjectState::getClipTempoFollowBpm(const juce::String& clipId) const
 {
     const auto map = root.getChildWithName(kTempoMap);
-    if (!map.isValid() || map.getNumChildren() == 0) return 0.0;
     const auto clip = findClip(clipId);
+    // A drifting source follows the project tempo beat for beat, map or not.
+    const bool drifting = clip.isValid() && clip.getProperty(kSourceTempo).isArray();
+    if (!drifting && (!map.isValid() || map.getNumChildren() == 0)) return 0.0;
     if (!clip.isValid() || !static_cast<bool>(clip.getProperty(kWarpEnabled, false)) || clip.hasProperty(kTempoRatio))
         return 0.0;
     const double bpm = getLibraryItemBpm(clip.getProperty(kLibraryItemId, {}).toString());

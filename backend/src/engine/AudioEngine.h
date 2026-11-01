@@ -298,8 +298,13 @@ class AudioEngine : private AudioEngineGraphState,
     /** A warped clip follows the tempo map when `sourceBpm` > 0 (its source's tempo), and
      *  plays at its warp ratio when 0. No-op when unchanged. */
     bool setClipTempoFollow(const juce::String& clipId, double sourceBpm);
+    // Points a following clip at the curve it follows (the map, or the flat project tempo when
+    // its source drifts and there is no map) and at its source curve.
+    void publishClipFollow(const juce::String& clipId);
 
     bool setClipEnvelope(const juce::String& clipId, const juce::Array<juce::var>& points);
+    // The source's own tempo over its time ({ms, bpm}; empty: steady at its detected tempo).
+    bool setClipSourceTempo(const juce::String& clipId, const std::vector<TempoPoint>& points, double sourceBpm);
     bool setClipUserGain(const juce::String& clipId, double gainDb);
 
     /** Play a clip's window backwards (non-destructive); applied upstream of warp/pitch. */

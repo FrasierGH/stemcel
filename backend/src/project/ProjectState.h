@@ -193,6 +193,10 @@ class ProjectState : public juce::ValueTree::Listener
     // One array property keeps envelope drags atomic and default suppression simple.
     bool setClipEnvelope(const juce::String& clipId, const juce::Array<juce::var>& points);
     juce::Array<juce::var> getClipEnvelope(const juce::String& clipId) const;
+    // A clip's source tempo over its source time, when the recording drifts: {sourceMs, bpm}
+    // points (empty clears it). The clip then follows the project tempo beat for beat.
+    bool setClipSourceTempo(const juce::String& clipId, const std::vector<TempoPoint>& points);
+    std::vector<TempoPoint> getClipSourceTempo(const juce::String& clipId) const;
     // A clip's own gain, -24..+12 dB (0, the default, is not stored), on top of its envelope.
     bool setClipGainDb(const juce::String& clipId, double gainDb);
     double getClipGainDb(const juce::String& clipId) const;
@@ -785,6 +789,7 @@ class ProjectState : public juce::ValueTree::Listener
     // app sends: derived from rekordbox's phrases or Stemcel's own analysis, not undoable.
     // Empty clears them.
     bool setLibraryItemSections(const juce::String& itemId, const juce::String& sectionsJson);
+    bool setLibraryItemTempoDrift(const juce::String& itemId, const juce::String& driftJson);
 
     // Per-item custom cover: the basename of an override image copied into the project's
     // covers dir, shown instead of the shared media-store cover. Empty clears it. Persisted
@@ -1114,6 +1119,7 @@ class ProjectState : public juce::ValueTree::Listener
     static const juce::Identifier kCollapsed;
     static const juce::Identifier kCoverArtHidden;
     static const juce::Identifier kSections;
+    static const juce::Identifier kTempoDrift;
     static const juce::Identifier kCoverArtOverride;
     static const juce::Identifier kLibraryItemId;
 
@@ -1147,6 +1153,7 @@ class ProjectState : public juce::ValueTree::Listener
     // Envelope stays one array property for atomic edits.
     static const juce::Identifier kEnvelopePoints;
     static const juce::Identifier kClipGainDb;
+    static const juce::Identifier kSourceTempo;
     static const juce::Identifier kEnvelopeTimeMs;
     static const juce::Identifier kEnvelopeGain;
 

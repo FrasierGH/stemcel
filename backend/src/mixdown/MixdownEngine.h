@@ -58,6 +58,8 @@ struct MixdownSnapshot
         // every following clip, and the source's tempo. Null / 0 plays at `tempoRatio`.
         std::shared_ptr<const TempoCurve> tempoCurve;
         double followBpm{0.0};
+        // The source's own tempo, when it drifts (live's setTempoFollow sourceCurve).
+        std::shared_ptr<const TempoCurve> sourceCurve;
         double semitones{0.0};
         double cents{0.0};
         int sourceSampleRate{0};

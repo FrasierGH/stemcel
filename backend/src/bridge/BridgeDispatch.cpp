@@ -171,6 +171,10 @@ bool dispatchClip(const DispatchContext& ctx)
         stemcel::handleClipSplitChannels(payload, engine, projectState, bridge, peakPool, cache,
                                            session.currentPath);
     }
+    else if (type == "CLIP_SET_SOURCE_TEMPO")
+    {
+        stemcel::handleClipSetSourceTempo(payload, engine, projectState, bridge);
+    }
     else if (type == "CLIP_SET_GAIN")
     {
         stemcel::handleClipSetGain(payload, engine, projectState, bridge);
@@ -238,6 +242,10 @@ bool dispatchLibrary(const DispatchContext& ctx)
     else if (type == "LIBRARY_ITEM_SET_SECTIONS")
     {
         stemcel::handleLibraryItemSetSections(payload, projectState);
+    }
+    else if (type == "LIBRARY_ITEM_SET_TEMPO_DRIFT")
+    {
+        stemcel::handleLibraryItemSetTempoDrift(payload, projectState);
     }
     else if (type == "LIBRARY_ITEM_SET_COVER_OVERRIDE")
     {

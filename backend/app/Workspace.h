@@ -12,6 +12,7 @@
 #include "ProjectModel.h"
 #include "TimelineActions.h"
 #include "SectionAnalyser.h"
+#include "TempoReport.h"
 #include "TimelineView.h"
 #include "TrackHeaders.h"
 #include "TransportBar.h"
@@ -111,6 +112,7 @@ class Workspace final : public juce::Component, public juce::DragAndDropContaine
     Audition audition;
     StemService stems;
     SectionAnalyser sectionAnalyser;
+    TempoDriftAnalyser tempoAnalyser;
     std::unique_ptr<MashupBuilder> mashup;
     struct PrefsWatcher final : juce::ChangeListener
     {

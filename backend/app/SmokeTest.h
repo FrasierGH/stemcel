@@ -150,6 +150,10 @@ class SmokeTest final : private juce::Timer
     juce::uint32 txStartedAt = 0;
     double txOldStart = 0.0, txOldEnd = 0.0, txExpectEnd = 0.0, txExpectStart = 0.0;
     juce::String txFollowLine;
+    int driftStage = 0;
+    std::vector<double> driftBeats;
+    juce::String driftItemId, driftClipId, driftLine;
+    std::unique_ptr<class TempoDriftAnalyser> driftAnalyser;
     bool resizeOk = false;
     bool everyParamOk = false;
     std::shared_ptr<std::atomic<bool>> pluginDirScanDone;

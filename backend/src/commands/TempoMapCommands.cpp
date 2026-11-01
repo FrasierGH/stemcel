@@ -35,7 +35,11 @@ void syncTempoMap(AudioEngine& engine, const ProjectState& projectState)
     // Beat-repeat regions sit on beats, so they move with the map.
     if (engine.setTempoMap(projectState.getTempoMap(), projectState.getBpm())) syncBeatRepeatRegions(engine, projectState);
     projectState.forEachWarpClip([&](const ProjectState::WarpClipInfo& info)
-                                 { engine.setClipTempoFollow(info.clipId, projectState.getClipTempoFollowBpm(info.clipId)); });
+                                 {
+                                     const double followBpm = projectState.getClipTempoFollowBpm(info.clipId);
+                                     engine.setClipSourceTempo(info.clipId, projectState.getClipSourceTempo(info.clipId), followBpm);
+                                     engine.setClipTempoFollow(info.clipId, followBpm);
+                                 });
 }
 
 bool applyMixTransitionSet(const juce::var& payload, ProjectState& projectState)

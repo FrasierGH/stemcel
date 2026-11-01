@@ -155,10 +155,16 @@ MixdownSnapshot snapshotProjectForMixdown(const ProjectState& project,
             const auto timing = project.getClipEffectiveTiming(clip.id);
             clip.tempoRatio = timing.tempoRatio > 0.0 ? timing.tempoRatio : 1.0;
             // The same rule as live (syncTempoMap).
-            if (const double followBpm = project.getClipTempoFollowBpm(clip.id); tempoCurve != nullptr && followBpm > 0.0)
+            if (const double followBpm = project.getClipTempoFollowBpm(clip.id); followBpm > 0.0)
             {
-                clip.tempoCurve = tempoCurve;
-                clip.followBpm = followBpm;
+                const auto sourcePoints = project.getClipSourceTempo(clip.id);
+                if (!sourcePoints.empty()) clip.sourceCurve = std::make_shared<const TempoCurve>(sourcePoints, followBpm);
+                // Without a map a drifting source follows the constant project tempo.
+                clip.tempoCurve = tempoCurve != nullptr ? tempoCurve
+                                  : clip.sourceCurve != nullptr
+                                      ? std::make_shared<const TempoCurve>(std::vector<TempoPoint>{}, project.getBpm())
+                                      : nullptr;
+                if (clip.tempoCurve != nullptr) clip.followBpm = followBpm;
             }
             clip.semitones = static_cast<double>(clipTree.getProperty(kSemitones, 0.0));
             clip.cents = static_cast<double>(clipTree.getProperty(kCents, 0.0));

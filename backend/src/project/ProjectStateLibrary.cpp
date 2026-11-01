@@ -529,6 +529,11 @@ juce::var ProjectState::libraryAsJson() const
             if (const auto sections = juce::JSON::parse(item.getProperty(kSections).toString()); sections.isArray())
                 obj->setProperty("sections", sections);
         }
+        if (item.hasProperty(kTempoDrift))
+        {
+            if (const auto drift = juce::JSON::parse(item.getProperty(kTempoDrift).toString()); drift.isObject())
+                obj->setProperty("tempoDrift", drift);
+        }
         if (item.hasProperty(kCoverArtOverride))
         {
             const auto coverFile = item.getProperty(kCoverArtOverride).toString();

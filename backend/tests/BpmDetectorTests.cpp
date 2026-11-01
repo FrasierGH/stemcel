@@ -11,6 +11,7 @@
 #include "../src/dsp/MiniBpmEstimator.h"
 #include "../src/dsp/PercussiveEmphasis.h"
 #include "../src/dsp/BpmAnalysisHelpers.h"
+#include "../src/dsp/TempoDrift.h"
 
 #include <algorithm>
 #include <cmath>
@@ -588,8 +589,57 @@ void testPercussiveEmphasisKeepsSignalLevel()
 
 } // namespace
 
+// Short decaying clicks at the given beat times, at 44.1 kHz.
+std::vector<float> makeClicks(const std::vector<double>& beatsSec, double totalSec)
+{
+    constexpr double sr = 44100.0;
+    std::vector<float> out(static_cast<size_t>(totalSec * sr), 0.0f);
+    juce::Random noise(3);
+    for (const double t : beatsSec)
+    {
+        const auto start = static_cast<size_t>(t * sr);
+        for (size_t i = 0; i < 1500 && start + i < out.size(); ++i)
+            out[start + i] += static_cast<float>(std::exp(-static_cast<double>(i) / 250.0) * (noise.nextFloat() * 2.0 - 1.0) * 0.8);
+    }
+    return out;
+}
+
+void testTempoDriftFollowsARamp()
+{
+    // 64 bars rising evenly from 120 to 132 BPM, after 4 steady bars at 120.
+    std::vector<double> beats;
+    double t = 0.5;
+    const int total = 68 * 4;
+    for (int k = 0; k < total; ++k)
+    {
+        beats.push_back(t);
+        const double bpm = k < 16 ? 120.0 : 120.0 + 12.0 * static_cast<double>(k - 16) / static_cast<double>(total - 16);
+        t += 60.0 / bpm;
+    }
+    const auto result = stemcel::analyseTempoDriftSamples(makeClicks(beats, t + 1.0), 44100.0, 126.0);
+    require(result.ok, "the ramp should be analysed");
+    require(std::abs(static_cast<int>(result.beatsSec.size()) - total) <= 4, "nearly every beat should be found");
+    requireNear(result.curve.front().bpm, 120.0, 1.5, "the first bars run at 120");
+    requireNear(result.curve.back().bpm, 132.0, 1.5, "the last bars run at about 132");
+    require(result.driftPercent > 6.0, "a 10% ramp drifts well over 6%");
+    require(!result.sections.empty(), "the drifting stretch is flagged");
+}
+
+void testTempoDriftSteadyTrack()
+{
+    std::vector<double> beats;
+    for (int k = 0; k < 64 * 4; ++k) beats.push_back(0.5 + k * 60.0 / 128.0);
+    const auto result = stemcel::analyseTempoDriftSamples(makeClicks(beats, beats.back() + 1.0), 44100.0, 128.0);
+    require(result.ok, "the steady track should be analysed");
+    requireNear(result.mainBpm, 128.0, 0.3, "its main tempo is 128");
+    require(result.driftPercent < 1.0, "a steady track barely drifts");
+    require(result.sections.empty(), "nothing is flagged");
+}
+
 void addBpmDetectorTests(std::vector<TestCase>& tests)
-{    tests.push_back({"Grid phase: constant offset is recovered", testConsistentOffsetEstimated});
+{
+    tests.push_back({"Tempo drift follows a 120 to 132 ramp bar by bar", testTempoDriftFollowsARamp});
+    tests.push_back({"Tempo drift finds a steady track steady", testTempoDriftSteadyTrack});    tests.push_back({"Grid phase: constant offset is recovered", testConsistentOffsetEstimated});
     tests.push_back({"Grid phase: aligned grid reports ~zero", testZeroOffsetLeavesAnchor});
     tests.push_back({"Grid phase: inconsistent jitter flagged by MAD", testInconsistentOffsetsFlaggedByMad});
     tests.push_back({"Grid phase: sparse onsets decline", testSparseOnsetsReturnFalse});

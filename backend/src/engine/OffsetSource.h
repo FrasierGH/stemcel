@@ -162,8 +162,13 @@ class OffsetSource : public juce::PositionableAudioSource
     // at. The stretch ratio then varies along the timeline, and the clip's length and seek
     // positions come from the curve. A null curve or zero tempo plays at the warp
     // processor's fixed ratio, as before. Positions here are at the source's sample rate.
-    void setTempoFollow(const TempoCurve* curve, double sourceBpm, double sampleRate) noexcept
+    // `sourceCurve`, when given, is the source's own tempo over its time (a recording whose
+    // tempo drifts): beats are then counted along it instead of at a constant `sourceBpm`, so
+    // each beat of the source lands on a beat of the timeline.
+    void setTempoFollow(const TempoCurve* curve, double sourceBpm, double sampleRate,
+                        const TempoCurve* sourceCurve = nullptr) noexcept
     {
+        followSource.store(sourceCurve, std::memory_order_relaxed);
         followBpm.store(sourceBpm, std::memory_order_relaxed);
         followRate.store(sampleRate, std::memory_order_relaxed);
         followCurve.store(sourceBpm > 0.0 && sampleRate > 0.0 ? curve : nullptr, std::memory_order_release);
@@ -222,8 +227,10 @@ class OffsetSource : public juce::PositionableAudioSource
     struct Follow
     {
         const TempoCurve* curve = nullptr;
+        const TempoCurve* source = nullptr; // the source's own tempo, when it drifts
         double bpm = 0.0;
         double rate = 0.0;
+        double inMs = 0.0; // where in the source the clip starts
         bool active() const noexcept { return curve != nullptr; }
         double toMs(juce::int64 samples) const noexcept { return static_cast<double>(samples) * 1000.0 / rate; }
     };
@@ -233,18 +240,33 @@ class OffsetSource : public juce::PositionableAudioSource
         f.curve = followCurve.load(std::memory_order_acquire);
         f.bpm = followBpm.load(std::memory_order_relaxed);
         f.rate = followRate.load(std::memory_order_relaxed);
+        f.source = followSource.load(std::memory_order_relaxed);
         if (!(f.bpm > 0.0) || !(f.rate > 0.0)) f.curve = nullptr;
+        if (f.rate > 0.0) f.inMs = static_cast<double>(inSourceSamples.load(std::memory_order_relaxed)) * 1000.0 / f.rate;
         return f;
     }
     // Source samples a following clip that starts at `clipStart` has played by `at`.
     static double followSourceSamples(const Follow& f, juce::int64 clipStart, juce::int64 at) noexcept
     {
+        if (f.source != nullptr)
+        {
+            // The timeline's beats since the clip began, counted on along the source's own.
+            const double beats = f.curve->area(f.toMs(clipStart), f.toMs(at)) / 60000.0;
+            const double sourceEnd = f.source->msAtBeat(f.source->beatAt(f.inMs) + beats);
+            return (sourceEnd - f.inMs) * f.rate / 1000.0;
+        }
         return f.curve->sourceMsBetween(f.toMs(clipStart), f.toMs(at), f.bpm) * f.rate / 1000.0;
     }
     // Timeline samples a following clip starting at `clipStart` takes to play `sourceSamples`.
     static juce::int64 followTimelineSamples(const Follow& f, juce::int64 clipStart, juce::int64 sourceSamples) noexcept
     {
         const double start = f.toMs(clipStart);
+        if (f.source != nullptr)
+        {
+            const double beats = f.source->beatAt(f.inMs + f.toMs(sourceSamples)) - f.source->beatAt(f.inMs);
+            const double end = f.curve->msAtBeat(f.curve->beatAt(start) + beats);
+            return static_cast<juce::int64>(std::ceil((end - start) * f.rate / 1000.0));
+        }
         const double end = f.curve->timelineAfterSource(start, f.toMs(sourceSamples), f.bpm);
         return static_cast<juce::int64>(std::ceil((end - start) * f.rate / 1000.0));
     }
@@ -267,6 +289,7 @@ class OffsetSource : public juce::PositionableAudioSource
     std::atomic<const scratch::PatternReplaySnapshot*> patternSnap{nullptr};
     std::atomic<WarpProcessor*> warp{nullptr};
     std::atomic<const TempoCurve*> followCurve{nullptr};
+    std::atomic<const TempoCurve*> followSource{nullptr};
     std::atomic<double> followBpm{0.0};
     std::atomic<double> followRate{0.0};
     std::atomic<bool> warpReseekRequested{false};

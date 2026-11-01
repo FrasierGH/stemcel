@@ -109,7 +109,8 @@ std::unique_ptr<OfflineClip> buildOfflineClip(const MixdownSnapshot::ClipSnapsho
         if (clip.tempoCurve != nullptr && clip.followBpm > 0.0)
         {
             out->tempoCurve = clip.tempoCurve;
-            out->offsetSource->setTempoFollow(out->tempoCurve.get(), clip.followBpm, out->sourceRate);
+            out->sourceCurve = clip.sourceCurve;
+            out->offsetSource->setTempoFollow(out->tempoCurve.get(), clip.followBpm, out->sourceRate, out->sourceCurve.get());
         }
         out->offsetSource->requestWarpReseek();
     }

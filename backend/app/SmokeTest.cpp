@@ -27,6 +27,7 @@
 #include "PluginCatalogue.h"
 #include "ResizeBar.h"
 #include "TrackAutomationSnapshot.h"
+#include "TempoReport.h"
 #include "Tracklist.h"
 #include "WaveformStore.h"
 #include "Workspace.h"
@@ -134,6 +135,41 @@ bool writeArrangement(const juce::File& file, float level = 1.0f)
         const auto f = static_cast<float>(juce::jlimit(-1.0, 1.0, v)) * level;
         buffer.setSample(0, i, f);
         buffer.setSample(1, i, f);
+    }
+    return writer->writeFromAudioSampleBuffer(buffer, 0, samples);
+}
+
+// 40 bars of clicks: 4 steady at 120 BPM, then rising evenly to 132 (a drifting recording).
+// `beatsSec` gets each click's time.
+bool writeDriftingClicks(const juce::File& file, std::vector<double>& beatsSec)
+{
+    file.deleteFile();
+    std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream>(file);
+    const auto options = juce::AudioFormatWriterOptions{}.withSampleRate(kSampleRate).withNumChannels(2).withBitsPerSample(16);
+    std::unique_ptr<juce::AudioFormatWriter> writer(juce::WavAudioFormat().createWriterFor(stream, options));
+    if (writer == nullptr) return false;
+    beatsSec.clear();
+    double t = 0.25;
+    constexpr int total = 40 * 4;
+    for (int k = 0; k < total; ++k)
+    {
+        beatsSec.push_back(t);
+        t += 60.0 / (k < 16 ? 120.0 : 120.0 + 12.0 * (k - 16) / static_cast<double>(total - 16));
+    }
+    const int samples = static_cast<int>((t + 0.5) * kSampleRate);
+    juce::AudioBuffer<float> buffer(2, samples);
+    buffer.clear();
+    juce::Random noise(11);
+    for (const double b : beatsSec)
+    {
+        const int start = static_cast<int>(b * kSampleRate);
+        for (int i = 0; i < 1500 && start + i < samples; ++i)
+        {
+            const auto v = static_cast<float>(std::exp(-i / 250.0) * (noise.nextFloat() * 2.0 - 1.0) * 0.8
+                                              + 0.6 * std::exp(-i / 400.0) * std::sin(juce::MathConstants<double>::twoPi * 60.0 * i / kSampleRate));
+            buffer.setSample(0, start + i, v);
+            buffer.setSample(1, start + i, v);
+        }
     }
     return writer->writeFromAudioSampleBuffer(buffer, 0, samples);
 }
@@ -2711,6 +2747,100 @@ void SmokeTest::addTempoJourney()
                          return ok;
                      }});
     steps.back().poll = true;
+    // A drifting recording: the BPM variability check finds it drifting, auto-warp lands its
+    // beats on the project's grid, and following it writes it into the tempo map (then undone).
+    steps.push_back({"tempo drift",
+                     [this]
+                     {
+                         driftStage = 0;
+                         const auto file = workDir.getChildFile("Files").getChildFile("drifting.wav");
+                         if (!writeDriftingClicks(file, driftBeats)) return;
+                         ImportRequest request;
+                         request.file = file;
+                         importer.import(std::vector<ImportRequest>{request}, [this](const juce::StringArray& ids)
+                                         { driftItemId = ids[0]; });
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         mirror.refreshNow();
+                         const auto* item = model().findLibraryItem(driftItemId);
+                         if (item == nullptr) return false;
+                         if (driftStage == 0)
+                         {
+                             if (item->bpm <= 0.0) return false; // its tempo detection first
+                             driftAnalyser = std::make_unique<TempoDriftAnalyser>(engine, mirror);
+                             driftAnalyser->analyse(driftItemId);
+                             driftStage = 1;
+                             return false;
+                         }
+                         const auto drift = tempodrift::of(*item);
+                         if (driftStage == 1)
+                         {
+                             if (!drift.valid()) return false;
+                             driftLine = "drift " + juce::String(drift.driftPercent, 1) + "% around " + juce::String(drift.mainBpm, 1) + " BPM, "
+                                         + juce::String(static_cast<int>(drift.sections.size())) + " stretch(es)";
+                             if (drift.driftPercent < 6.0 || drift.sections.empty())
+                             {
+                                 lastTempoLine = "tempo drift missed: " + driftLine;
+                                 return false;
+                             }
+                             const auto track = actions.addTrack();
+                             driftClipId = actions.addClip(track, *item, model().contentEndMs() + 8000.0);
+                             mirror.refreshNow();
+                             tempodrift::autoWarp(actions, model(), driftClipId);
+                             driftStage = 2;
+                             return false;
+                         }
+                         const auto* clip = model().findClip(driftClipId);
+                         if (clip == nullptr) return false;
+                         if (driftStage == 2)
+                         {
+                             if (clip->sourceTempo.empty() || !model().clipFollows(*clip)) return false;
+                             // Every click, through the warp, a whole number of project beats after the first.
+                             const double beatMs = 60000.0 / model().bpm;
+                             const double first = model().followTimelineMs(*clip, driftBeats.front() * 1000.0 - clip->inMs);
+                             double worst = 0.0;
+                             for (size_t k = 0; k < driftBeats.size(); ++k)
+                             {
+                                 const double at = model().followTimelineMs(*clip, driftBeats[k] * 1000.0 - clip->inMs) - first;
+                                 worst = juce::jmax(worst, std::abs(at - static_cast<double>(k) * beatMs));
+                             }
+                             if (worst > 10.0)
+                             {
+                                 lastTempoLine = "tempo drift: " + driftLine + "; worst beat " + juce::String(worst, 1) + " ms off the grid";
+                                 return false;
+                             }
+                             driftLine << "; auto-warped, worst beat " << juce::String(worst, 1) << " ms off the grid";
+                             tempodrift::followInProjectTempo(actions, model(), driftClipId);
+                             driftStage = 3;
+                             return false;
+                         }
+                         if (driftStage == 3)
+                         {
+                             if (model().tempoMap.size() < 10 || clip->warpEnabled) return false;
+                             // The map over the clip says what the recording does there.
+                             const double mid = clip->offsetMs + clip->durationMs * 0.75;
+                             const double mapped = model().tempoCurve().bpmAt(mid);
+                             const double measured = TempoCurve(drift.curve, drift.mainBpm).bpmAt(clip->inMs + clip->durationMs * 0.75);
+                             driftLine << "; followed: " << juce::String(static_cast<int>(model().tempoMap.size())) << " tempo points, "
+                                       << juce::String(mapped, 1) << " BPM three quarters in (measured " << juce::String(measured, 1) << ")";
+                             report.add("tempo drift: " + driftLine);
+                             {
+                                 // The report, for eyes.
+                                 TempoReport view(mirror, actions, *driftAnalyser, driftItemId, driftClipId);
+                                 const auto image = view.createComponentSnapshot(view.getLocalBounds());
+                                 juce::FileOutputStream out(workDir.getChildFile("tempo-report.png"));
+                                 if (out.openedOk()) juce::PNGImageFormat().writeImageToStream(image, out);
+                             }
+                             engine.send("EDIT_UNDO"); // leave the tempo map as it was for the steps after
+                             driftStage = 4;
+                             return std::abs(mapped - measured) < 0.5;
+                         }
+                         return false;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 90000.0;
     // Two files dropped at once: the prompt, answered "as dropped", mixes them on two decks.
     steps.push_back({"auto mix on drop",
                      [this]

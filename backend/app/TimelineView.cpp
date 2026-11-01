@@ -7,6 +7,7 @@
 #include "Automation.h"
 #include "MixTransitions.h"
 #include "SectionAnalysis.h"
+#include "TempoReport.h"
 #include "TransitionEditor.h"
 #include "Theme.h"
 
@@ -562,24 +563,21 @@ void TimelineView::paintClip(juce::Graphics& g, const ClipModel& clip, juce::Rec
                 // A clip following the tempo map runs through its source faster where the tempo
                 // is higher, so it is drawn in narrow strips, each showing the source the curve
                 // puts under it (evenly spread otherwise).
-                const auto curve = clip.tempoFollowBpm > 0.0 && !model().tempoMap.empty() ? std::optional<TempoCurve>(model().tempoCurve())
-                                                                                        : std::nullopt;
+                const bool follows = model().clipFollows(clip);
                 const auto drawWave = [&](juce::Rectangle<float> area, int lane)
                 {
-                    if (!curve.has_value())
+                    if (!follows)
                     {
                         drawPeaks(g, *peaks, area, fromMs, area.getWidth() * msPerPx, clip.reversed, colour, lane);
                         return;
                     }
-                    const double bodyStartMs = view.xToMs(body.getX());
                     constexpr float kStrip = 6.0f;
                     for (float x = area.getX(); x < area.getRight(); x += kStrip)
                     {
                         const float w = juce::jmin(kStrip, area.getRight() - x);
-                        const double s0 = curve->sourceMsBetween(bodyStartMs, view.xToMs(x), clip.tempoFollowBpm);
-                        const double s1 = curve->sourceMsBetween(bodyStartMs, view.xToMs(x + w), clip.tempoFollowBpm);
-                        drawPeaks(g, *peaks, {x, area.getY(), w, area.getHeight()}, clip.inMs + s0, s1 - s0, clip.reversed,
-                                  colour, lane);
+                        const double s0 = model().followSourceMs(clip, view.xToMs(x));
+                        const double s1 = model().followSourceMs(clip, view.xToMs(x + w));
+                        drawPeaks(g, *peaks, {x, area.getY(), w, area.getHeight()}, s0, s1 - s0, clip.reversed, colour, lane);
                     }
                 };
                 if (view.stereoWaveforms && peaks->laneCount >= 3)
@@ -2150,6 +2148,20 @@ void TimelineView::showClipMenu(const juce::String& clipId, double atMs)
                                  });
                              });
         menu.addSubMenu("Sections", sectionsMenu);
+    }
+    // A recording whose tempo drifts: measured bar by bar, then warped back, or followed.
+    if (const auto* item = model().findLibraryItem(clip->libraryItemId); item != nullptr && onTempoReport)
+    {
+        const bool measured = tempodrift::of(*item).valid();
+        juce::PopupMenu drift;
+        drift.addItem("BPM Variability Check...", [this, itemId = item->id, clipId] { onTempoReport(itemId, clipId); });
+        drift.addSeparator();
+        drift.addItem("Auto-Warp to Main Tempo", measured, !clip->sourceTempo.empty(),
+                      [this, clipId] { tempodrift::autoWarp(actions, model(), clipId); });
+        drift.addItem("Follow in Project Tempo", measured, false, [this, clipId] { tempodrift::followInProjectTempo(actions, model(), clipId); });
+        drift.addItem("Edit Warp by Hand...", [this, itemId = item->id, clipId] { onTempoReport(itemId, clipId); });
+        if (!clip->sourceTempo.empty()) drift.addItem("Clear Tempo Warp", [this, clipId] { tempodrift::clearWarp(actions, clipId); });
+        menu.addSubMenu("Tempo Drift", drift);
     }
     juce::PopupMenu colour;
     colour.addItem("Track colour", [this, clipId] { actions.setClipColor(clipId, -1); });

@@ -17,6 +17,7 @@ Workspace::Workspace(EngineClient& engineClient, AppController& appController, A
       actions(engineClient, mirror), waveforms(engineClient.host().peaksCache()), subscriptions(engineClient),
       importer(engineClient, mirror, sharedRekordbox()), audition(engineClient, importer),
       stems(engineClient, mirror, actions, preferences), sectionAnalyser(engineClient, mirror, preferences),
+      tempoAnalyser(engineClient, mirror),
       transport(mirror, view, live, actions, preferences), headers(mirror, view, live, actions),
       timeline(mirror, view, live, actions, waveforms)
 {
@@ -45,6 +46,9 @@ Workspace::Workspace(EngineClient& engineClient, AppController& appController, A
     stems.onNotify = notify;
     sectionAnalyser.onNotify = notify;
     timeline.onAnalyseSections = [this](const juce::String& itemId) { sectionAnalyser.analyse(itemId, true); };
+    tempoAnalyser.onNotify = notify;
+    timeline.onTempoReport = [this](const juce::String& itemId, const juce::String& clipId)
+    { TempoReport::show(mirror, actions, tempoAnalyser, itemId, clipId); };
     stems.onProgress = [this](double percent, const juce::String& stage)
     {
         if (libraryPanel == nullptr) return;
@@ -74,7 +78,9 @@ Workspace::Workspace(EngineClient& engineClient, AppController& appController, A
                                                                [this](std::vector<juce::String> ids, bool reorder, const juce::String& style, bool matchKeys)
                                                                { runAutoMix(std::move(ids), reorder, style, matchKeys); },
                                                                [this](const juce::String& vocal, const juce::String& beat) { mashup->start(vocal, beat); },
-                                                               [this](const juce::String& itemId) { sectionAnalyser.analyse(itemId, true); }});
+                                                               [this](const juce::String& itemId) { sectionAnalyser.analyse(itemId, true); },
+                                                               [this](const juce::String& itemId)
+                                                               { TempoReport::show(mirror, actions, tempoAnalyser, itemId, {}); }});
     libraryPanel = panel.get();
     setBottomPanel(std::move(panel),
                    juce::jlimit(120, 1200, static_cast<int>(prefs.get("ui", "nativeLibraryHeight", LibraryPanel::kDefaultHeight))));

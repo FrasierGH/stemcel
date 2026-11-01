@@ -84,6 +84,8 @@ class TimelineView final : public juce::Component,
     void startClipRename(const juce::String& clipId);
     std::function<void(const juce::String& clipId)> onSeparateStems;
     std::function<void(const juce::String& itemId)> onAnalyseSections;
+    // The BPM variability check for a clip's source (TempoReport).
+    std::function<void(const juce::String& itemId, const juce::String& clipId)> onTempoReport;
     std::function<void(const juce::String& clipId)> onOpenScratch;
     std::function<void(const juce::String& clipId, const juce::StringArray& channels)> onSplitChannels;
 

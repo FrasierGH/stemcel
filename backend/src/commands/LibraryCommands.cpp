@@ -401,6 +401,14 @@ void handleLibraryItemSetSections(const juce::var& payload, ProjectState& projec
     projectState.setLibraryItemSections(itemId, count > 0 ? juce::JSON::toString(sections, true) : juce::String{});
 }
 
+void handleLibraryItemSetTempoDrift(const juce::var& payload, ProjectState& projectState)
+{
+    const juce::String itemId = tryGetRequiredString(payload, "itemId").value_or(juce::String{});
+    const auto drift = payload.getProperty("tempoDrift", {});
+    if (itemId.isEmpty()) return;
+    projectState.setLibraryItemTempoDrift(itemId, drift.isObject() ? juce::JSON::toString(drift, true) : juce::String{});
+}
+
 void handleLibraryItemSetCoverOverride(const juce::var& payload, ProjectState& projectState)
 {
     const juce::String itemId = tryGetRequiredString(payload, "itemId").value_or(juce::String{});
