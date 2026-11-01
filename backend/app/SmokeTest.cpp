@@ -27,6 +27,7 @@
 #include "PluginCatalogue.h"
 #include "ResizeBar.h"
 #include "TrackAutomationSnapshot.h"
+#include "KeyWheel.h"
 #include "TempoReport.h"
 #include "Tracklist.h"
 #include "WaveformStore.h"
@@ -2841,6 +2842,65 @@ void SmokeTest::addTempoJourney()
                      }});
     steps.back().poll = true;
     steps.back().timeoutMs = 90000.0;
+    // The key wheel on two clips in different keys: it recommends one they can both reach, and
+    // a click on it shifts each into key with it (then the shifts are put back).
+    steps.push_back({"key wheel",
+                     [this]
+                     {
+                         mirror.refreshNow();
+                         wheelClips.clear();
+                         // Two clips of different sources; the second source is given A minor (the
+                         // generated test tracks all read as one key), and has its key back after.
+                         juce::StringArray items;
+                         for (const auto& t : model().tracks)
+                             for (const auto& c : t.clips)
+                                 if (const auto* item = model().findLibraryItem(c.libraryItemId);
+                                     item != nullptr && item->kind == "source" && !items.contains(item->id) && wheelClips.size() < 2)
+                                 {
+                                     items.add(item->id);
+                                     wheelClips.push_back(c.id);
+                                 }
+                         if (wheelClips.size() < 2) return;
+                         wheelItemId = items[1];
+                         wheelItemKey = model().findLibraryItem(wheelItemId)->key;
+                         engine.host().project().setLibraryItemKey(wheelItemId, "A minor");
+                         mirror.refreshNow();
+                         juce::StringArray keys;
+                         for (const auto& id : items) keys.add(automix::itemKey(model(), model().findLibraryItem(id)));
+                         if (!automix::camelot(keys[0]).valid()) return;
+                         wheelTarget = KeyWheel::recommended({keys[0], keys[1]});
+                         KeyWheel wheel(mirror, actions, wheelClips, {});
+                         wheel.setSize(560, 680);
+                         const auto image = wheel.createComponentSnapshot(wheel.getLocalBounds());
+                         juce::FileOutputStream out(workDir.getChildFile("key-wheel.png"));
+                         if (out.openedOk()) juce::PNGImageFormat().writeImageToStream(image, out);
+                         if (wheelTarget.valid()) wheel.applyForTest(wheelTarget);
+                         wheelLine = keys.joinIntoString(" and ") + " -> recommended " + wheelTarget.text();
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         if (wheelClips.size() < 2 || !wheelTarget.valid())
+                         {
+                             lastTempoLine = "key wheel: " + wheelLine;
+                             return false;
+                         }
+                         mirror.refreshNow();
+                         juce::StringArray landed;
+                         for (const auto& id : wheelClips)
+                         {
+                             const auto* clip = model().findClip(id);
+                             if (clip == nullptr) return false;
+                             const auto key = automix::clipKey(model(), *clip);
+                             if (automix::keyDistance(automix::camelot(key), wheelTarget) != 0) return false;
+                             landed.add(key + " (" + juce::String(static_cast<int>(std::lround(clip->semitones))) + ")");
+                         }
+                         report.add("key wheel: " + wheelLine + "; shifted to " + landed.joinIntoString(", "));
+                         for (const auto& id : wheelClips) actions.setClipKeyShift(id, 0);
+                         engine.host().project().setLibraryItemKey(wheelItemId, wheelItemKey);
+                         return true;
+                     }});
+    steps.back().poll = true;
     // Two files dropped at once: the prompt, answered "as dropped", mixes them on two decks.
     steps.push_back({"auto mix on drop",
                      [this]

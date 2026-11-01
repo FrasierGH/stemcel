@@ -7,6 +7,7 @@
 #include "Automation.h"
 #include "MixTransitions.h"
 #include "SectionAnalysis.h"
+#include "KeyWheel.h"
 #include "TempoReport.h"
 #include "TransitionEditor.h"
 #include "Theme.h"
@@ -2193,6 +2194,14 @@ void TimelineView::showClipMenu(const juce::String& clipId, double atMs)
         keyMenu.addItem("Up a Semitone", shift < 12, false, [this, clipId, shift] { actions.setClipKeyShift(clipId, shift + 1); });
         keyMenu.addItem("Down a Semitone", shift > -12, false, [this, clipId, shift] { actions.setClipKeyShift(clipId, shift - 1); });
         keyMenu.addItem("Reset Key", shift != 0, false, [this, clipId] { actions.setClipKeyShift(clipId, 0); });
+        // The wheel: this clip, or every selected clip when it is one of them.
+        keyMenu.addItem("Key Wheel...", [this, clipId]
+                        {
+                            std::vector<juce::String> ids{clipId};
+                            if (view.selectedClipIds.count(clipId) != 0 && view.selectedClipIds.size() > 1)
+                                ids.assign(view.selectedClipIds.begin(), view.selectedClipIds.end());
+                            KeyWheel::show(mirror, actions, ids, {});
+                        });
         bool first = true;
         for (const auto& [outId, inId] : mix::pairsFor(model(), clipId))
         {

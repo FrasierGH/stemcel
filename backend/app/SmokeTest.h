@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AppPreferences.h"
+#include "AutoMix.h"
 #include "AudioImport.h"
 #include "MidiControllerActions.h"
 #include "RecordDialog.h"
@@ -151,6 +152,9 @@ class SmokeTest final : private juce::Timer
     double txOldStart = 0.0, txOldEnd = 0.0, txExpectEnd = 0.0, txExpectStart = 0.0;
     juce::String txFollowLine;
     int driftStage = 0;
+    std::vector<juce::String> wheelClips;
+    automix::Camelot wheelTarget;
+    juce::String wheelLine, wheelItemId, wheelItemKey;
     std::vector<double> driftBeats;
     juce::String driftItemId, driftClipId, driftLine;
     std::unique_ptr<class TempoDriftAnalyser> driftAnalyser;

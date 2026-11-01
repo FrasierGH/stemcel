@@ -34,6 +34,8 @@ Camelot camelot(const juce::String& key);
 int keyDistance(Camelot a, Camelot b);
 // "A minor" moved by `semitones` ("B minor" for +2); empty for an unknown key.
 juce::String transposeKey(const juce::String& key, int semitones);
+// A library item's key (a stem's is its source's).
+juce::String itemKey(const ProjectModel& model, const LibraryItemModel* item);
 // The key a clip sounds in: its source's key moved by its pitch shift.
 juce::String clipKey(const ProjectModel& model, const ClipModel& clip);
 // The smallest shift (0, then +-1, +-2, ...) up to `maxShift` semitones that puts `moving` in key

@@ -92,6 +92,11 @@ juce::String transposeKey(const juce::String& key, int semitones)
     return juce::String(names[((root + semitones) % 12 + 12) % 12]) + (c.major ? " major" : " minor");
 }
 
+juce::String itemKey(const ProjectModel& model, const LibraryItemModel* item)
+{
+    return keyOf(model, item);
+}
+
 juce::String clipKey(const ProjectModel& model, const ClipModel& clip)
 {
     const auto key = keyOf(model, model.findLibraryItem(clip.libraryItemId));
