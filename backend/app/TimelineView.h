@@ -90,6 +90,11 @@ class TimelineView final : public juce::Component,
     // Zoom keeping `anchorMs` under the same x (or the playhead/centre when unset).
     void zoomBy(double factor, std::optional<double> anchorMs = std::nullopt);
     void zoomToFit();
+    // The furthest the view zooms out: half the zoom that fits the whole project (and never
+    // closer than 1.25 px/s), so a long mix always fits with room to spare.
+    double minPxPerSecond() const;
+    // What Fit shows: the clips, the project length and the markers.
+    double fitLengthMs() const;
     // Zooms to show [fromMs, toMs] with a margin, scrolled down to `trackId` when given.
     void revealRange(double fromMs, double toMs, const juce::String& trackId = {});
     // Scroll so `ms` is visible.
@@ -194,7 +199,13 @@ class TimelineView final : public juce::Component,
     double panStartScrollX = 0.0, panStartScrollY = 0.0;
     std::optional<std::pair<double, double>> rangePreview;
     std::optional<std::pair<juce::String, double>> dropPreview; // track id, start ms
-    double lastDrawnPlayheadX = -1.0;
+    // Where the playhead is drawn: set with the repaint that covers it, so a paint never
+    // draws it anywhere it was not invalidated (no stale copies left behind).
+    double playheadX = -1.0;
+    bool wasPlaying = false;
+    int tick = 0;
+    // A scroll the user made, which pauses follow-playback.
+    void userScrolled();
     bool viewDirty = false;
     bool warpSpinnerVisible = false; // a clip header drew the pending-warp spinner this frame
     juce::uint32 lastViewChangeMs = 0;

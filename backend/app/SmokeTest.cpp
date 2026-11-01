@@ -2375,6 +2375,66 @@ void SmokeTest::addTempoJourney()
                          report.add(everyParamLine);
                          return everyParamOk;
                      }});
+    // Fit shows the whole project at a zoom the floor allows, and a scroll away from the
+    // playhead while following stays where it was put (follow pauses instead of snapping back).
+    steps.push_back({"fit and follow",
+                     [this]
+                     {
+                         auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
+                         auto* workspace = window != nullptr ? findDescendant<Workspace>(window) : nullptr;
+                         auto* timeline = window != nullptr ? findDescendant<TimelineView>(window) : nullptr;
+                         if (workspace == nullptr || timeline == nullptr) return;
+                         workspace->projectMirror().refreshNow();
+                         timeline->zoomToFit();
+                         auto& view = workspace->viewState();
+                         fitEndX = view.msToX(timeline->fitLengthMs());
+                         fitFloor = timeline->minPxPerSecond();
+                         fitWidth = timeline->getWidth();
+                         // Following, playing from the start; the scroll comes once it plays.
+                         view.followPlayback = true;
+                         view.pxPerSecond = 100.0;
+                         view.scrollXPx = 0.0;
+                         view.changed();
+                         followStage = 0;
+                         actions.seek(0.0);
+                         actions.play();
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
+                         auto* workspace = window != nullptr ? findDescendant<Workspace>(window) : nullptr;
+                         auto* timeline = window != nullptr ? findDescendant<TimelineView>(window) : nullptr;
+                         if (workspace == nullptr || timeline == nullptr) return false;
+                         auto& view = workspace->viewState();
+                         if (followStage == 0)
+                         {
+                             if (!workspace->liveState().playing) return false;
+                             // A wheel scroll far to the right, away from the playhead.
+                             juce::MouseWheelDetails wheel{};
+                             wheel.deltaX = -4.0f;
+                             const auto now = juce::Time::getCurrentTime();
+                             const juce::Point<float> at{200.0f, 100.0f};
+                             timeline->mouseWheelMove(juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(), at, {}, 1.0f, 0.0f,
+                                                                       0.0f, 0.0f, 0.0f, timeline, timeline, now, at, now, 1, false),
+                                                      wheel);
+                             scrolledTo = view.scrollXPx;
+                             followStartedAt = juce::Time::getMillisecondCounter();
+                             followStage = 1;
+                             return false;
+                         }
+                         if (juce::Time::getMillisecondCounter() - followStartedAt < 700) return false;
+                         const bool stayed = std::abs(view.scrollXPx - scrolledTo) < 1.0 && scrolledTo > 500.0;
+                         const bool paused = view.followSuspended;
+                         actions.pause();
+                         const bool fits = fitEndX <= fitWidth && fitEndX > fitWidth * 0.5 && fitFloor <= 1.25;
+                         report.add("fit end at " + juce::String(fitEndX, 0) + " of " + juce::String(fitWidth) + " px, floor "
+                                    + juce::String(fitFloor, 3) + " px/s; scrolled to " + juce::String(scrolledTo, 0) + " during playback and stayed "
+                                    + (stayed ? "yes" : "no") + ", follow paused " + (paused ? "yes" : "no"));
+                         return fits && stayed && paused;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 20000.0;
     // Shortcuts on the live timeline: Alt-drag copies a clip, the middle button pans, N turns
     // snapping off, and Cmd/Ctrl+J joins a clip split in two.
     steps.push_back({"shortcuts view",

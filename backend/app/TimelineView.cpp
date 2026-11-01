@@ -220,7 +220,7 @@ TimelineView::TimelineView(ProjectMirror& projectMirror, TimelineViewState& view
     }
     if (model().pxPerSecond > 0.0) view.pxPerSecond = model().pxPerSecond;
     view.scrollXPx = model().scrollX;
-    startTimerHz(30);
+    startTimerHz(60);
 }
 
 TimelineView::~TimelineView()
@@ -235,6 +235,7 @@ TimelineView::~TimelineView()
 void TimelineView::changeListenerCallback(juce::ChangeBroadcaster* source)
 {
     if (source == &mirror) rows = layoutRows(model());
+    playheadX = view.msToX(live.positionMs); // this full repaint draws it where it now is
     if (renamingClipId.isNotEmpty()) placeClipNameEditor();
     syncScrollBars();
     repaint();
@@ -263,7 +264,10 @@ void TimelineView::syncScrollBars()
 void TimelineView::scrollBarMoved(juce::ScrollBar* bar, double newRangeStart)
 {
     if (bar == &hScroll)
+    {
         view.scrollXPx = newRangeStart;
+        userScrolled();
+    }
     else
         view.scrollY = newRangeStart;
     clampScroll();
@@ -320,6 +324,11 @@ double TimelineView::contentLengthMs() const
     return juce::jmax(model().projectLengthMs, model().contentEndMs()) + kTailPaddingMs;
 }
 
+void TimelineView::userScrolled()
+{
+    if (live.playing && view.followPlayback) view.followSuspended = true;
+}
+
 void TimelineView::clampScroll()
 {
     const double contentPx = contentLengthMs() / 1000.0 * view.pxPerSecond;
@@ -336,8 +345,9 @@ void TimelineView::persistView()
 
 void TimelineView::timerCallback()
 {
+    ++tick;
     // The pending-warp spinner turns while any clip on screen waits on its tempo analysis.
-    if (std::exchange(warpSpinnerVisible, false)) repaint();
+    if (tick % 2 == 0 && std::exchange(warpSpinnerVisible, false)) repaint();
 
     // Persist zoom/scroll once the user stops changing them, as the renderer does.
     if (viewDirty && juce::Time::getMillisecondCounter() - lastViewChangeMs > kViewPersistDelayMs)
@@ -347,8 +357,12 @@ void TimelineView::timerCallback()
     }
 
     const double x = view.msToX(live.positionMs);
-    if (live.playing && view.followPlayback && drag == DragKind::none
-        && (x > getWidth() - 40 || x < 0))
+    const bool inView = x >= 0 && x <= getWidth() - 40;
+    // Follow picks up again once play restarts, or the playhead comes back into view.
+    if (live.playing && !wasPlaying) view.followSuspended = false;
+    wasPlaying = live.playing;
+    if (view.followSuspended && inView) view.followSuspended = false;
+    if (live.playing && view.followPlayback && !view.followSuspended && drag == DragKind::none && !inView)
     {
         // Page-follow: jump so the playhead sits near the left edge.
         view.scrollXPx = juce::jmax(0.0, live.positionMs / 1000.0 * view.pxPerSecond - 60.0);
@@ -356,11 +370,13 @@ void TimelineView::timerCallback()
         view.changed();
         return;
     }
-    if (std::abs(x - lastDrawnPlayheadX) >= 0.5)
+    if (std::abs(x - playheadX) >= 0.5)
     {
-        const auto oldX = static_cast<int>(lastDrawnPlayheadX);
-        repaint(oldX - 2, 0, 5, getHeight());
-        repaint(static_cast<int>(x) - 2, 0, 5, getHeight());
+        // Erase it where it was drawn and draw it where it is, in the same paint.
+        const auto oldX = static_cast<int>(std::round(playheadX));
+        playheadX = x;
+        repaint(oldX - 3, 0, 7, getHeight());
+        repaint(static_cast<int>(std::round(x)) - 3, 0, 7, getHeight());
     }
 }
 
@@ -432,6 +448,21 @@ void TimelineView::paintGrid(juce::Graphics& g, juce::Rectangle<int> area)
     // Thin out lines that would crowd together at low zoom.
     while (subdivisions > 1 && beatPx / subdivisions < 8.0) subdivisions /= 2;
     const bool drawBeats = beatPx >= 6.0;
+    if (!drawBeats)
+    {
+        // Far out: every bar would crowd into a solid wash, so every 2nd, 4th, ... bar.
+        juce::int64 every = 1;
+        while (beatPx * kBeatsPerBar * static_cast<double>(every) < 8.0) every *= 2;
+        const double stepBars = static_cast<double>(every) * kBeatsPerBar;
+        g.setColour(colours::grey500.withAlpha(0.55f));
+        for (auto i = static_cast<juce::int64>(std::floor(curve.beatAt(startMs) / stepBars));; ++i)
+        {
+            const double ms = curve.msAtBeat(static_cast<double>(i) * stepBars);
+            if (ms > endMs) break;
+            g.drawVerticalLine(static_cast<int>(view.msToX(ms)), static_cast<float>(area.getY()), static_cast<float>(area.getBottom()));
+        }
+        return;
+    }
 
     const double stepBeats = 1.0 / subdivisions;
     const auto firstStep = static_cast<juce::int64>(std::floor(curve.beatAt(startMs) / stepBeats));
@@ -459,11 +490,15 @@ void TimelineView::paintRuler(juce::Graphics& g, juce::Rectangle<int> area)
     const double startMs = view.xToMs(0);
     const double endMs = view.xToMs(getWidth());
     const double barPx = 60.0 * kBeatsPerBar / curve.bpmAt(startMs) * view.pxPerSecond;
-    int labelEvery = 1;
-    while (barPx * labelEvery < 40.0) labelEvery *= 2;
+    juce::int64 tickEvery = 1;
+    while (barPx * static_cast<double>(tickEvery) < 5.0) tickEvery *= 2;
+    juce::int64 labelEvery = tickEvery;
+    while (barPx * static_cast<double>(labelEvery) < 40.0) labelEvery *= 2;
 
     g.setFont(uiFont(11.0f));
-    for (auto bar = static_cast<juce::int64>(std::floor(curve.beatAt(startMs) / kBeatsPerBar));; ++bar)
+    for (auto bar = static_cast<juce::int64>(std::floor(curve.beatAt(startMs) / kBeatsPerBar / static_cast<double>(tickEvery)))
+                    * tickEvery;;
+         bar += tickEvery)
     {
         const double barMs = curve.msAtBeat(static_cast<double>(bar) * kBeatsPerBar);
         if (barMs > endMs) break;
@@ -865,8 +900,7 @@ void TimelineView::paint(juce::Graphics& g)
     }
 
     // Playhead.
-    const auto px = static_cast<float>(view.msToX(live.positionMs));
-    lastDrawnPlayheadX = px;
+    const auto px = static_cast<float>(playheadX);
     g.setColour(colours::red500);
     g.drawLine(px, 0.0f, px, static_cast<float>(getHeight()), 1.5f);
 }
@@ -1342,6 +1376,7 @@ void TimelineView::mouseDrag(const juce::MouseEvent& e)
     {
         view.scrollXPx = panStartScrollX - e.getDistanceFromDragStartX();
         view.scrollY = panStartScrollY - e.getDistanceFromDragStartY();
+        if (e.getDistanceFromDragStartX() != 0) userScrolled();
         clampScroll();
         view.changed();
         return;
@@ -1635,7 +1670,10 @@ void TimelineView::mouseWheelMove(const juce::MouseEvent& e, const juce::MouseWh
     }
     const bool horizontal = std::abs(w.deltaX) > std::abs(w.deltaY) || e.mods.isShiftDown();
     if (horizontal)
+    {
         view.scrollXPx -= (std::abs(w.deltaX) > 0.0f ? w.deltaX : w.deltaY) * 300.0;
+        userScrolled();
+    }
     else
         view.scrollY -= w.deltaY * 200.0;
     clampScroll();
@@ -1652,19 +1690,41 @@ void TimelineView::zoomBy(double factor, std::optional<double> anchorMs)
 {
     const double anchor = anchorMs.value_or(live.positionMs);
     const double anchorX = view.msToX(anchor);
-    view.pxPerSecond = juce::jlimit(VS::kMinPxPerSecond, VS::kMaxPxPerSecond, view.pxPerSecond * factor);
+    view.pxPerSecond = juce::jlimit(minPxPerSecond(), VS::kMaxPxPerSecond, view.pxPerSecond * factor);
     view.scrollXPx = anchor / 1000.0 * view.pxPerSecond - anchorX;
     clampScroll();
     view.changed();
     persistView();
 }
 
+double TimelineView::fitLengthMs() const
+{
+    double length = juce::jmax(10000.0, juce::jmax(model().contentEndMs(), model().projectLengthMs));
+    for (const auto& m : model().markers) length = juce::jmax(length, m.positionMs + 2000.0);
+    return length;
+}
+
+namespace
+{
+// The canvas a fit fills: its width less the vertical scrollbar and a margin.
+double fitWidthPx(int width)
+{
+    return juce::jmax(200.0, static_cast<double>(width) - 10.0 - 40.0);
+}
+} // namespace
+
+double TimelineView::minPxPerSecond() const
+{
+    const double fit = fitWidthPx(getWidth()) / (fitLengthMs() / 1000.0);
+    return juce::jlimit(VS::kMinPxPerSecond, VS::kMaxPxPerSecond, juce::jmin(1.25, fit / 2.0));
+}
+
 void TimelineView::zoomToFit()
 {
-    const double length = juce::jmax(10000.0, model().contentEndMs());
-    view.pxPerSecond = juce::jlimit(VS::kMinPxPerSecond, VS::kMaxPxPerSecond,
-                                    (getWidth() - 40) / (length / 1000.0));
+    // The whole project from its start, and the tracks from the top.
+    view.pxPerSecond = juce::jlimit(minPxPerSecond(), VS::kMaxPxPerSecond, fitWidthPx(getWidth()) / (fitLengthMs() / 1000.0));
     view.scrollXPx = 0.0;
+    view.scrollY = 0.0;
     clampScroll();
     view.changed();
     persistView();
@@ -1674,7 +1734,7 @@ void TimelineView::revealRange(double fromMs, double toMs, const juce::String& t
 {
     const double span = juce::jmax(1000.0, toMs - fromMs);
     const double margin = span * 0.15;
-    view.pxPerSecond = juce::jlimit(VS::kMinPxPerSecond, VS::kMaxPxPerSecond, getWidth() / ((span + 2.0 * margin) / 1000.0));
+    view.pxPerSecond = juce::jlimit(minPxPerSecond(), VS::kMaxPxPerSecond, getWidth() / ((span + 2.0 * margin) / 1000.0));
     view.scrollXPx = juce::jmax(0.0, (fromMs - margin) / 1000.0 * view.pxPerSecond);
     for (const auto& row : rows)
         if (row.trackId == trackId) view.scrollY = row.top;

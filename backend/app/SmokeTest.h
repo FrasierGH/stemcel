@@ -140,6 +140,10 @@ class SmokeTest final : private juce::Timer
     };
     std::vector<PluginTest> pluginTests;
     juce::String everyParamLine;
+    double fitEndX = 0.0, fitFloor = 0.0, scrolledTo = 0.0;
+    int fitWidth = 0;
+    juce::uint32 followStartedAt = 0;
+    int followStage = 0;
     bool everyParamOk = false;
     std::shared_ptr<std::atomic<bool>> pluginDirScanDone;
     int dragClipsBefore = 0, dragTracksBefore = 0;

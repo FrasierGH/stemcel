@@ -28,10 +28,10 @@ double ProjectState::getViewPxPerSecond() const
 
 void ProjectState::setViewPxPerSecond(double pxPerSecond)
 {
-    // Clamp to the renderer's supported zoom range so a stale or malformed
-    // payload can't persist an out-of-range view. Mirror into cleanSnapshot
-    // so it never marks dirty.
-    const double clamped = juce::jlimit(10.0, 800.0, pxPerSecond);
+    // Clamp to the timeline's zoom range (its floor follows the project's length, down to
+    // 0.02 px/s for a very long one) so a stale or malformed payload can't persist an
+    // out-of-range view. Mirror into cleanSnapshot so it never marks dirty.
+    const double clamped = juce::jlimit(0.02, 800.0, pxPerSecond);
     setNonDirtyRootProperty(kViewPxPerSecond, clamped);
 }
 
