@@ -417,6 +417,19 @@ ProjectState::EffectiveClipTiming ProjectState::getClipEffectiveTiming(const juc
         const double sourceBpm = getLibraryItemBpm(libraryItemId);
         const double projectBpm = getBpm();
         const auto curve = getTempoCurve();
+        if (const auto sourcePoints = getClipSourceTempo(clipId); !sourcePoints.empty() && sourceBpm > 0.0 && out.durationMs > 0.0)
+        {
+            // A drifting source, beat for beat onto the project's tempo (map or constant).
+            const TempoCurve source(sourcePoints, sourceBpm);
+            const double in = static_cast<double>(clip.getProperty(kInMs, 0.0));
+            const double start = static_cast<double>(clip.getProperty(kOffsetMs, 0.0));
+            const double beats = source.beatAt(in + out.durationMs) - source.beatAt(in);
+            const double end = curve.msAtBeat(curve.beatAt(start) + beats);
+            out.tempoRatio = end > start ? out.durationMs / (end - start) : 1.0;
+            out.warpActive = true;
+            out.durationMs = end - start;
+            return out;
+        }
         if (sourceBpm > 0.0 && !curve.isConstant() && out.durationMs > 0.0)
         {
             // Following the tempo map: the clip lasts as long as the map takes to play its
@@ -795,6 +808,66 @@ juce::Array<juce::var> ProjectState::getClipEnvelope(const juce::String& clipId)
     const auto clip = findClip(clipId);
     if (!clip.isValid()) return {};
     return readEnvelopeArray(clip, kEnvelopePoints);
+}
+
+bool ProjectState::setClipSourceTempo(const juce::String& clipId, const std::vector<TempoPoint>& points)
+{
+    auto clip = findClip(clipId);
+    if (!clip.isValid()) return false;
+    juce::Array<juce::var> list;
+    for (const auto& p : points)
+    {
+        if (!std::isfinite(p.timeMs) || !std::isfinite(p.bpm) || p.timeMs < 0.0) continue;
+        auto* o = new juce::DynamicObject();
+        o->setProperty("sourceMs", p.timeMs);
+        o->setProperty("bpm", juce::jlimit(20.0, 400.0, p.bpm));
+        list.add(juce::var(o));
+    }
+    if (list.isEmpty())
+    {
+        if (!clip.hasProperty(kSourceTempo)) return false;
+        clip.removeProperty(kSourceTempo, &undoManager);
+        return true;
+    }
+    if (juce::JSON::toString(clip.getProperty(kSourceTempo), true) == juce::JSON::toString(juce::var(list), true)) return false;
+    clip.setProperty(kSourceTempo, juce::var(list), &undoManager);
+    return true;
+}
+
+std::vector<TempoPoint> ProjectState::getClipSourceTempo(const juce::String& clipId) const
+{
+    std::vector<TempoPoint> points;
+    const auto clip = findClip(clipId);
+    if (!clip.isValid()) return points;
+    if (const auto* list = clip.getProperty(kSourceTempo).getArray())
+    {
+        points.reserve(static_cast<size_t>(list->size()));
+        for (const auto& p : *list)
+            points.push_back({static_cast<double>(p.getProperty("sourceMs", 0.0)), static_cast<double>(p.getProperty("bpm", 0.0))});
+    }
+    return points;
+}
+
+bool ProjectState::setClipGainDb(const juce::String& clipId, double gainDb)
+{
+    auto clip = findClip(clipId);
+    if (!clip.isValid() || !std::isfinite(gainDb)) return false;
+    // Tenths of a dB: finer than anyone hears, and a slider drag settles on round values.
+    const double clamped = std::round(juce::jlimit(-24.0, 12.0, gainDb) * 10.0) / 10.0;
+    if (std::abs(clamped - getClipGainDb(clipId)) < 1.0e-6) return false;
+    if (std::abs(clamped) < 1.0e-6)
+        clip.removeProperty(kClipGainDb, &undoManager);
+    else
+        clip.setProperty(kClipGainDb, clamped, &undoManager);
+    return true;
+}
+
+double ProjectState::getClipGainDb(const juce::String& clipId) const
+{
+    const auto clip = findClip(clipId);
+    if (!clip.isValid()) return 0.0;
+    const double stored = static_cast<double>(clip.getProperty(kClipGainDb, 0.0));
+    return std::isfinite(stored) ? juce::jlimit(-24.0, 12.0, stored) : 0.0;
 }
 
 // Counted from effective (warp-scaled) length, not stored duration: a correction changes

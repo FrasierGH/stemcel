@@ -171,6 +171,14 @@ bool dispatchClip(const DispatchContext& ctx)
         stemcel::handleClipSplitChannels(payload, engine, projectState, bridge, peakPool, cache,
                                            session.currentPath);
     }
+    else if (type == "CLIP_SET_SOURCE_TEMPO")
+    {
+        stemcel::handleClipSetSourceTempo(payload, engine, projectState, bridge);
+    }
+    else if (type == "CLIP_SET_GAIN")
+    {
+        stemcel::handleClipSetGain(payload, engine, projectState, bridge);
+    }
     else if (type == "CLIP_SET_ENVELOPE")
     {
         stemcel::log::debug("bridge", "recv CLIP_SET_ENVELOPE clipId=" +
@@ -234,6 +242,10 @@ bool dispatchLibrary(const DispatchContext& ctx)
     else if (type == "LIBRARY_ITEM_SET_SECTIONS")
     {
         stemcel::handleLibraryItemSetSections(payload, projectState);
+    }
+    else if (type == "LIBRARY_ITEM_SET_TEMPO_DRIFT")
+    {
+        stemcel::handleLibraryItemSetTempoDrift(payload, projectState);
     }
     else if (type == "LIBRARY_ITEM_SET_COVER_OVERRIDE")
     {
@@ -561,13 +573,6 @@ bool dispatchTrack(const DispatchContext& ctx)
         stemcel::log::debug("bridge", "recv TRACK_SET_TONE trackId=" +
                                             payload.getProperty("trackId", "").toString());
         stemcel::handleTrackSetTone(payload, engine, projectState, bridge);
-    }
-    else if (type == "TRACK_SET_LEVELER")
-    {
-        stemcel::log::debug("bridge", "recv TRACK_SET_LEVELER trackId=" +
-                                            payload.getProperty("trackId", "").toString() +
-                                            " amount=" + payload.getProperty("amount", "").toString());
-        stemcel::handleTrackSetLeveler(payload, engine, projectState, bridge);
     }
     else if (type == "TRACK_SET_PUNCH")
     {

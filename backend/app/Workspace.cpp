@@ -17,6 +17,7 @@ Workspace::Workspace(EngineClient& engineClient, AppController& appController, A
       actions(engineClient, mirror), waveforms(engineClient.host().peaksCache()), subscriptions(engineClient),
       importer(engineClient, mirror, sharedRekordbox()), audition(engineClient, importer),
       stems(engineClient, mirror, actions, preferences), sectionAnalyser(engineClient, mirror, preferences),
+      tempoAnalyser(engineClient, mirror),
       transport(mirror, view, live, actions, preferences), headers(mirror, view, live, actions),
       timeline(mirror, view, live, actions, waveforms)
 {
@@ -45,6 +46,9 @@ Workspace::Workspace(EngineClient& engineClient, AppController& appController, A
     stems.onNotify = notify;
     sectionAnalyser.onNotify = notify;
     timeline.onAnalyseSections = [this](const juce::String& itemId) { sectionAnalyser.analyse(itemId, true); };
+    tempoAnalyser.onNotify = notify;
+    timeline.onTempoReport = [this](const juce::String& itemId, const juce::String& clipId)
+    { TempoReport::show(mirror, actions, tempoAnalyser, itemId, clipId); };
     stems.onProgress = [this](double percent, const juce::String& stage)
     {
         if (libraryPanel == nullptr) return;
@@ -74,10 +78,12 @@ Workspace::Workspace(EngineClient& engineClient, AppController& appController, A
                                                                [this](std::vector<juce::String> ids, bool reorder, const juce::String& style, bool matchKeys)
                                                                { runAutoMix(std::move(ids), reorder, style, matchKeys); },
                                                                [this](const juce::String& vocal, const juce::String& beat) { mashup->start(vocal, beat); },
-                                                               [this](const juce::String& itemId) { sectionAnalyser.analyse(itemId, true); }});
+                                                               [this](const juce::String& itemId) { sectionAnalyser.analyse(itemId, true); },
+                                                               [this](const juce::String& itemId)
+                                                               { TempoReport::show(mirror, actions, tempoAnalyser, itemId, {}); }});
     libraryPanel = panel.get();
     setBottomPanel(std::move(panel),
-                   juce::jlimit(120, 700, static_cast<int>(prefs.get("ui", "nativeLibraryHeight", LibraryPanel::kDefaultHeight))));
+                   juce::jlimit(120, 1200, static_cast<int>(prefs.get("ui", "nativeLibraryHeight", LibraryPanel::kDefaultHeight))));
     view.followPlayback = prefs.followPlayback();
     prefsWatcher.fn = [this]
     {
@@ -92,6 +98,7 @@ Workspace::Workspace(EngineClient& engineClient, AppController& appController, A
     view.selectedTrackId = mirror.model().selectedTrackId;
     transport.setTimeline(&timeline);
     transport.onToggleMixer = [this] { toggleMixer(); };
+    setupResizeBars();
     addAndMakeVisible(transport);
     addAndMakeVisible(headers);
     addAndMakeVisible(timeline);
@@ -324,23 +331,59 @@ void Workspace::paint(juce::Graphics& g)
     g.fillAll(colours::background);
 }
 
+void Workspace::setupResizeBars()
+{
+    static constexpr int kMinTimeline = 160; // the timeline keeps at least this much height
+    mixerHeight = juce::jlimit(200, 1200, static_cast<int>(prefs.get("ui", "nativeMixerHeight", 340)));
+    headerWidth = juce::jlimit(160, 480, static_cast<int>(prefs.get("ui", "trackHeaderWidth", TrackHeaders::kDefaultWidth)));
+    bottomBar.setTooltip("Drag to resize");
+    bottomBar.onDragStart = [this] { dragStartSize = isMixerShown() ? mixerHeight : bottomPanelHeight; };
+    bottomBar.onDrag = [this](int delta)
+    {
+        const int room = getHeight() - TransportBar::kHeight - kMinTimeline;
+        const int next = juce::jlimit(120, juce::jmax(120, room), dragStartSize - delta);
+        (isMixerShown() ? mixerHeight : bottomPanelHeight) = next;
+        resized();
+    };
+    bottomBar.onDragEnd = [this]
+    {
+        prefs.set("ui", isMixerShown() ? "nativeMixerHeight" : "nativeLibraryHeight", isMixerShown() ? mixerHeight : bottomPanelHeight);
+        prefs.save();
+    };
+    headerBar.setTooltip("Drag to resize the track headers");
+    headerBar.onDragStart = [this] { dragStartSize = headerWidth; };
+    headerBar.onDrag = [this](int delta)
+    {
+        headerWidth = juce::jlimit(160, juce::jmin(480, getWidth() / 2), dragStartSize + delta);
+        resized();
+    };
+    headerBar.onDragEnd = [this]
+    {
+        prefs.set("ui", "trackHeaderWidth", headerWidth);
+        prefs.save();
+    };
+    addAndMakeVisible(bottomBar);
+    addAndMakeVisible(headerBar);
+}
+
 void Workspace::resized()
 {
     auto area = getLocalBounds();
     transport.setBounds(area.removeFromTop(TransportBar::kHeight));
+    // Whatever sits below the timeline never takes all of it.
+    const int room = juce::jmax(120, area.getHeight() - 160);
     if (isMixerShown())
     {
-        mixer->setBounds(area.removeFromBottom(juce::jmax(bottomPanelHeight, 340)));
-        area.removeFromBottom(1);
+        mixer->setBounds(area.removeFromBottom(juce::jmin(mixerHeight, room)));
+        bottomBar.setBounds(area.removeFromBottom(5));
     }
     else if (bottomPanel != nullptr)
     {
-        bottomPanel->setBounds(area.removeFromBottom(bottomPanelHeight));
-        area.removeFromBottom(1);
+        bottomPanel->setBounds(area.removeFromBottom(juce::jmin(bottomPanelHeight, room)));
+        bottomBar.setBounds(area.removeFromBottom(5));
     }
-    const int headerWidth = static_cast<int>(prefs.get("ui", "trackHeaderWidth", TrackHeaders::kDefaultWidth));
-    headers.setBounds(area.removeFromLeft(juce::jlimit(160, 320, headerWidth)));
-    area.removeFromLeft(1);
+    headers.setBounds(area.removeFromLeft(juce::jlimit(160, juce::jmax(160, getWidth() / 2), headerWidth)));
+    headerBar.setBounds(area.removeFromLeft(4));
     timeline.setBounds(area);
     timeline.clampScroll();
 }

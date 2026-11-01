@@ -81,13 +81,19 @@ void handleProjectSetMixGlue(const juce::var& payload, stemcel::AudioEngine& eng
                              stemcel::BridgeServer& bridge)
 {
     const auto amount = readOptionalNumber(payload, "amount");
-    if (!amount.has_value()) return;
+    const auto makeup = readOptionalNumber(payload, "makeupDb");
+    if (!amount.has_value() && !makeup.has_value()) return;
 
-    if (!projectState.setProjectMixGlueAmount(static_cast<float>(*amount))) return;
+    bool changed = false;
+    if (amount.has_value()) changed |= projectState.setProjectMixGlueAmount(static_cast<float>(*amount));
+    if (makeup.has_value()) changed |= projectState.setProjectMixGlueMakeupDb(static_cast<float>(*makeup));
+    if (!changed) return;
 
     const float canonicalAmount = projectState.getProjectMixGlueAmount();
+    const float canonicalMakeup = projectState.getProjectMixGlueMakeupDb();
     engine.setProjectMixGlue(canonicalAmount, /*snap*/ false);
-    broadcastApplied(bridge, "PROJECT_MIX_GLUE_APPLIED", {{"amount", canonicalAmount}});
+    engine.setProjectMixGlueMakeup(canonicalMakeup, /*snap*/ false);
+    broadcastApplied(bridge, "PROJECT_MIX_GLUE_APPLIED", {{"amount", canonicalAmount}, {"makeupDb", canonicalMakeup}});
 }
 
 } // namespace stemcel

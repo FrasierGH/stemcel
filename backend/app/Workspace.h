@@ -12,10 +12,12 @@
 #include "ProjectModel.h"
 #include "TimelineActions.h"
 #include "SectionAnalyser.h"
+#include "TempoReport.h"
 #include "TimelineView.h"
 #include "TrackHeaders.h"
 #include "TransportBar.h"
 #include "Mashup.h"
+#include "ResizeBar.h"
 #include "WaveformStore.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -110,6 +112,7 @@ class Workspace final : public juce::Component, public juce::DragAndDropContaine
     Audition audition;
     StemService stems;
     SectionAnalyser sectionAnalyser;
+    TempoDriftAnalyser tempoAnalyser;
     std::unique_ptr<MashupBuilder> mashup;
     struct PrefsWatcher final : juce::ChangeListener
     {
@@ -123,7 +126,14 @@ class Workspace final : public juce::Component, public juce::DragAndDropContaine
     std::unique_ptr<juce::Component> bottomPanel;
     LibraryPanel* libraryPanel = nullptr;
     int bottomPanelHeight = 0;
+    int mixerHeight = 340;
     std::unique_ptr<MixerPanel> mixer;
+    // Drag bars: the library (or mixer) against the timeline, and the track headers'
+    // width. Sizes persist in the preferences when a drag ends.
+    ResizeBar bottomBar{ResizeBar::Axis::rows}, headerBar{ResizeBar::Axis::columns};
+    int dragStartSize = 0;
+    int headerWidth = 193;
+    void setupResizeBars();
     std::unique_ptr<MidiControllerActions> midi;
     std::map<juce::String, juce::uint32> gridAlignPending; // item id -> when it was analysed
     std::function<void(const juce::String&, bool)> toast;

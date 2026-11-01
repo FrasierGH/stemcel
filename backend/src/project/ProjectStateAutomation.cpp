@@ -270,20 +270,20 @@ juce::Array<juce::var> ProjectState::getTrackAutomationLanes(const juce::String&
 namespace
 {
 
-constexpr double kMinAutomationLaneHeightPx = 80.0;
+constexpr double kMinAutomationLaneHeightPx = 40.0;
 constexpr double kMaxAutomationLaneHeightPx = 220.0;
 
 bool isKnownAutomationParamId(const juce::String& paramId)
 {
     return paramId == "filter" || paramId == "pan" || paramId == "toneBass" ||
            paramId == "toneMid" || paramId == "toneTreble" || paramId == "reverbSend" ||
-           paramId == "delaySend" || paramId == "leveler" || paramId == "punch" ||
+           paramId == "delaySend" || paramId == "punch" ||
            paramId == "saturationDrive" || paramId == "saturationMix" ||
            paramId == "bitCrusherRate" || paramId == "bitCrusherBits" ||
            paramId == "bitCrusherBoost" || paramId == "bitCrusherMix" || paramId == "level" ||
            paramId == "reverbMix" || paramId == "reverbSize" || paramId == "reverbDecay" ||
            paramId == "delayMix" || paramId == "delayFeedback" || paramId == "reverbTone" ||
-           paramId == "delayTone" || paramId == "glue" || isPluginParamId(paramId);
+           paramId == "delayTone" || paramId == "glue" || paramId == "glueMakeup" || isPluginParamId(paramId);
 }
 
 juce::Array<juce::var> sanitizeAutomationLaneViews(const juce::Array<juce::var>& lanes,

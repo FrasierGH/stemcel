@@ -114,8 +114,10 @@ class ClipEditor final : public juce::Component, private juce::ChangeListener, p
     juce::ToggleButton tempoToggle{"Warp to tempo"};
     juce::ComboBox tempoMode, warpMode;
     juce::Label fixedBpmLabel{{}, "Clip BPM"}, semitonesLabel{{}, "Semitones"}, centsLabel{{}, "Cents"},
-        gridBpmLabel{{}, "Grid BPM"}, anchorLabel{{}, "First beat (s)"};
+        gridBpmLabel{{}, "Grid BPM"}, anchorLabel{{}, "First beat (s)"}, gainLabel{{}, "Clip gain"};
     juce::Slider fixedBpm, semitones, cents, gridBpm, anchor;
+    // The clip's own gain: applied as it moves (and undoable), not held for Save.
+    juce::Slider gain;
     juce::TextButton halveButton{"/2"}, doubleButton{"x2"}, correctTempoButton{"Apply tempo to all clips"};
     juce::ToggleButton reverseToggle{"Reverse"}, brakeToggle{"Brake"}, backspinToggle{"Backspin"};
     juce::ComboBox sliceDivision;

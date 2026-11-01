@@ -71,6 +71,26 @@ std::vector<std::pair<juce::String, juce::String>> pairsFor(const ProjectModel& 
 // The transition recorded between two clips (either order), if any.
 const juce::var* recordFor(const ProjectModel& model, const juce::String& outClipId, const juce::String& inClipId);
 
+// The window a pair's transition covers: its record's (where it may have been dragged), else
+// the clips' overlap.
+std::optional<std::pair<double, double>> windowOf(const ProjectModel& model, const juce::String& outClipId,
+                                                  const juce::String& inClipId);
+// How far a transition's window may run: over the clips that sit end to end with the
+// outgoing one on its track, and with the incoming one on its track (both tracks must have
+// audio there), so a transition can span a clip that was split or followed by another.
+std::pair<double, double> windowLimits(const ProjectModel& model, const ClipModel& out, const ClipModel& in);
+// Writes a recorded transition again over `window` (a preset, or edited halves), as one
+// undo step: what dragging its edges or its label does.
+bool reapply(EngineClient& engine, TimelineActions& actions, const ProjectModel& model, const juce::var& record,
+             std::pair<double, double> window);
+// After a clip was moved or trimmed (its timeline span was oldStartMs..oldEndMs; `model` has
+// it as it is now), every transition it is part of follows: a move carries the window with
+// it, and an edge the window ended (or started) on takes the window's end (start) along, so a
+// transition at the end of an outgoing clip stretches when the clip is lengthened. A window
+// with no room left is removed; `removed` gets those transitions' labels.
+void retimeAfterClipEdit(EngineClient& engine, TimelineActions& actions, const ProjectModel& model, const juce::String& clipId,
+                         double oldStartMs, double oldEndMs, juce::StringArray& removed);
+
 // Applies a preset over the pair's overlap (or `window` when given), replacing any transition
 // already between them. One undo step. Returns false when the clips do not overlap.
 bool apply(EngineClient& engine, TimelineActions& actions, const ProjectModel& model, const juce::String& outClipId,
@@ -141,9 +161,10 @@ Join joinForPreset(const juce::String& presetId);
 // "Echo Out + Muffled Intro", or the preset's name.
 juce::String labelOf(const juce::var& record);
 
-// Applies a join over the pair's overlap, replacing what is there. One undo step.
+// Applies a join over `window` (by default the pair's current window, windowOf), replacing
+// what is there. One undo step.
 bool applyJoin(EngineClient& engine, TimelineActions& actions, const ProjectModel& model, const juce::String& outClipId,
-               const juce::String& inClipId, const Join& join);
+               const juce::String& inClipId, const Join& join, std::optional<std::pair<double, double>> window = std::nullopt);
 
 // Something from the Transitions panel dropped on a clip ("transition:out:<kind>",
 // "transition:in:<kind>" or "transition:preset:<id>"): applies it to that clip's join nearest

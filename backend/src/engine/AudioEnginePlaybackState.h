@@ -50,6 +50,8 @@ protected:
         bool prefetchDirty = false;
         // The source tempo when the clip follows the tempo map; 0 when it does not.
         double followBpm = 0.0;
+        // The source's own tempo when it drifts (owned by the engine's curve list); null when steady.
+        const TempoCurve* sourceCurve = nullptr;
     };
 
     struct Preview
@@ -77,6 +79,9 @@ protected:
     // when a new one is published, and curves are tiny, so none is freed while the engine runs.
     std::vector<std::unique_ptr<TempoCurve>> tempoCurves;
     const TempoCurve* tempoCurve = nullptr; // null: no tempo map
+    // The project's constant tempo as a curve: what a clip with a drifting source follows
+    // when there is no tempo map.
+    const TempoCurve* flatCurve = nullptr;
 
     juce::TimeSliceThread readAheadThread{"stemcel-readahead"};
     std::unordered_map<juce::String, std::unique_ptr<Track>> tracks;

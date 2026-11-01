@@ -60,6 +60,9 @@ struct ClipModel
     juce::String scratchPatternId;
     bool pendingAutoWarp = false;
     std::vector<EnvelopePoint> envelope;
+    double gainDb = 0.0; // the clip's own gain
+    // The source's own tempo when it drifts ({ms into the file, bpm}); empty when steady.
+    std::vector<TempoPoint> sourceTempo;
     juce::var raw; // the full clip object (e.g. to tell a pinned tempoRatio from an absent one)
 
     double endMs() const { return offsetMs + effectiveDurationMs; }
@@ -148,6 +151,29 @@ struct ProjectModel
     // The tempo map (empty: the constant `bpm`), and the tempo over time it describes.
     std::vector<TempoPoint> tempoMap;
     TempoCurve tempoCurve() const { return TempoCurve(tempoMap, bpm); }
+    // A clip that follows the project tempo (along the map, or beat for beat when its source
+    // drifts): where in its source (ms into the file) it is at timeline `timelineMs`, and when
+    // on the timeline it reaches `sourceMsFromIn` past its in-point. As the engine plays it.
+    bool clipFollows(const ClipModel& clip) const
+    {
+        return clip.tempoFollowBpm > 0.0 && (!tempoMap.empty() || !clip.sourceTempo.empty());
+    }
+    double followSourceMs(const ClipModel& clip, double timelineMs) const
+    {
+        const auto curve = tempoCurve();
+        if (clip.sourceTempo.empty()) return clip.inMs + curve.sourceMsBetween(clip.offsetMs, timelineMs, clip.tempoFollowBpm);
+        const TempoCurve source(clip.sourceTempo, clip.tempoFollowBpm);
+        const double beats = curve.area(clip.offsetMs, timelineMs) / 60000.0;
+        return source.msAtBeat(source.beatAt(clip.inMs) + beats);
+    }
+    double followTimelineMs(const ClipModel& clip, double sourceMsFromIn) const
+    {
+        const auto curve = tempoCurve();
+        if (clip.sourceTempo.empty()) return curve.timelineAfterSource(clip.offsetMs, sourceMsFromIn, clip.tempoFollowBpm);
+        const TempoCurve source(clip.sourceTempo, clip.tempoFollowBpm);
+        const double beats = source.beatAt(clip.inMs + sourceMsFromIn) - source.beatAt(clip.inMs);
+        return curve.msAtBeat(curve.beatAt(clip.offsetMs) + beats);
+    }
     juce::var raw;
 
     static ProjectModel fromState(const juce::var& state);

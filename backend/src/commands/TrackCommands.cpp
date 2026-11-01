@@ -269,30 +269,6 @@ void handleTrackSetTone(const juce::var& payload, stemcel::AudioEngine& engine,
                       {"filter", canonFilter}});
 }
 
-// Leveler exposes one curated amount knob; raw compressor controls stay hidden.
-void handleTrackSetLeveler(const juce::var& payload, stemcel::AudioEngine& engine,
-                           stemcel::ProjectState& projectState,
-                           stemcel::BridgeServer& bridge)
-{
-    const juce::String trackId = tryGetRequiredString(payload, "trackId").value_or(juce::String{});
-    if (trackId.isEmpty()) return;
-    const auto amountVar = tryGetNumber(payload, "amount");
-    if (!amountVar.has_value()) return;
-
-    const float amount = juce::jlimit(0.0f, 1.0f, static_cast<float>(*amountVar));
-    const bool changed = projectState.setTrackLevelerAmount(trackId, amount);
-    if (!changed) return;
-
-    // Re-read canonical value so renderer and engine match persisted truth.
-    const float canonAmount = projectState.getTrackLevelerAmount(trackId);
-
-    // Live UI gesture → glide (snap=false) to avoid zipper noise.
-    engine.setTrackLeveler(trackId, canonAmount, /*snap*/ false);
-
-    broadcastApplied(bridge, "TRACK_LEVELER_APPLIED",
-                     {{"trackId", trackId}, {"amount", canonAmount}});
-}
-
 void handleTrackSetPunch(const juce::var& payload, stemcel::AudioEngine& engine,
                          stemcel::ProjectState& projectState,
                          stemcel::BridgeServer& bridge)

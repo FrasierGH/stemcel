@@ -77,9 +77,10 @@ class RekordboxBrowser::PlaylistItem final : public juce::TreeViewItem
     {
         if (isSelected()) g.fillAll(colours::sky600.withAlpha(0.35f));
         juce::String name = playlist == nullptr ? "All tracks" : playlist->name;
-        if (playlist != nullptr && !playlist->isFolder() && playlist->kind != "smart")
+        // An intelligent playlist lists the tracks its rule admits (evaluated when the library opens).
+        if (playlist != nullptr && !playlist->isFolder())
             name << "  (" << playlist->trackIds.size() << ")";
-        g.setColour(playlist != nullptr && playlist->kind == "smart" ? colours::textFaint
+        g.setColour(playlist != nullptr && playlist->kind == "smart" && playlist->trackIds.isEmpty() ? colours::textFaint
                     : playlist != nullptr && playlist->isFolder()   ? colours::textDim
                                                                     : colours::text);
         g.setFont(uiFont(13.0f, playlist == nullptr));

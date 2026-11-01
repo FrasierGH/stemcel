@@ -61,6 +61,9 @@ ClipModel parseClip(const juce::var& c, const juce::String& trackId)
     clip.scratchPatternId = str(c, "scratchPatternId");
     clip.pendingAutoWarp = flag(c, "pendingAutoWarp");
     clip.raw = c;
+    clip.gainDb = num(c, "gainDb", 0.0);
+    if (const auto* points = c.getProperty("sourceTempo", {}).getArray())
+        for (const auto& p : *points) clip.sourceTempo.push_back({num(p, "sourceMs"), num(p, "bpm")});
     if (const auto* points = c.getProperty("envelopePoints", {}).getArray())
         for (const auto& p : *points) clip.envelope.push_back({num(p, "timeMs"), num(p, "gain", 1.0)});
     return clip;

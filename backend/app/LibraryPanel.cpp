@@ -1,4 +1,5 @@
 #include "LibraryPanel.h"
+#include "KeyWheel.h"
 #include "AppPaths.h"
 
 #include "MediaStore.h"
@@ -913,6 +914,14 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
         if (isFile) menu.addItem("Reanalyse File", [this, id] { reanalyse(id); });
         if (item->kind == "source" && ctx.analyseSections != nullptr)
             menu.addItem("Analyse Sections", [this, id] { ctx.analyseSections(id); });
+        if (isFile && ctx.tempoReport != nullptr) menu.addItem("BPM Variability Check...", [this, id] { ctx.tempoReport(id); });
+        // The keys of the item, or of every selected item when it is one of them.
+        menu.addItem("Key Wheel...", [this, id]
+                     {
+                         std::vector<juce::String> ids{id};
+                         if (selection.count(id) != 0 && selection.size() > 1) ids.assign(selection.begin(), selection.end());
+                         KeyWheel::show(ctx.mirror, ctx.actions, {}, ids);
+                     });
         if (isFile)
             menu.addItem("Add to rekordbox", ctx.rekordbox.isAvailable(), false, [this] { addToRekordbox(); });
         if (item->kind == "source" || item->kind == "sample")

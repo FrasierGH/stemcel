@@ -64,6 +64,8 @@ struct LibraryContext
     std::function<void(const juce::String& vocalItemId, const juce::String& beatItemId)> mashup;
     // Stemcel's own analysis of a track's sections (SectionAnalyser), run again.
     std::function<void(const juce::String& itemId)> analyseSections;
+    // The BPM variability check (TempoReport).
+    std::function<void(const juce::String& itemId)> tempoReport;
 };
 
 class LibraryItemsView;

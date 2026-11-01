@@ -56,6 +56,7 @@ MixdownSnapshot snapshotProjectForMixdown(const ProjectState& project,
     snapshot.masterGain = juce::jlimit(0.0F, 1.0F, project.getMasterVolume());
     snapshot.safetyLimiterEnabled = project.getSafetyLimiterEnabled();
     snapshot.mixGlueAmount = project.getProjectMixGlueAmount();
+    snapshot.mixGlueMakeupDb = project.getProjectMixGlueMakeupDb();
 
     snapshot.reverbSize = project.getProjectReverbSize();
     snapshot.reverbDecay = project.getProjectReverbDecay();
@@ -104,7 +105,6 @@ MixdownSnapshot snapshotProjectForMixdown(const ProjectState& project,
         track.toneMidDb = project.getTrackToneMidDb(track.id);
         track.toneTrebleDb = project.getTrackToneTrebleDb(track.id);
         track.toneFilter = project.getTrackToneFilter(track.id);
-        track.levelerAmount = project.getTrackLevelerAmount(track.id);
         track.punchAmount = project.getTrackPunchAmount(track.id);
         track.saturationDrive = project.getTrackSaturationDrive(track.id);
         track.saturationMix = project.getTrackSaturationMix(track.id);
@@ -155,15 +155,22 @@ MixdownSnapshot snapshotProjectForMixdown(const ProjectState& project,
             const auto timing = project.getClipEffectiveTiming(clip.id);
             clip.tempoRatio = timing.tempoRatio > 0.0 ? timing.tempoRatio : 1.0;
             // The same rule as live (syncTempoMap).
-            if (const double followBpm = project.getClipTempoFollowBpm(clip.id); tempoCurve != nullptr && followBpm > 0.0)
+            if (const double followBpm = project.getClipTempoFollowBpm(clip.id); followBpm > 0.0)
             {
-                clip.tempoCurve = tempoCurve;
-                clip.followBpm = followBpm;
+                const auto sourcePoints = project.getClipSourceTempo(clip.id);
+                if (!sourcePoints.empty()) clip.sourceCurve = std::make_shared<const TempoCurve>(sourcePoints, followBpm);
+                // Without a map a drifting source follows the constant project tempo.
+                clip.tempoCurve = tempoCurve != nullptr ? tempoCurve
+                                  : clip.sourceCurve != nullptr
+                                      ? std::make_shared<const TempoCurve>(std::vector<TempoPoint>{}, project.getBpm())
+                                      : nullptr;
+                if (clip.tempoCurve != nullptr) clip.followBpm = followBpm;
             }
             clip.semitones = static_cast<double>(clipTree.getProperty(kSemitones, 0.0));
             clip.cents = static_cast<double>(clipTree.getProperty(kCents, 0.0));
             clip.effectiveDurationMs = timing.durationMs > 0.0 ? timing.durationMs : clip.durationMs;
             clip.envelopePoints = project.getClipEnvelope(clip.id);
+            clip.gainDb = project.getClipGainDb(clip.id);
 
             const auto edge = project.getClipEdgeFade(clip.id);
             clip.edgeFadeIn = edge.hasFadeIn;

@@ -89,6 +89,7 @@ void applyClipEffectsToEngine(stemcel::AudioEngine& engine, stemcel::ProjectStat
     else
         engine.setClipEnvelope(clipId, {});
 
+    engine.setClipUserGain(clipId, static_cast<double>(clip.getProperty("gainDb", 0.0)));
     engine.setClipReversed(clipId, static_cast<bool>(clip.getProperty("reversed", false)));
 
     // Brake / backspin — 0 seconds clears the effect.
@@ -246,6 +247,8 @@ juce::var buildProjectStateEnvelope(const ProjectSession& session, const stemcel
     {
         const auto mixGlueAmount = projectState.getProjectMixGlueAmount();
         if (mixGlueAmount > 1.0e-4F) obj->setProperty("mixGlueAmount", mixGlueAmount);
+        const auto makeup = projectState.getProjectMixGlueMakeupDb();
+        if (makeup > 1.0e-4F) obj->setProperty("mixGlueMakeupDb", makeup);
     }
     // Omit default (one) bar settings so legacy projects round-trip byte-clean.
     {
@@ -317,6 +320,7 @@ void syncEngineProjectSettings(stemcel::AudioEngine& engine, stemcel::ProjectSta
     engine.setMasterGain(projectState.getMasterVolume());
     engine.setSafetyLimiterEnabled(projectState.getSafetyLimiterEnabled(), /*snap*/ true);
     engine.setProjectMixGlue(projectState.getProjectMixGlueAmount(), /*snap*/ true);
+    engine.setProjectMixGlueMakeup(projectState.getProjectMixGlueMakeupDb(), /*snap*/ true);
 
     // Keep the monitoring metronome aligned with the loaded tempo + toggle state.
     engine.setMetronomeBpm(projectState.getBpm());
@@ -418,14 +422,14 @@ void rebuildEngineFromProject(stemcel::AudioEngine& engine, stemcel::ProjectStat
         }
         // Apply the track's FX state unconditionally — including defaults — so this rebuild is
         // idempotent regardless of the engine's prior state. Undo/redo reuse it as a fallback
-        // path: only re-applying non-default values would leave a tone/leveler/send/pan value
+        // path: only re-applying non-default values would leave a tone/send/pan value
         // that undo reverted back to default stale and still live in the engine.
         {
             const auto toneTrackId = track.getProperty("id").toString();
 
             // Clear stale automation FIRST: clearAllTrackAutomation snaps every previously
             // automated param back to neutral, so it must run before the authoritative static
-            // values below — otherwise it would clobber a just-restored pan/tone/send/leveler value
+            // values below — otherwise it would clobber a just-restored pan/tone/send value
             // for a param whose lane was removed by the undo.
             engine.clearAllTrackAutomation(toneTrackId);
 
@@ -434,8 +438,6 @@ void rebuildEngineFromProject(stemcel::AudioEngine& engine, stemcel::ProjectStat
                                 projectState.getTrackToneMidDb(toneTrackId),
                                 projectState.getTrackToneTrebleDb(toneTrackId),
                                 projectState.getTrackToneFilter(toneTrackId), /*snap*/ true);
-            engine.setTrackLeveler(toneTrackId, projectState.getTrackLevelerAmount(toneTrackId),
-                                   /*snap*/ true);
             engine.setTrackPunch(toneTrackId, projectState.getTrackPunchAmount(toneTrackId),
                                  /*snap*/ true);
             engine.setTrackSaturation(toneTrackId,

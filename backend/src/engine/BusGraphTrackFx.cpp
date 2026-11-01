@@ -52,8 +52,6 @@ void BusGraph::applyPendingTrackFx(TrackRuntime& runtime)
                               /*snap*/ true);
     }
 
-    if (const auto leveler = pendingLeveler.find(trackId); leveler != pendingLeveler.end())
-        runtime.chain.setLeveler(leveler->second, /*snap*/ true);
     if (const auto punch = pendingPunch.find(trackId); punch != pendingPunch.end())
         runtime.chain.setPunch(punch->second, /*snap*/ true);
 
@@ -142,15 +140,6 @@ void BusGraph::setTrackTone(const juce::String& trackId,
         runtime->second->chain.setTone(bassDb, midDb, trebleDb, filter, snap);
 }
 
-void BusGraph::setTrackLeveler(const juce::String& trackId, float amount, bool snap)
-{
-    if (trackId.isEmpty()) return;
-    const float clamped = juce::jlimit(0.0F, 1.0F, std::isfinite(amount) ? amount : 0.0F);
-    pendingLeveler[trackId] = clamped;
-    if (const auto runtime = runtimes.find(trackId); runtime != runtimes.end())
-        runtime->second->chain.setLeveler(clamped, snap);
-}
-
 void BusGraph::setTrackPunch(const juce::String& trackId, float amount, bool snap)
 {
     if (trackId.isEmpty()) return;
@@ -220,7 +209,6 @@ void BusGraph::retireTrackFxState(const juce::String& trackId)
 
     const juce::ScopedLock sl(lock);
     pendingTone.erase(trackId);
-    pendingLeveler.erase(trackId);
     pendingPunch.erase(trackId);
     pendingSaturation.erase(trackId);
     pendingBitCrusher.erase(trackId);
@@ -266,12 +254,6 @@ void BusGraph::restoreAutomationParam(const juce::String& trackId, AutomationPar
         {
             const auto tone = pendingTone.find(trackId);
             track.chain.setTrebleTarget(tone != pendingTone.end() ? tone->second.trebleDb : 0.0F, false);
-            break;
-        }
-        case AutomationParam::leveler:
-        {
-            const auto leveler = pendingLeveler.find(trackId);
-            track.chain.setLeveler(leveler != pendingLeveler.end() ? leveler->second : 0.0F, false);
             break;
         }
         case AutomationParam::punch:
@@ -352,7 +334,6 @@ void BusGraph::restoreAutomationParam(const juce::String& trackId, AutomationPar
 void BusGraph::clearPendingTrackFx()
 {
     pendingTone.clear();
-    pendingLeveler.clear();
     pendingPunch.clear();
     pendingSaturation.clear();
     pendingBitCrusher.clear();

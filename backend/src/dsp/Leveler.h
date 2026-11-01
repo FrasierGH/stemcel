@@ -15,8 +15,11 @@ namespace stemcel
 class Leveler
 {
 public:
-    static constexpr float kMaximumMakeupDb = 10.0F;
-    static constexpr float kProjectMixGlueMaximumMakeupDb = 3.0F;
+    static constexpr float kMaximumMakeupDb = 12.0F;
+    // Glue's automatic makeup matches the level its compression takes off at the reference
+    // level (up to 12 dB); a set makeup (setMakeupDb) adds on top.
+    static constexpr float kProjectMixGlueMaximumMakeupDb = 12.0F;
+    static constexpr float kMaximumUserMakeupDb = 12.0F;
 
     Leveler() = default;
     explicit Leveler(float maximumMakeupDb) noexcept
@@ -32,6 +35,7 @@ public:
         sr = (sampleRate > 0.0 && std::isfinite(sampleRate)) ? sampleRate : 44100.0;
         channels = juce::jlimit(1, kMaxChannels, numChannels);
         curAmount = targetAmount.load(std::memory_order_relaxed);
+        curMakeupDb = targetMakeupDb.load(std::memory_order_relaxed);
         attackCoeff = onePoleCoeff(kAttackSeconds);
         releaseCoeff = onePoleCoeff(kReleaseSeconds);
         recomputeDerived();
@@ -51,6 +55,14 @@ public:
         if (snap) snapRequested.store(true, std::memory_order_release);
     }
 
+    /** Lock-free message-thread setter for the set makeup, 0..kMaximumUserMakeupDb dB; it
+     *  glides over the same 20 ms as the amount. */
+    void setMakeupDb(float db, bool snap) noexcept
+    {
+        targetMakeupDb.store(std::isfinite(db) ? juce::jlimit(0.0F, kMaximumUserMakeupDb, db) : 0.0F, std::memory_order_relaxed);
+        if (snap) snapRequested.store(true, std::memory_order_release);
+    }
+
     /** Settled-off state leaves the block untouched for live/export parity. */
     void process(juce::AudioBuffer<float>& buffer, int startSample, int numSamples) noexcept
     {
@@ -59,10 +71,11 @@ public:
         if (snapRequested.exchange(false, std::memory_order_acquire))
         {
             curAmount = targetAmount.load(std::memory_order_relaxed);
+            curMakeupDb = targetMakeupDb.load(std::memory_order_relaxed);
             recomputeDerived();
         }
 
-        const bool moved = smoothAmount(numSamples);
+        const bool moved = smoothAmount(numSamples) | smoothMakeup(numSamples);
         if (moved) recomputeDerived();
 
         // Exact passthrough for untouched tracks.
@@ -139,6 +152,24 @@ private:
         return static_cast<float>(juce::jlimit(0.0, 1.0, a));
     }
 
+    /** The set makeup's glide, settling exactly as the amount's does. */
+    bool smoothMakeup(int numSamples) noexcept
+    {
+        const float target = targetMakeupDb.load(std::memory_order_relaxed);
+        if (std::abs(target - curMakeupDb) < 1.0e-4F)
+        {
+            if (curMakeupDb != target)
+            {
+                curMakeupDb = target;
+                return true;
+            }
+            return false;
+        }
+        const double a = std::exp(-static_cast<double>(numSamples) / (static_cast<double>(kSmoothTauSeconds) * sr));
+        curMakeupDb = target + (curMakeupDb - target) * static_cast<float>(juce::jlimit(0.0, 1.0, a));
+        return true;
+    }
+
     /** Settles exactly so the identity fast path can become bit-exact. */
     bool smoothAmount(int numSamples) noexcept
     {
@@ -166,7 +197,7 @@ private:
         ratio = 1.0F + (kMaxRatio - 1.0F) * amt;       // 1:1 → kMaxRatio
         slope = 1.0F - 1.0F / juce::jmax(1.0F, ratio); // 0 at ratio 1
         // Fixed-reference makeup boosts quieter material while preserving the zero-amount identity.
-        const float makeupDb = juce::jlimit(0.0F, maximumMakeupDb, gainReductionDb(kReferenceDb));
+        const float makeupDb = juce::jlimit(0.0F, maximumMakeupDb, gainReductionDb(kReferenceDb)) + juce::jmax(0.0F, curMakeupDb);
         makeupLin = (makeupDb <= 0.0F) ? 1.0F : dbToGain(makeupDb);
         kneeLowerLin = dbToGain(thresholdDb - kKneeDb * 0.5F);
     }
@@ -188,6 +219,8 @@ private:
 
     // Target published lock-free by the message thread; consumed by `process` on the audio thread.
     std::atomic<float> targetAmount{0.0F};
+    std::atomic<float> targetMakeupDb{0.0F};
+    float curMakeupDb = 0.0F;
     std::atomic<bool> snapRequested{false};
     float curAmount = 0.0F;
 

@@ -441,6 +441,21 @@ bool ProjectState::setLibraryItemCoverArtHidden(const juce::String& itemId, bool
     return false;
 }
 
+bool ProjectState::setLibraryItemTempoDrift(const juce::String& itemId, const juce::String& driftJson)
+{
+    auto library = root.getChildWithName(kLibrary);
+    if (!library.isValid()) return false;
+    for (int i = 0; i < library.getNumChildren(); ++i)
+    {
+        auto item = library.getChild(i);
+        if (item.getProperty(kId).toString() != itemId) continue;
+        if (driftJson.isEmpty()) item.removeProperty(kTempoDrift, nullptr);
+        else item.setProperty(kTempoDrift, driftJson, nullptr);
+        return true;
+    }
+    return false;
+}
+
 bool ProjectState::setLibraryItemSections(const juce::String& itemId, const juce::String& sectionsJson)
 {
     auto library = root.getChildWithName(kLibrary);

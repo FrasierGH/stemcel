@@ -121,6 +121,7 @@ class AudioEngine : private AudioEngineGraphState,
     void setArrangementMonitorGain(float gain);
     void setSafetyLimiterEnabled(bool enabled, bool snap);
     void setProjectMixGlue(float amount, bool snap);
+    void setProjectMixGlueMakeup(float db, bool snap);
 
     // Metronome monitoring click (post master gain). Enable/disable and keep the click in time with
     // the project tempo. Both publish to the audio thread via atomics.
@@ -153,7 +154,6 @@ class AudioEngine : private AudioEngineGraphState,
                       float bassDb, float midDb, float trebleDb, float filter,
                       bool snap);
 
-    void setTrackLeveler(const juce::String& trackId, float amount, bool snap);
     void setTrackPunch(const juce::String& trackId, float amount, bool snap);
     void setTrackSaturation(const juce::String& trackId, float drive, float mix, bool snap);
     void setTrackBitCrusher(const juce::String& trackId, float rate, int bits,
@@ -298,8 +298,14 @@ class AudioEngine : private AudioEngineGraphState,
     /** A warped clip follows the tempo map when `sourceBpm` > 0 (its source's tempo), and
      *  plays at its warp ratio when 0. No-op when unchanged. */
     bool setClipTempoFollow(const juce::String& clipId, double sourceBpm);
+    // Points a following clip at the curve it follows (the map, or the flat project tempo when
+    // its source drifts and there is no map) and at its source curve.
+    void publishClipFollow(const juce::String& clipId);
 
     bool setClipEnvelope(const juce::String& clipId, const juce::Array<juce::var>& points);
+    // The source's own tempo over its time ({ms, bpm}; empty: steady at its detected tempo).
+    bool setClipSourceTempo(const juce::String& clipId, const std::vector<TempoPoint>& points, double sourceBpm);
+    bool setClipUserGain(const juce::String& clipId, double gainDb);
 
     /** Play a clip's window backwards (non-destructive); applied upstream of warp/pitch. */
     bool setClipReversed(const juce::String& clipId, bool reversed);
@@ -814,6 +820,7 @@ class AudioEngine : private AudioEngineGraphState,
         float feedback = 0.3F, tone = 1.0F, mix = 0.0F;
     } projectDelay;
     float projectMixGlue = 0.0F; // put back when a master glue lane is let go
+    float projectMixGlueMakeupDb = 0.0F;
     void restoreAutomated(const juce::String& trackId, AutomationParam param);
 };
 

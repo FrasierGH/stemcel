@@ -828,7 +828,6 @@ void testBusGraphExcludesBypassedTrackProcessing()
             "bypassed track must contribute no output");
 
     graph.setTrackTone("track", 3.0F, -2.0F, 1.0F, 0.25F, true);
-    graph.setTrackLeveler("track", 0.4F, true);
     graph.setTrackSends("track", 0.2F, 0.3F);
     graph.setTrackPan("track", -1.0F);
     graph.setTrackRenderingEnabled("track", true);
@@ -1124,7 +1123,6 @@ void testBusGraphAutomationRestoresNonNeutralStaticValues()
     ConstantSource src(0.25F);
     bg.attachClip("t1", "c1", &src);
     bg.setTrackTone("t1", 6.0F, -2.0F, 3.0F, 0.0F, /*snap*/ true);
-    bg.setTrackLeveler("t1", 0.5F, /*snap*/ true);
     bg.setTrackPan("t1", -0.5F);
 
     juce::AudioBuffer<float> out(2, kBlock);
@@ -1153,14 +1151,12 @@ void testBusGraphAutomationRestoresNonNeutralStaticValues()
         snapshot->curves[index] = std::move(curve);
     };
     addCurve(stemcel::AutomationParam::toneBass, -12.0F);
-    addCurve(stemcel::AutomationParam::leveler, 1.0F);
     addCurve(stemcel::AutomationParam::pan, 1.0F);
     bg.setTrackAutomationPtr("t1", snapshot.get());
     render();
 
     bg.setTrackAutomationPtr("t1", nullptr);
     bg.restoreAutomationParam("t1", stemcel::AutomationParam::toneBass);
-    bg.restoreAutomationParam("t1", stemcel::AutomationParam::leveler);
     bg.restoreAutomationParam("t1", stemcel::AutomationParam::pan);
     const auto restoredOutput = renderSettled();
     requireNear(restoredOutput[0], staticOutput[0], 1.0e-4,
@@ -1285,7 +1281,7 @@ void testBusGraphAutomationSnapsAcrossDiscontinuities()
 }
 
 // M3: the project-FX setters and resetSharedFx are now lock-free. Hammer them
-// (plus the unlocked tone/leveler setters) from a writer thread while the audio
+// (plus the unlocked tone setters) from a writer thread while the audio
 // callback pumps the shared FX: output must stay finite with no crash or deadlock.
 void testBusGraphLockFreeProjectFxUpdatesAreSafe()
 {
@@ -1309,7 +1305,6 @@ void testBusGraphLockFreeProjectFxUpdatesAreSafe()
                                /*applyTimeNow*/ (i % 3) == 0);
             bg.setTrackTone("t1", 6.0F * u, -3.0F * u, 4.0F * u, 2.0F * u - 1.0F,
                             (i % 13) == 0);
-            bg.setTrackLeveler("t1", u, (i % 17) == 0);
             if ((i % 5) == 0) bg.resetSharedFx();
             ++i;
         }
@@ -1449,6 +1444,29 @@ void testLevelerSnapAppliesOnFirstBlock()
 
     require(snapRms > glideRms * 1.2,
             "snap applies the Leveler makeup on the first block; glide ramps in slowly");
+}
+
+// Glue's set makeup: +6 dB doubles a signal the compressor leaves alone (amount 0), and
+// 0 dB is exact passthrough again.
+void testLevelerSetMakeupGain()
+{
+    constexpr double sr = 48000.0;
+    constexpr int n = 512;
+    stemcel::Leveler glue{stemcel::Leveler::kProjectMixGlueMaximumMakeupDb};
+    glue.prepare(sr, 2);
+    glue.setParams(0.0F, /*snap*/ true);
+    glue.setMakeupDb(6.0206F, /*snap*/ true);
+    juce::AudioBuffer<float> b(2, n);
+    for (int ch = 0; ch < 2; ++ch)
+        for (int i = 0; i < n; ++i) b.setSample(ch, i, 0.1F);
+    glue.process(b, 0, n);
+    requireNear(b.getSample(0, n - 1), 0.2F, 1.0e-3, "a +6 dB makeup doubles the level");
+
+    glue.setMakeupDb(0.0F, /*snap*/ true);
+    for (int ch = 0; ch < 2; ++ch)
+        for (int i = 0; i < n; ++i) b.setSample(ch, i, 0.1F);
+    glue.process(b, 0, n);
+    require(b.getSample(0, n - 1) == 0.1F, "no makeup at amount 0 is exact passthrough");
 }
 
 void testSafetyLimiterNeutralBypassAndCeiling()
@@ -1735,6 +1753,7 @@ void addFxDspTests(std::vector<TestCase>& tests)
     tests.push_back({"SharedFx requestReset cuts the tail on the next audio block", testSharedFxRequestResetCutsTailNextBlock});
     tests.push_back({"ToneEq snap applies the full boost on the first block", testToneEqSnapAppliesOnFirstBlock});
     tests.push_back({"Leveler snap applies the makeup on the first block", testLevelerSnapAppliesOnFirstBlock});
+    tests.push_back({"Glue's set makeup gain lifts the level and 0 dB is passthrough", testLevelerSetMakeupGain});
     tests.push_back({"Safety limiter is transparent when off and caps linked peaks", testSafetyLimiterNeutralBypassAndCeiling});
     tests.push_back({"Safety limiter live disable uses a short blend", testSafetyLimiterLiveDisableRamps});
     tests.push_back({"Saturation is transparent at zero drive or mix and shapes when driven", testSaturationNeutralBypassAndMix});

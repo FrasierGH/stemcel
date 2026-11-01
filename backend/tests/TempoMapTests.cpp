@@ -68,6 +68,26 @@ void testTempoCurveArithmetic()
             "variesBetween sees a change only where the tempo moves");
 }
 
+// A clip whose source drifts follows the project tempo beat for beat, with or without a map:
+// a source that really ran at 132 (detected as 120) takes 132 beats' worth of the timeline.
+void testDriftingSourceFollowsBeatForBeat()
+{
+    stemcel::ProjectState state;
+    state.setBpm(120.0);
+    require(state.addLibraryItem("src", "C:\a.wav", "a.wav", 60000.0, 48000, 2), "source should add");
+    require(state.setLibraryItemBpm("src", 120.0), "source BPM should apply");
+    require(state.addTrack("t1") && state.addClip("t1", "c1", "src", 0.0, 60000.0), "clip should add");
+    require(state.setClipWarp("c1", true, std::nullopt, std::nullopt, false, std::nullopt, std::nullopt, std::nullopt),
+            "clip should warp");
+    require(state.getClipTempoFollowBpm("c1") == 0.0, "a steady clip without a map does not follow");
+    require(state.setClipSourceTempo("c1", {{0.0, 132.0}, {60000.0, 132.0}}), "the source tempo should apply");
+    require(state.getClipTempoFollowBpm("c1") > 0.0, "a drifting clip follows even without a map");
+    // 60 s at 132 BPM is 132 beats; at the project's 120 they take 66 s.
+    requireNear(state.getClipEffectiveTiming("c1").durationMs, 66000.0, 1e-6, "beats land on the project's beats");
+    require(state.setClipSourceTempo("c1", {}), "clearing should apply");
+    requireNear(state.getClipEffectiveTiming("c1").durationMs, 60000.0, 1e-6, "cleared, it plays at its detected tempo");
+}
+
 // A warped clip whose ratio follows the project lasts as long as the map takes to play it.
 void testClipTimingFollowsTheTempoMap()
 {
@@ -202,6 +222,52 @@ void testFollowedClipLandsBeatsOnTheCurve()
     }
 }
 
+// A source whose tempo drifts (its clicks speed up from 120 to 132), followed with its own
+// curve onto a steady 120: every click lands on a beat of the timeline.
+void testDriftingSourceLandsOnTheBeat()
+{
+    constexpr double sr = 48000.0;
+    constexpr int beats = 16;
+    const stemcel::TempoCurve sourceCurve({{0.0, 120.0}, {7000.0, 132.0}}, 120.0);
+    const stemcel::TempoCurve flat({}, 120.0);
+    const auto lengthSamples = static_cast<int>(std::ceil(sourceCurve.msAtBeat(beats + 1) * sr / 1000.0));
+    juce::AudioBuffer<float> clicks(1, lengthSamples);
+    clicks.clear();
+    for (int b = 1; b < beats; ++b)
+        clicks.setSample(0, static_cast<int>(std::round(sourceCurve.msAtBeat(b) * sr / 1000.0)), 1.0f);
+
+    constexpr juce::int64 clipStart = 24000;
+    const double startMs = clipStart * 1000.0 / sr;
+    juce::MemoryAudioSource child(clicks, false);
+    stemcel::OffsetSource source(&child);
+    source.setClipWindowAtomic(clipStart, 0, clicks.getNumSamples());
+    stemcel::WarpProcessor warp(1, sr, stemcel::warpModeSpec("repitch"), 1.0, 1024);
+    warp.prepareToPlay(512);
+    source.setWarpProcessor(&warp);
+    source.setTempoFollow(&flat, 120.0, sr, &sourceCurve);
+    source.prepareToPlay(512, sr);
+    source.setNextReadPosition(0);
+
+    const auto total = static_cast<int>(source.getTotalLength());
+    juce::AudioBuffer<float> out(1, total);
+    out.clear();
+    for (int done = 0; done < total; done += 512)
+    {
+        juce::AudioSourceChannelInfo info(&out, done, juce::jmin(512, total - done));
+        source.getNextAudioBlock(info);
+    }
+    for (int b = 1; b < beats; ++b)
+    {
+        const double expected = (startMs + b * 500.0) * sr / 1000.0;
+        const int from = static_cast<int>(expected) - 2000;
+        int at = from;
+        for (int i = from; i < from + 4000 && i < total; ++i)
+            if (std::abs(out.getSample(0, i)) > std::abs(out.getSample(0, at))) at = i;
+        requireNear(static_cast<double>(at), expected, sr / 1000.0, "every drifting beat lands on the steady grid");
+    }
+    source.releaseResources();
+}
+
 // Typing a new project tempo keeps every beat: the map's tempos scale and its points move
 // with the clips and markers.
 void testProjectTempoEditScalesTheMap()
@@ -263,8 +329,10 @@ void addTempoMapTests(std::vector<TestCase>& tests)
     tests.push_back({"Metronome and beat repeat follow the tempo map", testMetronomeAndBeatRepeatFollowTheMap});
     tests.push_back({"Tempo curve arithmetic", testTempoCurveArithmetic});
     tests.push_back({"Clip timing follows the tempo map", testClipTimingFollowsTheTempoMap});
+    tests.push_back({"A drifting source follows the project tempo beat for beat", testDriftingSourceFollowsBeatForBeat});
     tests.push_back({"Engine follows the tempo map", testEngineFollowsTheTempoMap});
     tests.push_back({"A followed clip lands its beats on the curve", testFollowedClipLandsBeatsOnTheCurve});
+    tests.push_back({"A drifting source followed with its curve lands every beat on the grid", testDriftingSourceLandsOnTheBeat});
     tests.push_back({"Project tempo edit scales the tempo map", testProjectTempoEditScalesTheMap});
 }
 

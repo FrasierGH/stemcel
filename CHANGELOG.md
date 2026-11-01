@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.2.0
+
+### Added
+
+- **Zoom** goes out as far as the project needs (half the zoom that fits it all, and at least 1.25 px/s), and **Fit** shows the whole project.
+- **Follow** pauses when you scroll away from the playhead while it plays, and picks up again when it comes back into view or play restarts.
+- **Resizable panes**: drag the bar above the library or mixer, beside the track headers, and the bottom edge of an automation lane. The transition editor's window resizes.
+- **Glue makeup**: Glue makes up what it takes off (up to 12 dB) and a Makeup knob adds more; both can be automated on the master.
+- **Clip gain**: a gain slider in the clip editor (-24 to +12 dB), shown in the clip's header.
+- **BPM variability check** (clip and library menus): follows the beats through the whole recording and shows its tempo bar by bar, with the stretches that stray from its main tempo shaded. A drifting clip can then be **auto-warped** to the main tempo (each beat lands on the grid), have the **project tempo follow it** (its measured tempo becomes the tempo map over the clip, which plays as recorded), or have its **warp edited by hand** on the graph.
+- **Key wheel** (a clip's Key menu, for it or every selected clip, and the library): the Camelot wheel with each clip's key marked, the keys that mix with them lit, and for several clips the key they can all reach with the least pitch shift lit brightest. Hover a key to see each clip's shift; click it to shift them there.
+- **Transitions you can drag**: drag a transition's label to move it, or its edges to shorten or lengthen it, across clips that sit end to end on a track. A transition follows its clips: moving one carries it along, and lengthening the outgoing clip stretches a transition that ended with it.
+
+### Changed
+
+- The playhead is drawn exactly where it is repainted, at 60 Hz, so no trail is left behind it.
+- rekordbox: a drive holding exports in both `PIONEER` and `.PIONEER` is offered, reading the newer one (and not written to until one is removed); a desktop library left on a drive beside a newer export is set aside for the export; drives' exports are listed first, and what each drive holds is logged.
+- rekordbox intelligent playlists list the tracks their rules admit.
+
+### Removed
+
+- The track **Leveler**; the project's Glue is the compressor. An older project's Leveler setting and lanes are dropped when it opens.
+
 ## 0.1.0
 
 The first Stemcel release: the native app, renamed, relicensed (AGPL-3.0) and with its own logo.

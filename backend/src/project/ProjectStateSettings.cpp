@@ -28,10 +28,10 @@ double ProjectState::getViewPxPerSecond() const
 
 void ProjectState::setViewPxPerSecond(double pxPerSecond)
 {
-    // Clamp to the renderer's supported zoom range so a stale or malformed
-    // payload can't persist an out-of-range view. Mirror into cleanSnapshot
-    // so it never marks dirty.
-    const double clamped = juce::jlimit(10.0, 800.0, pxPerSecond);
+    // Clamp to the timeline's zoom range (its floor follows the project's length, down to
+    // 0.02 px/s for a very long one) so a stale or malformed payload can't persist an
+    // out-of-range view. Mirror into cleanSnapshot so it never marks dirty.
+    const double clamped = juce::jlimit(0.02, 800.0, pxPerSecond);
     setNonDirtyRootProperty(kViewPxPerSecond, clamped);
 }
 
@@ -309,6 +309,23 @@ bool ProjectState::setProjectMixGlueAmount(float amount)
         root.removeProperty(kMixGlueAmount, &undoManager);
     else
         root.setProperty(kMixGlueAmount, clamped, &undoManager);
+    return true;
+}
+
+float ProjectState::getProjectMixGlueMakeupDb() const
+{
+    const float stored = static_cast<float>(static_cast<double>(root.getProperty(kMixGlueMakeupDb, 0.0)));
+    return std::isfinite(stored) ? juce::jlimit(0.0F, 12.0F, stored) : 0.0F;
+}
+
+bool ProjectState::setProjectMixGlueMakeupDb(float db)
+{
+    const float clamped = std::isfinite(db) ? juce::jlimit(0.0F, 12.0F, db) : 0.0F;
+    if (juce::approximatelyEqual(getProjectMixGlueMakeupDb(), clamped)) return false;
+    if (juce::approximatelyEqual(clamped, 0.0F))
+        root.removeProperty(kMixGlueMakeupDb, &undoManager);
+    else
+        root.setProperty(kMixGlueMakeupDb, clamped, &undoManager);
     return true;
 }
 

@@ -355,10 +355,10 @@ VSTi plugins' names, makers and categories through FST.
 **What can be automated.** Every parameter of the effects, plugins and transitions:
 
 - **Track FX**: every knob (Tone bass, mid, treble; the LP/HP filter; Room and Echo sends;
-  Leveler; Punch; Saturation drive and mix; Bit crusher rate, bits, boost and mix), plus
+  Punch; Saturation drive and mix; Bit crusher rate, bits, boost and mix), plus
   the track's gain and pan.
 - **Project FX**, on the master row: the master gain and every knob (Room size, decay,
-  tone and mix; Echo feedback, tone and mix; Glue). The echo's note length is a tempo-sync
+  tone and mix; Echo feedback, tone and mix; Glue amount and makeup). The echo's note length is a tempo-sync
   setting the engine holds while playing, so it is not a lane; the safety limiter and
   metronome are switches.
 - **Plugins**: every parameter of every plugin on a track or on the master, listed in

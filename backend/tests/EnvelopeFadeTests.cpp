@@ -114,6 +114,15 @@ void testOffsetSourceComposesEdgeFadeWithEnvelope()
         requireNear(buf.getSample(0, i), 1.0F, 1.0e-9,
                     "no envelope and no edge fade is a transparent passthrough");
     }
+
+    // The clip's own gain (-6.02 dB = 0.5) scales the block, and unity is passthrough again.
+    os.setUserGain(0.5F);
+    renderBlock();
+    for (int i = 0; i < n; ++i)
+        requireNear(buf.getSample(0, i), 0.5F, 1.0e-6, "a clip gain of 0.5 halves the clip");
+    os.setUserGain(1.0F);
+    renderBlock();
+    requireNear(buf.getSample(0, 0), 1.0F, 1.0e-9, "unity clip gain is passthrough");
 }
 
 void testOffsetSourceAppliesDefaultDeClickEdges()

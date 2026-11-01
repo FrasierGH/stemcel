@@ -228,6 +228,17 @@ bool AudioEngine::setClipEnvelope(const juce::String& clipId, const juce::Array<
     return true;
 }
 
+bool AudioEngine::setClipUserGain(const juce::String& clipId, double gainDb)
+{
+    auto it = tracks.find(clipId);
+    if (it == tracks.end() || it->second->offsetSource == nullptr) return false;
+    it->second->offsetSource->setUserGain(juce::Decibels::decibelsToGain(static_cast<float>(gainDb), -100.0F));
+    // Applied upstream of the read-ahead buffer, as the envelope is: rebuild the prefetch so
+    // the new gain is heard from the next block.
+    scheduleTrackPrefetchAfterEdit(*it->second);
+    return true;
+}
+
 bool AudioEngine::setClipReversed(const juce::String& clipId, bool reversed)
 {
     auto it = tracks.find(clipId);
@@ -543,26 +554,49 @@ double AudioEngine::clipWarpRatioForTest(const juce::String& clipId) const noexc
 
 bool AudioEngine::setTempoMap(const std::vector<TempoPoint>& points, double baseBpm)
 {
-    const TempoCurve* next = nullptr;
+    // The constant tempo, as a curve, for clips whose source drifts when there is no map.
+    bool flatChanged = false;
+    if (flatCurve == nullptr || flatCurve->baseBpm() != baseBpm)
+    {
+        tempoCurves.push_back(std::make_unique<TempoCurve>(std::vector<TempoPoint>{}, baseBpm));
+        flatCurve = tempoCurves.back().get();
+        flatChanged = true;
+    }
+    const TempoCurve* next = tempoCurve;
+    bool mapChanged = false;
     if (!points.empty())
     {
-        if (tempoCurve != nullptr && tempoCurve->baseBpm() == baseBpm && tempoCurve->points().size() == points.size()
-            && std::equal(points.begin(), points.end(), tempoCurve->points().begin(),
-                          [](const TempoPoint& a, const TempoPoint& b) { return a.timeMs == b.timeMs && a.bpm == b.bpm; }))
-            return false;
-        tempoCurves.push_back(std::make_unique<TempoCurve>(points, baseBpm));
-        next = tempoCurves.back().get();
+        const bool same = tempoCurve != nullptr && tempoCurve->baseBpm() == baseBpm && tempoCurve->points().size() == points.size()
+                          && std::equal(points.begin(), points.end(), tempoCurve->points().begin(),
+                                        [](const TempoPoint& a, const TempoPoint& b) { return a.timeMs == b.timeMs && a.bpm == b.bpm; });
+        if (!same)
+        {
+            tempoCurves.push_back(std::make_unique<TempoCurve>(points, baseBpm));
+            next = tempoCurves.back().get();
+            mapChanged = true;
+        }
     }
-    else if (tempoCurve == nullptr)
+    else if (tempoCurve != nullptr)
     {
-        return false;
+        next = nullptr;
+        mapChanged = true;
     }
+    if (!mapChanged && !flatChanged) return false;
     tempoCurve = next;
-    metronome.setTempoCurve(tempoCurve);
+    if (mapChanged) metronome.setTempoCurve(tempoCurve);
     for (auto& [clipId, track] : tracks)
-        if (track->followBpm > 0.0 && track->offsetSource != nullptr)
-            track->offsetSource->setTempoFollow(tempoCurve, track->followBpm, track->sampleRate);
-    return true;
+        if (track->followBpm > 0.0 && track->offsetSource != nullptr) publishClipFollow(clipId);
+    return mapChanged;
+}
+
+void AudioEngine::publishClipFollow(const juce::String& clipId)
+{
+    const auto it = tracks.find(clipId);
+    if (it == tracks.end() || it->second->offsetSource == nullptr) return;
+    auto& track = *it->second;
+    const TempoCurve* curve = tempoCurve != nullptr ? tempoCurve : (track.sourceCurve != nullptr ? flatCurve : nullptr);
+    track.offsetSource->setTempoFollow(track.followBpm > 0.0 ? curve : nullptr, track.followBpm, track.sampleRate,
+                                       track.sourceCurve);
 }
 
 bool AudioEngine::setClipTempoFollow(const juce::String& clipId, double sourceBpm)
@@ -573,7 +607,36 @@ bool AudioEngine::setClipTempoFollow(const juce::String& clipId, double sourceBp
     const double bpm = sourceBpm > 0.0 ? sourceBpm : 0.0;
     if (bpm == track.followBpm) return true;
     track.followBpm = bpm;
-    track.offsetSource->setTempoFollow(bpm > 0.0 ? tempoCurve : nullptr, bpm, track.sampleRate);
+    publishClipFollow(clipId);
+    return true;
+}
+
+bool AudioEngine::setClipSourceTempo(const juce::String& clipId, const std::vector<TempoPoint>& points, double sourceBpm)
+{
+    const auto it = tracks.find(clipId);
+    if (it == tracks.end() || it->second->offsetSource == nullptr) return false;
+    auto& track = *it->second;
+    if (points.empty())
+    {
+        if (track.sourceCurve == nullptr) return true;
+        track.sourceCurve = nullptr;
+    }
+    else
+    {
+        // Called after every command (syncTempoMap): an unchanged curve stays as it is, so
+        // nothing is reseeked or reallocated.
+        auto next = std::make_unique<TempoCurve>(points, sourceBpm);
+        if (track.sourceCurve != nullptr && track.sourceCurve->baseBpm() == next->baseBpm()
+            && track.sourceCurve->points().size() == next->points().size()
+            && std::equal(next->points().begin(), next->points().end(), track.sourceCurve->points().begin(),
+                          [](const TempoPoint& a, const TempoPoint& b) { return a.timeMs == b.timeMs && a.bpm == b.bpm; }))
+            return true;
+        // Kept alive with every other published curve: the audio thread may still hold the last.
+        tempoCurves.push_back(std::move(next));
+        track.sourceCurve = tempoCurves.back().get();
+    }
+    publishClipFollow(clipId);
+    scheduleTrackPrefetchAfterEdit(track);
     return true;
 }
 

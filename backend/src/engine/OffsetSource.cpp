@@ -292,7 +292,8 @@ void OffsetSource::applyClipGain(juce::AudioBuffer<float>& buffer,
         : 0;
     const double sr = cachedSampleRate.load(std::memory_order_relaxed);
     const bool haveEnv = env != nullptr && !env->isEmpty() && sr > 0.0;
-    if (!haveEnv && !haveFade && defaultFadeSamples <= 0) return;
+    const float user = userGain.load(std::memory_order_relaxed);
+    if (!haveEnv && !haveFade && defaultFadeSamples <= 0 && user == 1.0F) return;
 
     const double msPerSample = sr > 0.0 ? 1000.0 / sr : 0.0;
     const int numCh = buffer.getNumChannels();
@@ -301,7 +302,7 @@ void OffsetSource::applyClipGain(juce::AudioBuffer<float>& buffer,
     for (int i = 0; i < count; ++i)
     {
         const juce::int64 timelineSample = audibleStart + i;
-        float gain = 1.0F;
+        float gain = user;
         if (haveEnv)
         {
             const double ms = static_cast<double>(timelineSample - clipStart) * msPerSample;

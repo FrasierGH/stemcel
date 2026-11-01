@@ -89,6 +89,7 @@ struct OfflineClip
     std::unique_ptr<juce::AudioFormatReaderSource> readerSource;
     std::unique_ptr<WarpProcessor> warp;
     std::shared_ptr<const TempoCurve> tempoCurve; // outlives offsetSource, which points into it
+    std::shared_ptr<const TempoCurve> sourceCurve;
     std::unique_ptr<OffsetSource> offsetSource;
     std::unique_ptr<EnvelopeSnapshot> envelopeSnapshot;
     std::unique_ptr<EdgeFadeSnapshot> edgeFadeSnapshot;

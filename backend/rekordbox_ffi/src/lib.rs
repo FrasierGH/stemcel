@@ -29,7 +29,10 @@ enum Source {
     /// fixture), loaded into rbxport's index.
     Desktop { index: Library, location: LibraryLocation },
     /// One of the two libraries on a USB or SD export, which rekordbox edits separately.
-    Device { root: PathBuf, format: Format, library: device_library::Library },
+    /// `read_root` is where its database is read from: the drive itself, or, when the drive
+    /// holds exports in both `PIONEER` and `.PIONEER`, a folder linking to the newer one
+    /// (`device_view`). Track paths always resolve on the drive (`root`).
+    Device { root: PathBuf, format: Format, library: device_library::Library, read_root: PathBuf },
 }
 
 fn format_name(format: Format) -> &'static str {
@@ -143,9 +146,12 @@ pub unsafe extern "C" fn rbx_open_device(
     let root = opt_str(root).map(PathBuf::from);
     let format = opt_str(format).and_then(parse_format);
     let result = catch_unwind(AssertUnwindSafe(|| match (root, format) {
-        (Some(root), Some(format)) => device_library::read(&root, format)
-            .map(|library| RbxLibrary { source: Source::Device { root, format, library } })
-            .map_err(|e| e.to_string()),
+        (Some(root), Some(format)) => {
+            let read_root = device_view(&root).unwrap_or_else(|| root.clone());
+            device_library::read(&read_root, format)
+                .map(|library| RbxLibrary { source: Source::Device { root, format, library, read_root } })
+                .map_err(|e| e.to_string())
+        }
         _ => Err("bad arguments".to_owned()),
     }));
     let message = match result {
@@ -230,7 +236,7 @@ fn track_json(lib: &Library, row: usize) -> Value {
 fn snapshot(library: &RbxLibrary) -> Value {
     match &library.source {
         Source::Desktop { index, location } => desktop_snapshot(index, location),
-        Source::Device { root, format, library } => device_snapshot(root, *format, library),
+        Source::Device { root, format, library, .. } => device_snapshot(root, *format, library),
     }
 }
 
@@ -253,7 +259,12 @@ fn desktop_snapshot(lib: &Library, location: &LibraryLocation) -> Value {
         } else {
             "playlist"
         };
-        let track_ids: Vec<Value> = playlists.members[i]
+        // An intelligent playlist has no members of its own: its rule says which tracks it holds.
+        let rows: Vec<u32> = match playlists.smart_rule(i) {
+            Some(rule) => rule.evaluate(lib).into_iter().map(|row| row as u32).collect(),
+            None => playlists.members[i].iter().map(|&row| row as u32).collect(),
+        };
+        let track_ids: Vec<Value> = rows
             .iter()
             .filter_map(|&row| lib.ids.get(row as usize))
             .map(|id| Value::String(id.to_string()))
@@ -306,8 +317,90 @@ fn device_track_json(root: &Path, t: &device_library::Track) -> Value {
 
 /// The device's database file, for the app to show and to back up beside.
 fn device_database(root: &Path, format: Format) -> PathBuf {
+    if let Some(chosen) = newer_export_dir(root) {
+        return chosen.join("rekordbox").join(format.file_name());
+    }
     let export_root = rbl_export::export_root_name(root).unwrap_or("PIONEER");
     root.join(export_root).join("rekordbox").join(format.file_name())
+}
+
+/// When modified, the newest of a folder's export databases (`export.pdb`, `exportLibrary.db`).
+fn export_time(dir: &Path) -> Option<std::time::SystemTime> {
+    ["export.pdb", "exportLibrary.db"]
+        .iter()
+        .filter_map(|f| std::fs::metadata(dir.join("rekordbox").join(f)).and_then(|m| m.modified()).ok())
+        .max()
+}
+
+/// A drive with exports in both `PIONEER` and `.PIONEER` (one written on a Mac, one on
+/// Windows, say): the folder whose export is newer. None when only one holds an export.
+fn newer_export_dir(root: &Path) -> Option<PathBuf> {
+    let standard = root.join("PIONEER");
+    let hidden = root.join(".PIONEER");
+    match (export_time(&standard), export_time(&hidden)) {
+        (Some(a), Some(b)) => Some(if b > a { hidden } else { standard }),
+        _ => None,
+    }
+}
+
+/// For a drive with exports in both `PIONEER` and `.PIONEER`, a folder in which `PIONEER`
+/// links to the newer of them, so rbxport (which refuses the pair) reads that one. None for
+/// a drive with one export, read where it is.
+fn device_view(root: &Path) -> Option<PathBuf> {
+    let chosen = newer_export_dir(root)?;
+    let key: String = root.to_string_lossy().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+    let view = std::env::temp_dir().join("stemcel-rekordbox-view").join(key);
+    let link = view.join("PIONEER");
+    // A link left from before is replaced: it may point at the other folder.
+    let _ = std::fs::remove_dir(&link);
+    let _ = std::fs::remove_file(&link);
+    std::fs::create_dir_all(&view).ok()?;
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&chosen, &link).ok()?;
+    #[cfg(windows)]
+    {
+        // A junction needs no special rights, as a directory symlink would.
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&chosen)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .ok()?;
+        if !status.success() {
+            return None;
+        }
+    }
+    Some(view)
+}
+
+/// What a drive holds for rekordbox, for the log: each export folder's databases and dates,
+/// and a desktop library.
+fn drive_contents(root: &Path) -> String {
+    let stamp = |p: &Path| {
+        std::fs::metadata(p)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| format!("{} ({}s)", p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(), d.as_secs()))
+    };
+    let mut parts = Vec::new();
+    for folder in ["PIONEER", ".PIONEER"] {
+        let dir = root.join(folder);
+        let files: Vec<String> = ["rekordbox/export.pdb", "rekordbox/exportLibrary.db", "Master/master.db"]
+            .iter()
+            .filter_map(|f| stamp(&dir.join(f)))
+            .collect();
+        if !files.is_empty() {
+            parts.push(format!("{folder}: {}", files.join(", ")));
+        }
+    }
+    if parts.is_empty() {
+        "nothing for rekordbox".to_owned()
+    } else {
+        parts.join("; ")
+    }
 }
 
 fn device_snapshot(root: &Path, format: Format, lib: &device_library::Library) -> Value {
@@ -353,15 +446,22 @@ pub unsafe extern "C" fn rbx_track_json(library: *const RbxLibrary, track_id: *c
     };
     guarded(|| match &library.source {
         Source::Desktop { index, location } => track_detail(index, &location.share_root, id).to_string(),
-        Source::Device { root, library, .. } => device_track_detail(root, library, id).to_string(),
+        Source::Device { root, library, read_root, .. } => device_track_detail(root, read_root, library, id).to_string(),
     })
 }
 
 /// A device track's grid and phrases from its analysis files, and its cues from the
 /// extended cue lists there (a stick's databases keep no cue rows of their own).
-fn device_track_detail(root: &Path, lib: &device_library::Library, id: u64) -> Value {
+fn device_track_detail(drive: &Path, read_root: &Path, lib: &device_library::Library, id: u64) -> Value {
     let Some(track) = u32::try_from(id).ok().and_then(|id| lib.track(id)) else {
         return json!({ "ok": false, "error": "no such track" });
+    };
+    // Analysis files sit in the export folder: through the link to the chosen one when the
+    // drive holds both, else on the drive.
+    let root = if drive != read_root && track.analysis_path.trim_start_matches(['/', '\\']).starts_with("PIONEER") {
+        read_root
+    } else {
+        drive
     };
     let mut detail = analysis(root, &track.analysis_path);
     let mut cues = Vec::new();
@@ -707,24 +807,43 @@ pub extern "C" fn rbx_devices_json() -> *mut c_char {
 }
 
 fn devices() -> Value {
+    // Each drive's newest export, to set an older desktop library on the same drive aside.
+    let mut exported: Vec<(PathBuf, std::time::SystemTime)> = Vec::new();
     let devices: Vec<Value> = rbl_devices::list()
         .into_iter()
         .filter_map(|d| {
-            let formats: Vec<&str> = device_library::formats(&d.mount_point).into_iter().map(format_name).collect();
+            let read_root = device_view(&d.mount_point).unwrap_or_else(|| d.mount_point.clone());
+            let formats: Vec<&str> = device_library::formats(&read_root).into_iter().map(format_name).collect();
+            if !formats.is_empty() {
+                let newest = newer_export_dir(&d.mount_point)
+                    .and_then(|dir| export_time(&dir))
+                    .or_else(|| export_time(&rbl_export::export_root(&d.mount_point)));
+                if let Some(t) = newest {
+                    exported.push((d.mount_point.clone(), t));
+                }
+            }
             (!formats.is_empty()).then(|| {
                 json!({
                     "name": d.name,
                     "root": d.mount_point.to_string_lossy(),
                     "removable": d.removable,
                     "formats": formats,
+                    "contents": drive_contents(&d.mount_point),
                 })
             })
         })
         .collect();
     let installed = rbl_db::detect().ok().map(|location| location.master_db);
+    let master_time = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
     let drives: Vec<Value> = rbl_devices::libraries::discover()
         .into_iter()
         .filter(|l| installed.as_ref() != Some(&l.master_db))
+        // A desktop library left on a drive whose export is newer: the export is the one in use.
+        .filter(|l| {
+            !exported.iter().any(|(root, t)| {
+                same_volume(root, &l.volume) && master_time(&l.master_db).map_or(true, |m| m < *t)
+            })
+        })
         .map(|l| {
             json!({
                 "name": l.name,
@@ -755,7 +874,18 @@ pub unsafe extern "C" fn rbx_write_refusal_json(library: *const RbxLibrary) -> *
     })
 }
 
+/// Whether two paths name the same mounted volume (a drive letter's case aside).
+fn same_volume(a: &Path, b: &Path) -> bool {
+    let norm = |p: &Path| p.to_string_lossy().trim_end_matches(['/', '\\']).to_lowercase();
+    norm(a) == norm(b)
+}
+
 fn write_refusal(library: &RbxLibrary) -> Option<&'static str> {
+    if let Source::Device { root, read_root, .. } = &library.source {
+        if root != read_root {
+            return Some("This drive holds rekordbox exports in both PIONEER and .PIONEER; Stemcel reads the newer one but won't write to either until one is removed.");
+        }
+    }
     match &library.source {
         Source::Desktop { location, .. } if location.is_real_install && rbl_db::is_rekordbox_running() => {
             Some("rekordbox is running. Quit rekordbox and its agent (rekordboxAgent, in the system tray or menu bar), then try again.")

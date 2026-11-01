@@ -235,9 +235,15 @@ void TimelineActions::replayClipProperties(const ClipModel& source, const juce::
                          {"pendingAutoWarp", source.pendingAutoWarp ? juce::var(true) : juce::var()}}));
     }
     if (source.reversed) engine.send("CLIP_SET_REVERSED", obj({{"clipId", newClipId}, {"reversed", true}}));
+    if (std::abs(source.gainDb) > 1.0e-6) engine.send("CLIP_SET_GAIN", obj({{"clipId", newClipId}, {"gainDb", source.gainDb}}));
     if (std::abs(source.beatOffsetMs) > 0.0)
         engine.send("CLIP_SET_BEAT_OFFSET", obj({{"clipId", newClipId}, {"beatOffsetMs", source.beatOffsetMs}}));
     if (includeLock && source.locked) engine.send("CLIP_SET_LOCKED", obj({{"clipId", newClipId}, {"locked", true}}));
+}
+
+void TimelineActions::setClipGain(const juce::String& clipId, double gainDb)
+{
+    engine.send("CLIP_SET_GAIN", obj({{"clipId", clipId}, {"gainDb", juce::jlimit(-24.0, 12.0, gainDb)}}));
 }
 
 juce::String TimelineActions::splitClipAt(const juce::String& clipId, double atMs)
@@ -434,18 +440,16 @@ void TimelineActions::trimClip(const juce::String& clipId, double newStartMs, do
 
     // Source window bounds: [inMs, inMs + durationMs) maps to [offsetMs, endMs) - along the
     // tempo map for a clip that follows it, where the ratio changes along the way.
-    const auto curve = model().tempoCurve();
-    const bool follows = clip->tempoFollowBpm > 0.0 && !model().tempoMap.empty();
-    const double sourceStart = follows ? clip->inMs + curve.sourceMsBetween(clip->offsetMs, newStartMs, clip->tempoFollowBpm)
-                                       : clip->inMs + (newStartMs - clip->offsetMs) * ratio;
-    const double sourceLength = follows ? curve.sourceMsBetween(newStartMs, newEndMs, clip->tempoFollowBpm)
+    const bool follows = model().clipFollows(*clip);
+    const double sourceStart = follows ? model().followSourceMs(*clip, newStartMs) : clip->inMs + (newStartMs - clip->offsetMs) * ratio;
+    const double sourceLength = follows ? model().followSourceMs(*clip, newEndMs) - model().followSourceMs(*clip, newStartMs)
                                         : (newEndMs - newStartMs) * ratio;
     const auto* item = model().findLibraryItem(clip->libraryItemId);
     const double sourceTotal = item != nullptr && item->durationMs > 0.0 ? item->durationMs : 1.0e12;
     const double clampedStart = juce::jlimit(0.0, sourceTotal, sourceStart);
     const double clampedLength = juce::jmin(sourceLength - (clampedStart - sourceStart), sourceTotal - clampedStart);
     if (clampedLength < 1.0) return;
-    const double timelineStart = follows ? curve.timelineAfterSource(clip->offsetMs, clampedStart - clip->inMs, clip->tempoFollowBpm)
+    const double timelineStart = follows ? model().followTimelineMs(*clip, clampedStart - clip->inMs)
                                          : clip->offsetMs + (clampedStart - clip->inMs) / ratio;
     engine.send("CLIP_TRIM", obj({{"clipId", clipId},
                                   {"startMs", timelineStart},

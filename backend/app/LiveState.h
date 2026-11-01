@@ -33,7 +33,9 @@ class TimelineViewState final : public juce::ChangeBroadcaster
 {
   public:
     static constexpr double kDefaultPxPerSecond = 100.0;
-    static constexpr double kMinPxPerSecond = 10.0;
+    // The absolute floor; the timeline's own floor (TimelineView::minPxPerSecond) follows
+    // how long the project is, so the whole of it always fits with room to spare.
+    static constexpr double kMinPxPerSecond = 0.02;
     static constexpr double kMaxPxPerSecond = 800.0;
     static constexpr int kRulerHeight = 28;
     static constexpr int kTempoLaneHeight = 56;
@@ -48,6 +50,9 @@ class TimelineViewState final : public juce::ChangeBroadcaster
     juce::String selectedTrackId;
     std::set<juce::String> selectedClipIds;
     bool followPlayback = true;
+    // Set when the user scrolls away while following: the view stays where they put it until
+    // the playhead comes back into it, play starts again, or Follow is toggled.
+    bool followSuspended = false;
     // The clip whose volume envelope is being edited (clip menu > Edit Volume Envelope):
     // clicks on it add and drag envelope points instead of selecting / moving it.
     juce::String envelopeClipId;

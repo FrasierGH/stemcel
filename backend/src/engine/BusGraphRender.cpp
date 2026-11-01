@@ -330,7 +330,6 @@ void BusGraph::applyTrackAutomation(TrackRuntime& rt, const TrackAutomationSnaps
     if (snap->hasParam(AutomationParam::toneBass)) rt.chain.setBassTarget(sample(AutomationParam::toneBass), discontinuity);
     if (snap->hasParam(AutomationParam::toneMid)) rt.chain.setMidTarget(sample(AutomationParam::toneMid), discontinuity);
     if (snap->hasParam(AutomationParam::toneTreble)) rt.chain.setTrebleTarget(sample(AutomationParam::toneTreble), discontinuity);
-    if (snap->hasParam(AutomationParam::leveler)) rt.chain.setLeveler(sample(AutomationParam::leveler), discontinuity);
     if (snap->hasParam(AutomationParam::punch)) rt.chain.setPunchTarget(sample(AutomationParam::punch), discontinuity);
     if (snap->hasParam(AutomationParam::saturationDrive)) rt.chain.setSaturationDriveTarget(sample(AutomationParam::saturationDrive), discontinuity);
     if (snap->hasParam(AutomationParam::saturationMix)) rt.chain.setSaturationMixTarget(sample(AutomationParam::saturationMix), discontinuity);
@@ -393,6 +392,8 @@ void BusGraph::applyMasterAutomation(const TrackAutomationSnapshot* snap, juce::
     if (snap->hasParam(AutomationParam::delayTone)) sharedFx.setEchoToneTarget(sample(AutomationParam::delayTone));
     if (masterGlue != nullptr && snap->hasParam(AutomationParam::glue))
         masterGlue->setParams(sample(AutomationParam::glue), /*snap*/ false);
+    if (masterGlue != nullptr && snap->hasParam(AutomationParam::glueMakeup))
+        masterGlue->setMakeupDb(sample(AutomationParam::glueMakeup), /*snap*/ false);
     if (!snap->plugins.empty()) applyPluginAutomation(*snap, masterInserts.load(std::memory_order_acquire), ms);
 }
 

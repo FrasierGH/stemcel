@@ -101,6 +101,35 @@ void handleClipRemove(const juce::var& payload, stemcel::AudioEngine& engine,
     bridge.broadcast("CLIP_REMOVED", juce::var(p));
 }
 
+void handleClipSetGain(const juce::var& payload, stemcel::AudioEngine& engine, stemcel::ProjectState& projectState,
+                       stemcel::BridgeServer& bridge)
+{
+    const juce::String clipId = tryGetRequiredString(payload, "clipId").value_or(juce::String{});
+    const auto gainDb = tryGetNumber(payload, "gainDb");
+    if (clipId.isEmpty() || !gainDb.has_value()) return;
+    if (!projectState.setClipGainDb(clipId, *gainDb)) return;
+    const double stored = projectState.getClipGainDb(clipId);
+    engine.setClipUserGain(clipId, stored);
+    broadcastApplied(bridge, "CLIP_GAIN_APPLIED", {{"clipId", clipId}, {"gainDb", stored}});
+}
+
+void handleClipSetSourceTempo(const juce::var& payload, stemcel::AudioEngine& engine, stemcel::ProjectState& projectState,
+                              stemcel::BridgeServer& bridge)
+{
+    const juce::String clipId = tryGetRequiredString(payload, "clipId").value_or(juce::String{});
+    if (clipId.isEmpty()) return;
+    std::vector<stemcel::TempoPoint> points;
+    if (const auto* list = payload.getProperty("points", {}).getArray())
+    {
+        points.reserve(static_cast<size_t>(list->size()));
+        for (const auto& p : *list)
+            points.push_back({static_cast<double>(p.getProperty("sourceMs", 0.0)), static_cast<double>(p.getProperty("bpm", 0.0))});
+    }
+    if (!projectState.setClipSourceTempo(clipId, points)) return;
+    // The engine picks it up with every other follower once the command settles (syncTempoMap).
+    broadcastApplied(bridge, "CLIP_SOURCE_TEMPO_APPLIED", {{"clipId", clipId}, {"points", static_cast<int>(points.size())}});
+}
+
 void handleClipSetEnvelope(const juce::var& payload, stemcel::AudioEngine& engine,
                            stemcel::ProjectState& projectState,
                            stemcel::BridgeServer& bridge)

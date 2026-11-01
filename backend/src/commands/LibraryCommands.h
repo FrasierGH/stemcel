@@ -29,6 +29,8 @@ void handleLibraryItemSetAudioType(const juce::var& payload, ProjectState& proje
 void handleLibraryItemSetCoverHidden(const juce::var& payload, ProjectState& projectState);
 // {itemId, sections: [{startSec, endSec, label, kind, ...}]}; an empty list clears them.
 void handleLibraryItemSetSections(const juce::var& payload, ProjectState& projectState);
+// The BPM variability check's result (derived, as sections are: not undoable).
+void handleLibraryItemSetTempoDrift(const juce::var& payload, ProjectState& projectState);
 void handleLibraryItemSetCoverOverride(const juce::var& payload, ProjectState& projectState);
 void handleLibraryItemSetManualTempo(const juce::var& payload, AudioEngine& engine,
                                      ProjectState& projectState, BridgeServer& bridge);

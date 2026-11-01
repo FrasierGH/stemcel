@@ -131,6 +131,7 @@ TransportBar::TransportBar(ProjectMirror& projectMirror, TimelineViewState& view
     followButton.onClick = [this]
     {
         view.followPlayback = followButton.getToggleState();
+        view.followSuspended = false;
         prefs.set("ui", "followPlayback", view.followPlayback);
         prefs.save();
     };
@@ -146,7 +147,7 @@ TransportBar::TransportBar(ProjectMirror& projectMirror, TimelineViewState& view
     for (auto* b : {&zoomIn, &zoomOut, &zoomFit}) addAndMakeVisible(b);
 
     // The timeline zoom, on a log scale from the whole project to the closest view.
-    zoomSlider.setRange(std::log(TimelineViewState::kMinPxPerSecond), std::log(TimelineViewState::kMaxPxPerSecond), 0.001);
+    zoomSlider.setRange(std::log(1.25), std::log(TimelineViewState::kMaxPxPerSecond), 0.001);
     zoomSlider.setTooltip("Timeline zoom");
     zoomSlider.onValueChange = [this]
     {
@@ -243,7 +244,22 @@ void TransportBar::timerCallback()
     skipForward.setTooltip(view.skipToMarkers ? "Skip to next marker" : "Skip to end");
     playButton.setButtonText(live.playing ? "Pause" : "Play");
     playButton.setColour(juce::TextButton::buttonColourId, live.playing ? colours::sky600 : colours::zinc800);
+    if (timeline != nullptr && !zoomSlider.isMouseButtonDown())
+    {
+        // From the furthest the project allows out to the closest view.
+        const double low = std::log(timeline->minPxPerSecond());
+        if (std::abs(zoomSlider.getMinimum() - low) > 1.0e-3)
+            zoomSlider.setRange(low, std::log(TimelineViewState::kMaxPxPerSecond), 0.001);
+    }
     if (!zoomSlider.isMouseButtonDown()) zoomSlider.setValue(std::log(view.pxPerSecond), juce::dontSendNotification);
+    // Follow paused by a scroll away from the playhead: the button says so.
+    const bool paused = view.followPlayback && view.followSuspended;
+    if (followButton.getButtonText() != (paused ? "Follow ||" : "Follow"))
+    {
+        followButton.setButtonText(paused ? "Follow ||" : "Follow");
+        followButton.setTooltip(paused ? "Follow paused while you look elsewhere; it picks up when the playhead comes back into view"
+                                       : "Scroll to follow the playhead");
+    }
     // Peak hold: the highest peak stays for 1.5 s, then falls to the live level.
     const auto now = juce::Time::getMillisecondCounter();
     auto hold = [now](float peak, float& held, juce::uint32& at)

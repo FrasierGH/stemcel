@@ -49,6 +49,8 @@ class TimelineActions
     void renameClip(const juce::String& clipId, const juce::String& name);
     void setClipReversed(const juce::String& clipId, bool reversed);
     void setClipEnvelope(const juce::String& clipId, const std::vector<EnvelopePoint>& points);
+    // The clip's own gain, -24..+12 dB.
+    void setClipGain(const juce::String& clipId, double gainDb);
     void setClipBrake(const juce::String& clipId, bool on);
     void setClipBackspin(const juce::String& clipId, bool on);
     // Saves the clip's window as a library clip and binds the clip to it; returns its id.

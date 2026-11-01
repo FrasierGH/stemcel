@@ -11,7 +11,7 @@ endif()
 set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS version for the backend")
 
 project(StemcelBackend
-    VERSION 0.1.0
+    VERSION 0.2.0
     DESCRIPTION "Stemcel headless audio backend"
     LANGUAGES C CXX)
 
@@ -452,6 +452,7 @@ add_library(stemcel_backend_core STATIC
     src/dsp/BpmDetector.cpp
     src/dsp/BpmAnalysisHelpers.cpp
     src/dsp/BpmAudioLoader.cpp
+    src/dsp/TempoDrift.cpp
     src/dsp/MiniBpmEstimator.cpp
     src/dsp/PercussiveEmphasis.cpp
     src/dsp/LoudnessAnalyzer.cpp
@@ -783,6 +784,8 @@ if(STEMCEL_BUILD_NATIVE_APP)
         app/SectionAnalysis.cpp
         app/SectionAnalyser.cpp
         app/Tracklist.cpp
+        app/TempoReport.cpp
+        app/KeyWheel.cpp
         app/RekordboxBrowser.cpp
         app/EngineClient.cpp
         app/ExportDialog.cpp

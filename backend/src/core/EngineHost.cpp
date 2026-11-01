@@ -69,6 +69,7 @@ void EngineHost::startEngine()
     audioEngine.initialiseGraph();
     audioEngine.setSafetyLimiterEnabled(projectState.getSafetyLimiterEnabled(), /*snap*/ true);
     audioEngine.setProjectMixGlue(projectState.getProjectMixGlueAmount(), /*snap*/ true);
+    audioEngine.setProjectMixGlueMakeup(projectState.getProjectMixGlueMakeupDb(), /*snap*/ true);
 
     // Enable keep-awake BEFORE the device opens so the keep-alive dither + wake burst run from
     // the first audio block and rouse a cold sleep-prone DAC at stream start.

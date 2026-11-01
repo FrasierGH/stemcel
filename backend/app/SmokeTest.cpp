@@ -25,7 +25,10 @@
 #include "SectionAnalysis.h"
 #include "FxPanels.h"
 #include "PluginCatalogue.h"
+#include "ResizeBar.h"
 #include "TrackAutomationSnapshot.h"
+#include "KeyWheel.h"
+#include "TempoReport.h"
 #include "Tracklist.h"
 #include "WaveformStore.h"
 #include "Workspace.h"
@@ -133,6 +136,41 @@ bool writeArrangement(const juce::File& file, float level = 1.0f)
         const auto f = static_cast<float>(juce::jlimit(-1.0, 1.0, v)) * level;
         buffer.setSample(0, i, f);
         buffer.setSample(1, i, f);
+    }
+    return writer->writeFromAudioSampleBuffer(buffer, 0, samples);
+}
+
+// 40 bars of clicks: 4 steady at 120 BPM, then rising evenly to 132 (a drifting recording).
+// `beatsSec` gets each click's time.
+bool writeDriftingClicks(const juce::File& file, std::vector<double>& beatsSec)
+{
+    file.deleteFile();
+    std::unique_ptr<juce::OutputStream> stream = std::make_unique<juce::FileOutputStream>(file);
+    const auto options = juce::AudioFormatWriterOptions{}.withSampleRate(kSampleRate).withNumChannels(2).withBitsPerSample(16);
+    std::unique_ptr<juce::AudioFormatWriter> writer(juce::WavAudioFormat().createWriterFor(stream, options));
+    if (writer == nullptr) return false;
+    beatsSec.clear();
+    double t = 0.25;
+    constexpr int total = 40 * 4;
+    for (int k = 0; k < total; ++k)
+    {
+        beatsSec.push_back(t);
+        t += 60.0 / (k < 16 ? 120.0 : 120.0 + 12.0 * (k - 16) / static_cast<double>(total - 16));
+    }
+    const int samples = static_cast<int>((t + 0.5) * kSampleRate);
+    juce::AudioBuffer<float> buffer(2, samples);
+    buffer.clear();
+    juce::Random noise(11);
+    for (const double b : beatsSec)
+    {
+        const int start = static_cast<int>(b * kSampleRate);
+        for (int i = 0; i < 1500 && start + i < samples; ++i)
+        {
+            const auto v = static_cast<float>(std::exp(-i / 250.0) * (noise.nextFloat() * 2.0 - 1.0) * 0.8
+                                              + 0.6 * std::exp(-i / 400.0) * std::sin(juce::MathConstants<double>::twoPi * 60.0 * i / kSampleRate));
+            buffer.setSample(0, start + i, v);
+            buffer.setSample(1, start + i, v);
+        }
     }
     return writer->writeFromAudioSampleBuffer(buffer, 0, samples);
 }
@@ -2284,6 +2322,79 @@ void SmokeTest::addTempoJourney()
                          return true;
                      }});
     steps.back().poll = true;
+    // A transition follows its clips and takes a new window: shortening the outgoing clip pulls
+    // the window's end (which sat on the clip's end) in with it, then the start dragged a bar
+    // later is written there.
+    steps.push_back({"transition follows and drags",
+                     [this]
+                     {
+                         mirror.refreshNow();
+                         txStage = 0;
+                         const auto* record = mix::recordFor(model(), nearOutClipId, nearInClipId);
+                         const auto* out = model().findClip(nearOutClipId);
+                         if (record == nullptr || out == nullptr) return;
+                         const double barMs = 240000.0 / model().bpm;
+                         txOldStart = out->offsetMs;
+                         txOldEnd = out->endMs();
+                         txExpectEnd = txOldEnd - 2.0 * barMs;
+                         actions.trimClip(nearOutClipId, out->offsetMs, txExpectEnd);
+                         mirror.refreshNow();
+                         juce::StringArray removed;
+                         mix::retimeAfterClipEdit(engine, actions, model(), nearOutClipId, txOldStart, txOldEnd, removed);
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         mirror.refreshNow();
+                         const auto* record = mix::recordFor(model(), nearOutClipId, nearInClipId);
+                         if (record == nullptr) return false;
+                         const double start = record->getProperty("startMs", 0.0), end = record->getProperty("endMs", 0.0);
+                         const double barMs = 240000.0 / model().bpm;
+                         auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
+                         auto* workspace = window != nullptr ? findDescendant<Workspace>(window) : nullptr;
+                         auto* timeline = window != nullptr ? findDescendant<TimelineView>(window) : nullptr;
+                         if (workspace == nullptr || timeline == nullptr) return false;
+                         if (txStage == 0)
+                         {
+                             if (std::abs(end - txExpectEnd) > 1.0) return false;
+                             txFollowLine = "end followed the clip to " + juce::String(end, 0) + " ms";
+                             // On screen, so its label can be dragged.
+                             workspace->projectMirror().refreshNow();
+                             if (const auto* out = model().findClip(nearOutClipId)) timeline->revealRange(start, end, out->trackId);
+                             txStartedAt = juce::Time::getMillisecondCounter();
+                             txStage = 1;
+                             return false;
+                         }
+                         if (txStage == 1)
+                         {
+                             if (juce::Time::getMillisecondCounter() - txStartedAt < 300) return false;
+                             // Its start edge on the outgoing clip's row (on the incoming row that edge is the
+                             // clip's own, for trimming), dragged right by a bar's width: the window starts a bar later.
+                             const auto area = timeline->transitionArea(record->getProperty("id", {}).toString(), true);
+                             if (!area) return false;
+                             const auto label = std::optional<juce::Point<float>>(juce::Point<float>{area->getX() + 1.0f, area->getCentreY()});
+                             const auto& view = workspace->viewState();
+                             const auto dx = static_cast<float>(barMs / 1000.0 * view.pxPerSecond);
+                             const auto now = juce::Time::getCurrentTime();
+                             auto event = [&](juce::Point<float> at, bool dragged)
+                             {
+                                 return juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(), at,
+                                                         juce::ModifierKeys(juce::ModifierKeys::leftButtonModifier), 1.0f, 0.0f, 0.0f, 0.0f,
+                                                         0.0f, timeline, timeline, now, *label, now, 1, dragged);
+                             };
+                             const juce::Point<float> to{label->x + dx, label->y};
+                             txExpectStart = start + barMs;
+                             timeline->mouseDown(event(*label, false));
+                             timeline->mouseDrag(event(to, true));
+                             timeline->mouseUp(event(to, true));
+                             txStage = 2;
+                             return false;
+                         }
+                         if (std::abs(start - txExpectStart) > 1.0) return false;
+                         report.add("transition " + txFollowLine + "; its start edge dragged a bar later to " + juce::String(start, 0) + " ms");
+                         return true;
+                     }});
+    steps.back().poll = true;
     // Every parameter there is to tweak can be automated: each knob of Track FX and Project FX
     // has a lane, every track and master lane is stored and understood by the audio engine, and
     // every parameter a transition writes is one of them.
@@ -2375,6 +2486,152 @@ void SmokeTest::addTempoJourney()
                          report.add(everyParamLine);
                          return everyParamOk;
                      }});
+    // Glue's makeup and a clip's own gain reach the project, and a duplicate keeps the gain.
+    steps.push_back({"glue makeup and clip gain",
+                     [this]
+                     {
+                         mirror.refreshNow();
+                         gainClipId.clear();
+                         for (const auto& t : model().tracks)
+                             if (!t.clips.empty() && gainClipId.isEmpty()) gainClipId = t.clips.front().id;
+                         engine.send("PROJECT_SET_MIX_GLUE", object({{"makeupDb", 4.5}}));
+                         actions.setClipGain(gainClipId, -6.0);
+                         mirror.refreshNow();
+                         gainCopyId = actions.duplicateClip(gainClipId);
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         mirror.refreshNow();
+                         const auto* clip = model().findClip(gainClipId);
+                         const auto* copy = model().findClip(gainCopyId);
+                         const double makeup = static_cast<double>(model().raw.getProperty("mixGlueMakeupDb", 0.0));
+                         const bool ok = clip != nullptr && copy != nullptr && std::abs(clip->gainDb + 6.0) < 0.01
+                                         && std::abs(copy->gainDb + 6.0) < 0.01 && std::abs(makeup - 4.5) < 0.01;
+                         if (ok)
+                         {
+                             report.add("glue makeup +4.5 dB; clip gain -6 dB, and its duplicate's too");
+                             // Back to how they were for the steps after.
+                             engine.send("PROJECT_SET_MIX_GLUE", object({{"makeupDb", 0.0}}));
+                             actions.setClipGain(gainClipId, 0.0);
+                             actions.removeClips({gainCopyId});
+                         }
+                         return ok;
+                     }});
+    steps.back().poll = true;
+    // The panes resize by their drag bars: the library 60 px taller, the track headers 40 px
+    // wider, each saved, then both dragged back so the user's own sizes are left as they were.
+    steps.push_back({"resize bars",
+                     [this]
+                     {
+                         auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
+                         auto* workspace = window != nullptr ? findDescendant<Workspace>(window) : nullptr;
+                         auto* headers = window != nullptr ? findDescendant<TrackHeaders>(window) : nullptr;
+                         auto* library = window != nullptr ? findDescendant<LibraryPanel>(window) : nullptr;
+                         if (workspace == nullptr || headers == nullptr || library == nullptr) return;
+                         std::vector<ResizeBar*> bars;
+                         for (auto* child : workspace->getChildren())
+                             if (auto* bar = dynamic_cast<ResizeBar*>(child)) bars.push_back(bar);
+                         if (bars.size() != 2) return;
+                         auto drag = [](ResizeBar* bar, int dx, int dy)
+                         {
+                             const auto now = juce::Time::getCurrentTime();
+                             const juce::Point<float> from{2.0f, 2.0f}, to{2.0f + static_cast<float>(dx), 2.0f + static_cast<float>(dy)};
+                             auto event = [&](juce::Point<float> at, bool dragged)
+                             {
+                                 return juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(), at, {}, 1.0f, 0.0f, 0.0f, 0.0f,
+                                                         0.0f, bar, bar, now, from, now, 1, dragged);
+                             };
+                             bar->mouseDown(event(from, false));
+                             bar->mouseDrag(event(to, true));
+                             bar->mouseUp(event(to, true));
+                         };
+                         // bottomBar is added first, then headerBar.
+                         const int libraryBefore = library->getHeight(), headersBefore = headers->getWidth();
+                         drag(bars[0], 0, -60);
+                         drag(bars[1], 40, 0);
+                         const int libraryAfter = library->getHeight(), headersAfter = headers->getWidth();
+                         // What the app saved, read back from its preferences file.
+                         AppPreferences saved;
+                         saved.load();
+                         const int savedLibrary = static_cast<int>(saved.get("ui", "nativeLibraryHeight", 0));
+                         const int savedHeaders = static_cast<int>(saved.get("ui", "trackHeaderWidth", 0));
+                         // Back to where they were (and saved so).
+                         drag(bars[0], 0, 60);
+                         drag(bars[1], -40, 0);
+                         resizeLine = "library " + juce::String(libraryBefore) + " -> " + juce::String(libraryAfter) + " px (saved "
+                                      + juce::String(savedLibrary) + "), headers " + juce::String(headersBefore) + " -> "
+                                      + juce::String(headersAfter) + " px (saved " + juce::String(savedHeaders) + "), restored to "
+                                      + juce::String(library->getHeight()) + " / " + juce::String(headers->getWidth());
+                         resizeOk = libraryAfter == libraryBefore + 60 && headersAfter == headersBefore + 40 && savedLibrary == libraryAfter
+                                    && savedHeaders == headersAfter && library->getHeight() == libraryBefore && headers->getWidth() == headersBefore;
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         report.add(resizeLine);
+                         return resizeOk;
+                     }});
+    // Fit shows the whole project at a zoom the floor allows, and a scroll away from the
+    // playhead while following stays where it was put (follow pauses instead of snapping back).
+    steps.push_back({"fit and follow",
+                     [this]
+                     {
+                         auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
+                         auto* workspace = window != nullptr ? findDescendant<Workspace>(window) : nullptr;
+                         auto* timeline = window != nullptr ? findDescendant<TimelineView>(window) : nullptr;
+                         if (workspace == nullptr || timeline == nullptr) return;
+                         workspace->projectMirror().refreshNow();
+                         timeline->zoomToFit();
+                         auto& view = workspace->viewState();
+                         fitEndX = view.msToX(timeline->fitLengthMs());
+                         fitFloor = timeline->minPxPerSecond();
+                         fitWidth = timeline->getWidth();
+                         // Following, playing from the start; the scroll comes once it plays.
+                         view.followPlayback = true;
+                         view.pxPerSecond = 100.0;
+                         view.scrollXPx = 0.0;
+                         view.changed();
+                         followStage = 0;
+                         actions.seek(0.0);
+                         actions.play();
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
+                         auto* workspace = window != nullptr ? findDescendant<Workspace>(window) : nullptr;
+                         auto* timeline = window != nullptr ? findDescendant<TimelineView>(window) : nullptr;
+                         if (workspace == nullptr || timeline == nullptr) return false;
+                         auto& view = workspace->viewState();
+                         if (followStage == 0)
+                         {
+                             if (!workspace->liveState().playing) return false;
+                             // A wheel scroll far to the right, away from the playhead.
+                             juce::MouseWheelDetails wheel{};
+                             wheel.deltaX = -4.0f;
+                             const auto now = juce::Time::getCurrentTime();
+                             const juce::Point<float> at{200.0f, 100.0f};
+                             timeline->mouseWheelMove(juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(), at, {}, 1.0f, 0.0f,
+                                                                       0.0f, 0.0f, 0.0f, timeline, timeline, now, at, now, 1, false),
+                                                      wheel);
+                             scrolledTo = view.scrollXPx;
+                             followStartedAt = juce::Time::getMillisecondCounter();
+                             followStage = 1;
+                             return false;
+                         }
+                         if (juce::Time::getMillisecondCounter() - followStartedAt < 700) return false;
+                         const bool stayed = std::abs(view.scrollXPx - scrolledTo) < 1.0 && scrolledTo > 500.0;
+                         const bool paused = view.followSuspended;
+                         actions.pause();
+                         const bool fits = fitEndX <= fitWidth && fitEndX > fitWidth * 0.5 && fitFloor <= 1.25;
+                         report.add("fit end at " + juce::String(fitEndX, 0) + " of " + juce::String(fitWidth) + " px, floor "
+                                    + juce::String(fitFloor, 3) + " px/s; scrolled to " + juce::String(scrolledTo, 0) + " during playback and stayed "
+                                    + (stayed ? "yes" : "no") + ", follow paused " + (paused ? "yes" : "no"));
+                         return fits && stayed && paused;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 20000.0;
     // Shortcuts on the live timeline: Alt-drag copies a clip, the middle button pans, N turns
     // snapping off, and Cmd/Ctrl+J joins a clip split in two.
     steps.push_back({"shortcuts view",
@@ -2489,6 +2746,159 @@ void SmokeTest::addTempoJourney()
                          const bool ok = shortcutJoins == 1 && copy != nullptr && std::abs(copy->endMs() - shortcutJoinEndMs) < 1.0;
                          if (ok) report.add("join clips: one clip again, to " + juce::String(shortcutJoinEndMs, 0) + " ms");
                          return ok;
+                     }});
+    steps.back().poll = true;
+    // A drifting recording: the BPM variability check finds it drifting, auto-warp lands its
+    // beats on the project's grid, and following it writes it into the tempo map (then undone).
+    steps.push_back({"tempo drift",
+                     [this]
+                     {
+                         driftStage = 0;
+                         const auto file = workDir.getChildFile("Files").getChildFile("drifting.wav");
+                         if (!writeDriftingClicks(file, driftBeats)) return;
+                         ImportRequest request;
+                         request.file = file;
+                         importer.import(std::vector<ImportRequest>{request}, [this](const juce::StringArray& ids)
+                                         { driftItemId = ids[0]; });
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         mirror.refreshNow();
+                         const auto* item = model().findLibraryItem(driftItemId);
+                         if (item == nullptr) return false;
+                         if (driftStage == 0)
+                         {
+                             if (item->bpm <= 0.0) return false; // its tempo detection first
+                             driftAnalyser = std::make_unique<TempoDriftAnalyser>(engine, mirror);
+                             driftAnalyser->analyse(driftItemId);
+                             driftStage = 1;
+                             return false;
+                         }
+                         const auto drift = tempodrift::of(*item);
+                         if (driftStage == 1)
+                         {
+                             if (!drift.valid()) return false;
+                             driftLine = "drift " + juce::String(drift.driftPercent, 1) + "% around " + juce::String(drift.mainBpm, 1) + " BPM, "
+                                         + juce::String(static_cast<int>(drift.sections.size())) + " stretch(es)";
+                             if (drift.driftPercent < 6.0 || drift.sections.empty())
+                             {
+                                 lastTempoLine = "tempo drift missed: " + driftLine;
+                                 return false;
+                             }
+                             const auto track = actions.addTrack();
+                             driftClipId = actions.addClip(track, *item, model().contentEndMs() + 8000.0);
+                             mirror.refreshNow();
+                             tempodrift::autoWarp(actions, model(), driftClipId);
+                             driftStage = 2;
+                             return false;
+                         }
+                         const auto* clip = model().findClip(driftClipId);
+                         if (clip == nullptr) return false;
+                         if (driftStage == 2)
+                         {
+                             if (clip->sourceTempo.empty() || !model().clipFollows(*clip)) return false;
+                             // Every click, through the warp, a whole number of project beats after the first.
+                             const double beatMs = 60000.0 / model().bpm;
+                             const double first = model().followTimelineMs(*clip, driftBeats.front() * 1000.0 - clip->inMs);
+                             double worst = 0.0;
+                             for (size_t k = 0; k < driftBeats.size(); ++k)
+                             {
+                                 const double at = model().followTimelineMs(*clip, driftBeats[k] * 1000.0 - clip->inMs) - first;
+                                 worst = juce::jmax(worst, std::abs(at - static_cast<double>(k) * beatMs));
+                             }
+                             if (worst > 10.0)
+                             {
+                                 lastTempoLine = "tempo drift: " + driftLine + "; worst beat " + juce::String(worst, 1) + " ms off the grid";
+                                 return false;
+                             }
+                             driftLine << "; auto-warped, worst beat " << juce::String(worst, 1) << " ms off the grid";
+                             tempodrift::followInProjectTempo(actions, model(), driftClipId);
+                             driftStage = 3;
+                             return false;
+                         }
+                         if (driftStage == 3)
+                         {
+                             if (model().tempoMap.size() < 10 || clip->warpEnabled) return false;
+                             // The map over the clip says what the recording does there.
+                             const double mid = clip->offsetMs + clip->durationMs * 0.75;
+                             const double mapped = model().tempoCurve().bpmAt(mid);
+                             const double measured = TempoCurve(drift.curve, drift.mainBpm).bpmAt(clip->inMs + clip->durationMs * 0.75);
+                             driftLine << "; followed: " << juce::String(static_cast<int>(model().tempoMap.size())) << " tempo points, "
+                                       << juce::String(mapped, 1) << " BPM three quarters in (measured " << juce::String(measured, 1) << ")";
+                             report.add("tempo drift: " + driftLine);
+                             {
+                                 // The report, for eyes.
+                                 TempoReport view(mirror, actions, *driftAnalyser, driftItemId, driftClipId);
+                                 const auto image = view.createComponentSnapshot(view.getLocalBounds());
+                                 juce::FileOutputStream out(workDir.getChildFile("tempo-report.png"));
+                                 if (out.openedOk()) juce::PNGImageFormat().writeImageToStream(image, out);
+                             }
+                             engine.send("EDIT_UNDO"); // leave the tempo map as it was for the steps after
+                             driftStage = 4;
+                             return std::abs(mapped - measured) < 0.5;
+                         }
+                         return false;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 90000.0;
+    // The key wheel on two clips in different keys: it recommends one they can both reach, and
+    // a click on it shifts each into key with it (then the shifts are put back).
+    steps.push_back({"key wheel",
+                     [this]
+                     {
+                         mirror.refreshNow();
+                         wheelClips.clear();
+                         // Two clips of different sources; the second source is given A minor (the
+                         // generated test tracks all read as one key), and has its key back after.
+                         juce::StringArray items;
+                         for (const auto& t : model().tracks)
+                             for (const auto& c : t.clips)
+                                 if (const auto* item = model().findLibraryItem(c.libraryItemId);
+                                     item != nullptr && item->kind == "source" && !items.contains(item->id) && wheelClips.size() < 2)
+                                 {
+                                     items.add(item->id);
+                                     wheelClips.push_back(c.id);
+                                 }
+                         if (wheelClips.size() < 2) return;
+                         wheelItemId = items[1];
+                         wheelItemKey = model().findLibraryItem(wheelItemId)->key;
+                         engine.host().project().setLibraryItemKey(wheelItemId, "A minor");
+                         mirror.refreshNow();
+                         juce::StringArray keys;
+                         for (const auto& id : items) keys.add(automix::itemKey(model(), model().findLibraryItem(id)));
+                         if (!automix::camelot(keys[0]).valid()) return;
+                         wheelTarget = KeyWheel::recommended({keys[0], keys[1]});
+                         KeyWheel wheel(mirror, actions, wheelClips, {});
+                         wheel.setSize(560, 680);
+                         const auto image = wheel.createComponentSnapshot(wheel.getLocalBounds());
+                         juce::FileOutputStream out(workDir.getChildFile("key-wheel.png"));
+                         if (out.openedOk()) juce::PNGImageFormat().writeImageToStream(image, out);
+                         if (wheelTarget.valid()) wheel.applyForTest(wheelTarget);
+                         wheelLine = keys.joinIntoString(" and ") + " -> recommended " + wheelTarget.text();
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         if (wheelClips.size() < 2 || !wheelTarget.valid())
+                         {
+                             lastTempoLine = "key wheel: " + wheelLine;
+                             return false;
+                         }
+                         mirror.refreshNow();
+                         juce::StringArray landed;
+                         for (const auto& id : wheelClips)
+                         {
+                             const auto* clip = model().findClip(id);
+                             if (clip == nullptr) return false;
+                             const auto key = automix::clipKey(model(), *clip);
+                             if (automix::keyDistance(automix::camelot(key), wheelTarget) != 0) return false;
+                             landed.add(key + " (" + juce::String(static_cast<int>(std::lround(clip->semitones))) + ")");
+                         }
+                         report.add("key wheel: " + wheelLine + "; shifted to " + landed.joinIntoString(", "));
+                         for (const auto& id : wheelClips) actions.setClipKeyShift(id, 0);
+                         engine.host().project().setLibraryItemKey(wheelItemId, wheelItemKey);
+                         return true;
                      }});
     steps.back().poll = true;
     // Two files dropped at once: the prompt, answered "as dropped", mixes them on two decks.

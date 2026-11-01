@@ -49,7 +49,7 @@ class FxModule final : public juce::Component
 };
 
 // Track FX for the selected track: Tone (bass/mid/treble), Filter, Sends (room/echo),
-// Leveler, Punch, Saturation, Bit crusher.
+// Punch, Saturation, Bit crusher.
 class TrackFxView final : public juce::Component, private juce::ChangeListener
 {
   public:

@@ -24,7 +24,7 @@ bool isUndoableEnvelopeType(const juce::String& type) noexcept
            type == "TRACK_GAIN" || type == "TRACK_MUTE" || type == "TRACK_SOLO" ||
            type == "TRACK_SET_HEIGHT" || type == "TRACK_SET_AUTOMATION_LANE_VIEW" ||
            type == "TRACK_REORDER" ||
-           type == "TRACK_SET_SENDS" || type == "TRACK_SET_TONE" || type == "TRACK_SET_LEVELER" ||
+           type == "TRACK_SET_SENDS" || type == "TRACK_SET_TONE" ||
            type == "TRACK_SET_PUNCH" ||
            type == "TRACK_SET_SATURATION" ||
            type == "TRACK_SET_BIT_CRUSHER" ||
@@ -33,7 +33,7 @@ bool isUndoableEnvelopeType(const juce::String& type) noexcept
            type == "TRACK_BEAT_REPEAT_ADD" || type == "TRACK_BEAT_REPEAT_DELETE" ||
            type == "TRACK_ADD_PLUGIN" || type == "TRACK_REMOVE_PLUGIN" ||
            type == "TRACK_REORDER_PLUGIN" || type == "TRACK_SET_PLUGIN_BYPASS" ||
-           type == "CLIP_SET_ENVELOPE" ||
+           type == "CLIP_SET_ENVELOPE" || type == "CLIP_SET_GAIN" || type == "CLIP_SET_SOURCE_TEMPO" ||
            type == "CLIP_SET_REVERSED" || type == "CLIP_SET_BRAKE" ||
            type == "CLIP_SET_BACKSPIN" || type == "CLIP_SET_BEAT_OFFSET" ||
            type == "PROJECT_SET_REVERB" || type == "PROJECT_SET_DELAY" ||
@@ -85,7 +85,6 @@ juce::String prettyTransactionName(const juce::String& type)
     if (type == "TRACK_REORDER") return "Reorder track";
     if (type == "TRACK_SET_SENDS") return "Change track reverb/delay";
     if (type == "TRACK_SET_TONE") return "Change track tone";
-    if (type == "TRACK_SET_LEVELER") return "Change track leveler";
     if (type == "TRACK_SET_PUNCH") return "Change track punch";
     if (type == "TRACK_SET_SATURATION") return "Change track saturation";
     if (type == "TRACK_SET_BIT_CRUSHER") return "Change track bit crusher";
@@ -98,6 +97,8 @@ juce::String prettyTransactionName(const juce::String& type)
     if (type == "TRACK_REORDER_PLUGIN") return "Reorder plugins";
     if (type == "TRACK_SET_PLUGIN_BYPASS") return "Bypass plugin";
     if (type == "CLIP_SET_ENVELOPE") return "Edit clip volume envelope";
+    if (type == "CLIP_SET_GAIN") return "Change clip gain";
+    if (type == "CLIP_SET_SOURCE_TEMPO") return "Warp clip tempo";
     if (type == "CLIP_SET_REVERSED") return "Reverse clip";
     if (type == "CLIP_SET_BRAKE") return "Brake clip";
     if (type == "CLIP_SET_BACKSPIN") return "Backspin clip";
@@ -176,13 +177,13 @@ void beginUndoTransactionIfNeeded(const juce::String& type, const juce::var& pay
 
     juce::String idPart;
     if (type == "CLIP_MOVE" || type == "CLIP_TRIM" || type == "CLIP_SET_WARP" ||
-        type == "CLIP_SET_ENVELOPE")
+        type == "CLIP_SET_ENVELOPE" || type == "CLIP_SET_GAIN")
     {
         idPart = readOptionalString(payload, "clipId").value_or(juce::String{});
     }
     else if (type == "TRACK_GAIN" || type == "TRACK_SET_AUTOMATION_LANE_VIEW" ||
              type == "TRACK_SET_SENDS" ||
-             type == "TRACK_SET_TONE" || type == "TRACK_SET_LEVELER" ||
+             type == "TRACK_SET_TONE" ||
              type == "TRACK_SET_PUNCH" ||
              type == "TRACK_SET_SATURATION" || type == "TRACK_SET_BIT_CRUSHER" ||
              type == "TRACK_SET_PAN")
