@@ -25,7 +25,6 @@ public:
     {
         juce::ignoreUnused(maxBlockSize);
         tone.prepare(sampleRate, numChannels);
-        leveler.prepare(sampleRate, numChannels);
         punch.prepare(sampleRate);
         saturation.prepare(sampleRate);
         bitCrusher.prepare(sampleRate, numChannels);
@@ -38,7 +37,6 @@ public:
     void reset() noexcept
     {
         tone.reset();
-        leveler.reset();
         punch.reset();
         saturation.reset();
         bitCrusher.reset();
@@ -55,7 +53,6 @@ public:
     }
 
     /** Message-thread setter under the `BusGraph` lock; `snap` preserves setup parity. */
-    void setLeveler(float amount, bool snap) noexcept { leveler.setParams(amount, snap); }
     void setPunch(float amount, bool snap) noexcept { punch.setAmount(amount, snap); }
     void setSaturation(float drive, float mix, bool snap) noexcept
     {
@@ -117,7 +114,6 @@ public:
     void process(juce::AudioBuffer<float>& buffer, int startSample, int numSamples) noexcept
     {
         tone.process(buffer, startSample, numSamples);
-        leveler.process(buffer, startSample, numSamples);
         saturation.process(buffer, startSample, numSamples);
         bitCrusher.process(buffer, startSample, numSamples);
         punch.process(buffer, startSample, numSamples);
@@ -147,7 +143,6 @@ public:
 
 private:
     ToneEq tone;
-    Leveler leveler;
     Punch punch;
     Saturation saturation;
     BitCrusher bitCrusher;

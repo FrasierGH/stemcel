@@ -2376,6 +2376,39 @@ void SmokeTest::addTempoJourney()
                          report.add(everyParamLine);
                          return everyParamOk;
                      }});
+    // Glue's makeup and a clip's own gain reach the project, and a duplicate keeps the gain.
+    steps.push_back({"glue makeup and clip gain",
+                     [this]
+                     {
+                         mirror.refreshNow();
+                         gainClipId.clear();
+                         for (const auto& t : model().tracks)
+                             if (!t.clips.empty() && gainClipId.isEmpty()) gainClipId = t.clips.front().id;
+                         engine.send("PROJECT_SET_MIX_GLUE", object({{"makeupDb", 4.5}}));
+                         actions.setClipGain(gainClipId, -6.0);
+                         mirror.refreshNow();
+                         gainCopyId = actions.duplicateClip(gainClipId);
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         mirror.refreshNow();
+                         const auto* clip = model().findClip(gainClipId);
+                         const auto* copy = model().findClip(gainCopyId);
+                         const double makeup = static_cast<double>(model().raw.getProperty("mixGlueMakeupDb", 0.0));
+                         const bool ok = clip != nullptr && copy != nullptr && std::abs(clip->gainDb + 6.0) < 0.01
+                                         && std::abs(copy->gainDb + 6.0) < 0.01 && std::abs(makeup - 4.5) < 0.01;
+                         if (ok)
+                         {
+                             report.add("glue makeup +4.5 dB; clip gain -6 dB, and its duplicate's too");
+                             // Back to how they were for the steps after.
+                             engine.send("PROJECT_SET_MIX_GLUE", object({{"makeupDb", 0.0}}));
+                             actions.setClipGain(gainClipId, 0.0);
+                             actions.removeClips({gainCopyId});
+                         }
+                         return ok;
+                     }});
+    steps.back().poll = true;
     // The panes resize by their drag bars: the library 60 px taller, the track headers 40 px
     // wider, each saved, then both dragged back so the user's own sizes are left as they were.
     steps.push_back({"resize bars",

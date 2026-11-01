@@ -374,7 +374,7 @@ float ProjectState::getTrackPan(const juce::String& trackId) const
 
 // Epsilons sit below perceptible or renderer-visible resolution.
 static constexpr float kToneDbEpsilon = 1.0e-3f;
-static constexpr float kLevelerEpsilon = 1.0e-4f;
+static constexpr float kUnitAmountEpsilon = 1.0e-4f;
 
 static bool applyClampedDb(juce::ValueTree& tree,
                            const juce::Identifier& id,
@@ -463,26 +463,12 @@ float ProjectState::getTrackToneFilter(const juce::String& trackId) const
     return static_cast<float>(static_cast<double>(track.getProperty(kToneFilter, 0.0)));
 }
 
-bool ProjectState::setTrackLevelerAmount(const juce::String& trackId, float amount)
-{
-    auto track = findTrack(trackId);
-    if (!track.isValid()) return false;
-    return applyUnitFloat(track, kLevelerAmount, amount, kLevelerEpsilon, &undoManager);
-}
-
-float ProjectState::getTrackLevelerAmount(const juce::String& trackId) const
-{
-    const auto track = findTrack(trackId);
-    if (!track.isValid()) return 0.0f;
-    return static_cast<float>(static_cast<double>(track.getProperty(kLevelerAmount, 0.0)));
-}
-
 bool ProjectState::setTrackPunchAmount(const juce::String& trackId, float amount)
 {
     auto track = findTrack(trackId);
     if (!track.isValid()) return false;
     const float safeAmount = std::isfinite(amount) ? amount : 0.0F;
-    return applyUnitFloat(track, kPunchAmount, safeAmount, kLevelerEpsilon, &undoManager);
+    return applyUnitFloat(track, kPunchAmount, safeAmount, kUnitAmountEpsilon, &undoManager);
 }
 
 float ProjectState::getTrackPunchAmount(const juce::String& trackId) const

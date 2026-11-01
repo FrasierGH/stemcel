@@ -529,6 +529,15 @@ ClipEditor::ClipEditor(EngineClient& client, ProjectMirror& projectMirror, Timel
         s->onValueChange = [this] { controlsChanged(); };
         addAndMakeVisible(s);
     }
+    setupSlider(gain, -24.0, 12.0, 0.1);
+    gain.setTextValueSuffix(" dB");
+    gain.setDoubleClickReturnValue(true, 0.0);
+    gain.setTooltip("The clip's gain, on top of its volume envelope. Applies as you move it; double-click for 0 dB.");
+    if (const auto* c = mirror.model().findClip(clipId)) gain.setValue(c->gainDb, juce::dontSendNotification);
+    gain.setEnabled(!libraryMode());
+    gain.onValueChange = [this] { if (!libraryMode()) actions.setClipGain(clipId, gain.getValue()); };
+    addAndMakeVisible(gain);
+    addAndMakeVisible(gainLabel);
     halveButton.onClick = [this] { gridBpm.setValue(gridBpm.getValue() / 2.0); };
     doubleButton.onClick = [this] { gridBpm.setValue(gridBpm.getValue() * 2.0); };
     correctTempoButton.setTooltip("Correct this audio's tempo everywhere it is used (re-fits every clip of it)");
@@ -547,7 +556,7 @@ ClipEditor::ClipEditor(EngineClient& client, ProjectMirror& projectMirror, Timel
                                                            &sliceDivision, &sliceSamplesButton, &sliceTimelineButton,
                                                            &fullButton, &resetButton, &saveButton, &cancelButton})
         addAndMakeVisible(c);
-    for (auto* l : {&fixedBpmLabel, &semitonesLabel, &centsLabel, &gridBpmLabel, &anchorLabel})
+    for (auto* l : {&fixedBpmLabel, &semitonesLabel, &centsLabel, &gridBpmLabel, &anchorLabel, &gainLabel})
     {
         l->setColour(juce::Label::textColourId, colours::textDim);
         l->setFont(uiFont(12.0f));
@@ -1334,6 +1343,7 @@ void ClipEditor::resized()
     row(warpCol, nullptr, tempoMode);
     row(warpCol, &fixedBpmLabel, fixedBpm);
     row(warpCol, nullptr, warpMode);
+    row(warpCol, &gainLabel, gain);
     // Pitch and transforms.
     auto pitchCol = controls.removeFromLeft(colWidth).reduced(4, 0);
     row(pitchCol, &semitonesLabel, semitones);

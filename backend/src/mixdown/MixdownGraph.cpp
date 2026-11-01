@@ -46,6 +46,7 @@ std::unique_ptr<OfflineClip> buildOfflineClip(const MixdownSnapshot::ClipSnapsho
         static_cast<juce::int64>(clip.inMs * out->sourceRate / 1000.0));
     out->offsetSource->setClipDurationSamples(
         static_cast<juce::int64>(clip.durationMs * out->sourceRate / 1000.0));
+    out->offsetSource->setUserGain(juce::Decibels::decibelsToGain(static_cast<float>(clip.gainDb), -100.0F));
     out->envelopeSnapshot = EnvelopeSnapshot::fromVarArray(clip.envelopePoints);
     if (out->envelopeSnapshot != nullptr && !out->envelopeSnapshot->isEmpty())
     {

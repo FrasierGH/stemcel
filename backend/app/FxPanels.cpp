@@ -170,11 +170,11 @@ const std::map<juce::String, juce::String>& knobLanes()
 {
     static const std::map<juce::String, juce::String> lanes{
         {"toneBassDb", "toneBass"}, {"toneMidDb", "toneMid"}, {"toneTrebleDb", "toneTreble"}, {"toneFilter", "filter"},
-        {"sendReverb", "reverbSend"}, {"sendDelay", "delaySend"}, {"levelerAmount", "leveler"}, {"punchAmount", "punch"},
+        {"sendReverb", "reverbSend"}, {"sendDelay", "delaySend"}, {"punchAmount", "punch"},
         {"saturationDrive", "saturationDrive"}, {"saturationMix", "saturationMix"}, {"bitCrusherRate", "bitCrusherRate"},
         {"bitCrusherBits", "bitCrusherBits"}, {"bitCrusherBoost", "bitCrusherBoost"}, {"bitCrusherMix", "bitCrusherMix"},
         {"reverbSize", "reverbSize"}, {"reverbDecay", "reverbDecay"}, {"reverbTone", "reverbTone"}, {"reverbMix", "reverbMix"},
-        {"delayFeedback", "delayFeedback"}, {"delayTone", "delayTone"}, {"delayMix", "delayMix"}, {"mixGlueAmount", "glue"}};
+        {"delayFeedback", "delayFeedback"}, {"delayTone", "delayTone"}, {"delayMix", "delayMix"}, {"mixGlueAmount", "glue"}, {"mixGlueMakeupDb", "glueMakeup"}};
     return lanes;
 }
 
@@ -248,9 +248,6 @@ TrackFxView::TrackFxView(LibraryContext& context) : ctx(context)
              sendTrack("TRACK_SET_SENDS", {{"delaySend", v}, {"reverbSend", t ? num(t->raw, "sendReverb", 0.0) : 0.0}}, g, end);
          },
          percent);
-    auto& leveler = module("Leveler");
-    knob(leveler, "levelerAmount", "Amount", 0.0, 1.0, 0.01, 0.0,
-         [this](double v, const juce::String& g, bool end) { sendTrack("TRACK_SET_LEVELER", {{"amount", v}}, g, end); }, percent);
     auto& punch = module("Punch");
     knob(punch, "punchAmount", "Amount", 0.0, 1.0, 0.01, 0.0,
          [this](double v, const juce::String& g, bool end) { sendTrack("TRACK_SET_PUNCH", {{"amount", v}}, g, end); }, percent);
@@ -379,6 +376,9 @@ ProjectFxView::ProjectFxView(LibraryContext& context) : ctx(context)
     columnOwner.reset(column);
     auto& glue = module("Glue");
     knobs["mixGlueAmount"] = &glue.add(std::make_unique<FxKnob>("Amount", 0.0, 1.0, 0.01, 0.0, send("PROJECT_SET_MIX_GLUE", "amount"), percent));
+    // Glue makes up what it takes off on its own; Makeup adds more.
+    knobs["mixGlueMakeupDb"] = &glue.add(std::make_unique<FxKnob>("Makeup", 0.0, 12.0, 0.1, 0.0, send("PROJECT_SET_MIX_GLUE", "makeupDb"),
+                                                                  [](double v) { return "+" + juce::String(v, 1) + " dB"; }));
     auto& master = module("Master");
     limiter.onClick = [this] { ctx.engine.send("PROJECT_SET_SAFETY_LIMITER", object({{"enabled", limiter.getToggleState()}})); };
     metronome.onClick = [this]

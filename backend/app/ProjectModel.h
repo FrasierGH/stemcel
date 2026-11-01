@@ -60,6 +60,7 @@ struct ClipModel
     juce::String scratchPatternId;
     bool pendingAutoWarp = false;
     std::vector<EnvelopePoint> envelope;
+    double gainDb = 0.0; // the clip's own gain
     juce::var raw; // the full clip object (e.g. to tell a pinned tempoRatio from an absent one)
 
     double endMs() const { return offsetMs + effectiveDurationMs; }

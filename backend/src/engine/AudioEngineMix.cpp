@@ -1,4 +1,4 @@
-// Mix: master gain, metronome, metering, tone/leveler/sends/pan, automation publication,
+// Mix: master gain, metronome, metering, tone/sends/pan, automation publication,
 // project FX, and state getters. All methods are message-thread-only unless noted.
 #include "AudioEngine.h"
 
@@ -19,6 +19,12 @@ void AudioEngine::setArrangementMonitorGain(float gain)
 void AudioEngine::setSafetyLimiterEnabled(bool enabled, bool snap)
 {
     masterMeter.setSafetyLimiterEnabled(enabled, snap);
+}
+
+void AudioEngine::setProjectMixGlueMakeup(float db, bool snap)
+{
+    projectMixGlueMakeupDb = db;
+    master.setMixGlueMakeup(db, snap);
 }
 
 void AudioEngine::setProjectMixGlue(float amount, bool snap)
@@ -99,11 +105,6 @@ void AudioEngine::setTrackTone(const juce::String& trackId,
                                bool snap)
 {
     busGraph.setTrackTone(trackId, bassDb, midDb, trebleDb, filter, snap);
-}
-
-void AudioEngine::setTrackLeveler(const juce::String& trackId, float amount, bool snap)
-{
-    busGraph.setTrackLeveler(trackId, amount, snap);
 }
 
 void AudioEngine::setTrackPunch(const juce::String& trackId, float amount, bool snap)
@@ -277,6 +278,7 @@ void AudioEngine::restoreProjectFx()
     busGraph.setProjectDelay(projectDelay.delayMs, projectDelay.feedback, projectDelay.tone, projectDelay.mix, false,
                              /*applyTimeNow*/ ! master.isPlaying());
     master.setMixGlueAmount(projectMixGlue, false);
+    master.setMixGlueMakeup(projectMixGlueMakeupDb, false);
 }
 
 void AudioEngine::drainAllTrackPeaks(std::vector<BusGraph::TrackPeakSnapshot>& out)

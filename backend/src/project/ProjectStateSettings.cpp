@@ -312,6 +312,23 @@ bool ProjectState::setProjectMixGlueAmount(float amount)
     return true;
 }
 
+float ProjectState::getProjectMixGlueMakeupDb() const
+{
+    const float stored = static_cast<float>(static_cast<double>(root.getProperty(kMixGlueMakeupDb, 0.0)));
+    return std::isfinite(stored) ? juce::jlimit(0.0F, 12.0F, stored) : 0.0F;
+}
+
+bool ProjectState::setProjectMixGlueMakeupDb(float db)
+{
+    const float clamped = std::isfinite(db) ? juce::jlimit(0.0F, 12.0F, db) : 0.0F;
+    if (juce::approximatelyEqual(getProjectMixGlueMakeupDb(), clamped)) return false;
+    if (juce::approximatelyEqual(clamped, 0.0F))
+        root.removeProperty(kMixGlueMakeupDb, &undoManager);
+    else
+        root.setProperty(kMixGlueMakeupDb, clamped, &undoManager);
+    return true;
+}
+
 int ProjectState::getBarCounterStart() const
 {
     return static_cast<int>(root.getProperty(kBarCounterStart, 1));

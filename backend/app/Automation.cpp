@@ -21,7 +21,6 @@ const std::vector<Param>& params()
         {"toneTreble", "Treble", -40.0, 15.0, 0.0},
         {"reverbSend", "Reverb Send", 0.0, 1.0, 0.0},
         {"delaySend", "Delay Send", 0.0, 1.0, 0.0},
-        {"leveler", "Compressor", 0.0, 1.0, 0.0},
         {"punch", "Punch", 0.0, 1.0, 0.0},
         {"saturationDrive", "Saturation Drive", 0.0, 1.0, 0.0},
         {"saturationMix", "Saturation Mix", 0.0, 1.0, 1.0},
@@ -46,6 +45,7 @@ const std::vector<Param>& masterParams()
         {"reverbTone", "Reverb Tone", 0.0, 1.0, 0.0},
         {"delayTone", "Echo Tone", 0.0, 1.0, 0.0},
         {"glue", "Glue", 0.0, 1.0, 0.0},
+        {"glueMakeup", "Glue Makeup", 0.0, 12.0, 0.0},
     };
     return list;
 }

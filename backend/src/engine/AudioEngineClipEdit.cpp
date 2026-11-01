@@ -228,6 +228,17 @@ bool AudioEngine::setClipEnvelope(const juce::String& clipId, const juce::Array<
     return true;
 }
 
+bool AudioEngine::setClipUserGain(const juce::String& clipId, double gainDb)
+{
+    auto it = tracks.find(clipId);
+    if (it == tracks.end() || it->second->offsetSource == nullptr) return false;
+    it->second->offsetSource->setUserGain(juce::Decibels::decibelsToGain(static_cast<float>(gainDb), -100.0F));
+    // Applied upstream of the read-ahead buffer, as the envelope is: rebuild the prefetch so
+    // the new gain is heard from the next block.
+    scheduleTrackPrefetchAfterEdit(*it->second);
+    return true;
+}
+
 bool AudioEngine::setClipReversed(const juce::String& clipId, bool reversed)
 {
     auto it = tracks.find(clipId);

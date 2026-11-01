@@ -797,6 +797,28 @@ juce::Array<juce::var> ProjectState::getClipEnvelope(const juce::String& clipId)
     return readEnvelopeArray(clip, kEnvelopePoints);
 }
 
+bool ProjectState::setClipGainDb(const juce::String& clipId, double gainDb)
+{
+    auto clip = findClip(clipId);
+    if (!clip.isValid() || !std::isfinite(gainDb)) return false;
+    // Tenths of a dB: finer than anyone hears, and a slider drag settles on round values.
+    const double clamped = std::round(juce::jlimit(-24.0, 12.0, gainDb) * 10.0) / 10.0;
+    if (std::abs(clamped - getClipGainDb(clipId)) < 1.0e-6) return false;
+    if (std::abs(clamped) < 1.0e-6)
+        clip.removeProperty(kClipGainDb, &undoManager);
+    else
+        clip.setProperty(kClipGainDb, clamped, &undoManager);
+    return true;
+}
+
+double ProjectState::getClipGainDb(const juce::String& clipId) const
+{
+    const auto clip = findClip(clipId);
+    if (!clip.isValid()) return 0.0;
+    const double stored = static_cast<double>(clip.getProperty(kClipGainDb, 0.0));
+    return std::isfinite(stored) ? juce::jlimit(-24.0, 12.0, stored) : 0.0;
+}
+
 // Counted from effective (warp-scaled) length, not stored duration: a correction changes
 // exactly that scaling, so a clip can end past the project length without any stored
 // property of it having moved. The project length is independent and deliberately not

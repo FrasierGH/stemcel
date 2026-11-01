@@ -104,7 +104,6 @@ Pass1Result runPass1(const MixdownSnapshot& snapshot,
     {
         busGraph.setTrackTone(trackSnap.id, trackSnap.toneBassDb, trackSnap.toneMidDb,
                               trackSnap.toneTrebleDb, trackSnap.toneFilter, /*snap*/ true);
-        busGraph.setTrackLeveler(trackSnap.id, trackSnap.levelerAmount, /*snap*/ true);
         busGraph.setTrackPunch(trackSnap.id, trackSnap.punchAmount, /*snap*/ true);
         busGraph.setTrackSaturation(trackSnap.id, trackSnap.saturationDrive,
                                     trackSnap.saturationMix, /*snap*/ true);
@@ -234,6 +233,7 @@ Pass1Result runPass1(const MixdownSnapshot& snapshot,
     stemcel::Leveler mixGlue{stemcel::Leveler::kProjectMixGlueMaximumMakeupDb};
     mixGlue.prepare(static_cast<double>(snapshot.projectSampleRate), kOutputChannels);
     mixGlue.setParams(snapshot.mixGlueAmount, /*snap*/ true);
+    mixGlue.setMakeupDb(snapshot.mixGlueMakeupDb, /*snap*/ true);
     busGraph.setMasterGlue(&mixGlue); // the master automation's glue lane, as live
     stemcel::SafetyLimiter safetyLimiter;
     safetyLimiter.prepare(static_cast<double>(snapshot.projectSampleRate));

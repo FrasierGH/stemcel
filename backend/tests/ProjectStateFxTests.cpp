@@ -1,4 +1,4 @@
-// ProjectState FX/property round-trips: per-track sends/tone/leveler/pan and
+// ProjectState FX/property round-trips: per-track sends/tone/pan and
 // clip envelope normalisation as they appear in the PROJECT_STATE snapshot,
 // plus default-suppression and the project delay note-value guard.
 
@@ -306,50 +306,34 @@ void testProjectStateTrackToneJsonRoundTrip()
         }
 }
 
-void testProjectStateLevelerJsonRoundTrip()
+// The track Leveler is gone: an older project's levelerAmount and leveler lanes go on load,
+// and the rest of the track (and its other lanes) stays.
+void testProjectStateDropsLegacyTrackLeveler()
 {
-        stemcel::ProjectState state;
-        require(state.addTrack("t-lev"), "addTrack should succeed");
-
-        const auto findTrackJson = [](const juce::var& tracks,
-                                      const juce::String& id) -> juce::var {
-            if (auto* arr = tracks.getArray())
-            {
-                for (const auto& tv : *arr)
-                {
-                    if (tv.getProperty("id", {}).toString() == id) return tv;
-                }
-            }
-            return {};
-        };
-
-        // Fresh track: the Leveler is at its default (0) and must be absent
-        // from the snapshot so saved files / acks stay tidy.
+        stemcel::ProjectState source;
+        require(source.addTrack("t-old"), "addTrack should succeed");
+        auto tree = source.getTree().createCopy();
+        auto track = tree.getChildWithProperty("id", "t-old");
+        require(track.isValid(), "the track should be in the tree");
+        track.setProperty("levelerAmount", 0.6, nullptr);
+        juce::Array<juce::var> lanes;
+        for (const auto* id : {"leveler", "filter"})
         {
-            const auto json = findTrackJson(state.tracksAsJson(), "t-lev");
-            require(json.isObject(), "fresh track should appear in tracksAsJson");
-            require(!json.hasProperty("levelerAmount"), "default leveler amount must be omitted");
+            auto* lane = new juce::DynamicObject();
+            lane->setProperty("paramId", id);
+            lane->setProperty("points", juce::Array<juce::var>{});
+            lanes.add(juce::var(lane));
         }
+        track.setProperty("automation", lanes, nullptr);
 
-        // A non-default amount must round-trip through the snapshot the
-        // renderer reads on PROJECT_STATE.
-        require(state.setTrackLevelerAmount("t-lev", 0.6F),
-                "non-default leveler amount should report changed");
-        {
-            const auto json = findTrackJson(state.tracksAsJson(), "t-lev");
-            require(json.isObject(), "track should appear in tracksAsJson");
-            requireNear(static_cast<double>(json.getProperty("levelerAmount", 0.0)), 0.6, 0.0001,
-                        "leveler amount should round-trip through tracksAsJson");
-        }
-
-        // Reset to default: the snapshot must drop the field again.
-        require(state.setTrackLevelerAmount("t-lev", 0.0F),
-                "reset to default should report changed");
-        {
-            const auto json = findTrackJson(state.tracksAsJson(), "t-lev");
-            require(json.isObject(), "track should still appear in tracksAsJson");
-            require(!json.hasProperty("levelerAmount"), "reset leveler amount must be omitted");
-        }
+        stemcel::ProjectState loaded;
+        require(loaded.replaceTree(tree).wasOk(), "the old project should load");
+        const auto restored = loaded.getTree().getChildWithProperty("id", "t-old");
+        require(restored.isValid(), "the track should survive the load");
+        require(!restored.hasProperty("levelerAmount"), "levelerAmount must be dropped on load");
+        const auto* kept = restored.getProperty("automation").getArray();
+        require(kept != nullptr && kept->size() == 1 && (*kept)[0].getProperty("paramId", {}).toString() == "filter",
+                "the leveler lane must go and the filter lane stay");
 }
 
 void testProjectStateSaturationJsonRoundTrip()
@@ -707,7 +691,7 @@ void addProjectStateFxTests(std::vector<TestCase>& tests)
     tests.push_back({"ProjectState Glue Compressor defaults, persistence, and legacy round-trip", testProjectStateMixGlueDefaultsAndRoundTrip});
     tests.push_back({"ProjectState per-track Punch persists and legacy load bypasses", testProjectStateTrackPunchPersistenceAndLegacyLoad});
     tests.push_back({"ProjectState per-track tone round-trips through tracksAsJson", testProjectStateTrackToneJsonRoundTrip});
-    tests.push_back({"ProjectState per-track leveler round-trips through tracksAsJson", testProjectStateLevelerJsonRoundTrip});
+    tests.push_back({"ProjectState drops an old project's track Leveler on load", testProjectStateDropsLegacyTrackLeveler});
     tests.push_back({"ProjectState per-track saturation round-trips through tracksAsJson", testProjectStateSaturationJsonRoundTrip});
     tests.push_back({"ProjectState canonicalizes loaded per-track saturation values", testProjectStateSaturationCanonicalizesLoadedValues});
     tests.push_back({"ProjectState per-track bit crusher round-trips through tracksAsJson", testProjectStateBitCrusherJsonRoundTrip});

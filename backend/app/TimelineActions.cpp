@@ -235,9 +235,15 @@ void TimelineActions::replayClipProperties(const ClipModel& source, const juce::
                          {"pendingAutoWarp", source.pendingAutoWarp ? juce::var(true) : juce::var()}}));
     }
     if (source.reversed) engine.send("CLIP_SET_REVERSED", obj({{"clipId", newClipId}, {"reversed", true}}));
+    if (std::abs(source.gainDb) > 1.0e-6) engine.send("CLIP_SET_GAIN", obj({{"clipId", newClipId}, {"gainDb", source.gainDb}}));
     if (std::abs(source.beatOffsetMs) > 0.0)
         engine.send("CLIP_SET_BEAT_OFFSET", obj({{"clipId", newClipId}, {"beatOffsetMs", source.beatOffsetMs}}));
     if (includeLock && source.locked) engine.send("CLIP_SET_LOCKED", obj({{"clipId", newClipId}, {"locked", true}}));
+}
+
+void TimelineActions::setClipGain(const juce::String& clipId, double gainDb)
+{
+    engine.send("CLIP_SET_GAIN", obj({{"clipId", clipId}, {"gainDb", juce::jlimit(-24.0, 12.0, gainDb)}}));
 }
 
 juce::String TimelineActions::splitClipAt(const juce::String& clipId, double atMs)

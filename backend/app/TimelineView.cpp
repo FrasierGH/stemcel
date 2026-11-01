@@ -747,6 +747,8 @@ void TimelineView::paintClipHeader(juce::Graphics& g, const ClipModel& clip, juc
     if (name.isEmpty())
         if (const auto* item = model().findLibraryItem(clip.libraryItemId)) name = item->displayName();
     if (clip.unresolved) name = "! " + name;
+    // The clip's own gain, when it has one.
+    if (std::abs(clip.gainDb) > 0.05) name << "  " << (clip.gainDb > 0.0 ? "+" : "") << juce::String(clip.gainDb, 1) << " dB";
 
     const auto badges = clipHeaderBadges(clip);
     float badgesW = 0.0f;

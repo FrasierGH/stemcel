@@ -80,6 +80,13 @@ class OffsetSource : public juce::PositionableAudioSource
     {
         envelope.store(snapshot, std::memory_order_release);
     }
+
+    // The clip's own gain (linear), on top of its envelope and fades.
+    void setUserGain(float gain) noexcept
+    {
+        userGain.store(std::isfinite(gain) && gain >= 0.0F ? gain : 1.0F, std::memory_order_relaxed);
+    }
+    float getUserGain() const noexcept { return userGain.load(std::memory_order_relaxed); }
     const EnvelopeSnapshot* getEnvelopeSnapshot() const noexcept
     {
         return envelope.load(std::memory_order_acquire);
@@ -253,6 +260,7 @@ class OffsetSource : public juce::PositionableAudioSource
     std::atomic<juce::int64> inSourceSamples{0};
     std::atomic<juce::int64> clipDurationSamples{0};
     std::atomic<const EnvelopeSnapshot*> envelope{nullptr};
+    std::atomic<float> userGain{1.0F};
     std::atomic<const EdgeFadeSnapshot*> edgeFade{nullptr};
     std::atomic<const BrakeSnapshot*> brakeSnap{nullptr};
     std::atomic<const BackspinSnapshot*> backspinSnap{nullptr};

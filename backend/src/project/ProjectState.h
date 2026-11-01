@@ -151,10 +151,6 @@ class ProjectState : public juce::ValueTree::Listener
     float getTrackToneTrebleDb(const juce::String& trackId) const;
     float getTrackToneFilter(const juce::String& trackId) const;
 
-    // Zero amount is suppressed until Leveler DSP makes this more than persistence.
-    bool setTrackLevelerAmount(const juce::String& trackId, float amount);
-    float getTrackLevelerAmount(const juce::String& trackId) const;
-
     bool setTrackPunchAmount(const juce::String& trackId, float amount);
     float getTrackPunchAmount(const juce::String& trackId) const;
 
@@ -197,6 +193,9 @@ class ProjectState : public juce::ValueTree::Listener
     // One array property keeps envelope drags atomic and default suppression simple.
     bool setClipEnvelope(const juce::String& clipId, const juce::Array<juce::var>& points);
     juce::Array<juce::var> getClipEnvelope(const juce::String& clipId) const;
+    // A clip's own gain, -24..+12 dB (0, the default, is not stored), on top of its envelope.
+    bool setClipGainDb(const juce::String& clipId, double gainDb);
+    double getClipGainDb(const juce::String& clipId) const;
 
     // Per-track effect automation: one `automation` array property holds a lane
     // per automated parameter (`{ paramId, points: [{ timeMs, value }] }`). A lane
@@ -634,6 +633,9 @@ class ProjectState : public juce::ValueTree::Listener
     // Project-bus compression amount. Zero is an exact bypass and remains absent on disk.
     float getProjectMixGlueAmount() const;
     bool setProjectMixGlueAmount(float amount);
+    // Glue's set makeup, 0..12 dB (on top of its automatic makeup).
+    float getProjectMixGlueMakeupDb() const;
+    bool setProjectMixGlueMakeupDb(float db);
 
     // Bar-label offset for the timeline ruler. 0 (default) labels the first bar "1";
     // -1 labels it "0" so a lead-in bar can sit before bar one. Marks dirty.
@@ -1077,6 +1079,7 @@ class ProjectState : public juce::ValueTree::Listener
     static const juce::Identifier kMasterVolume;
     static const juce::Identifier kSafetyLimiterEnabled;
     static const juce::Identifier kMixGlueAmount;
+    static const juce::Identifier kMixGlueMakeupDb;
     static const juce::Identifier kBarCounterStart;
     static const juce::Identifier kMixdownStartBar;
     static const juce::Identifier kMetronomeEnabled;
@@ -1133,8 +1136,6 @@ class ProjectState : public juce::ValueTree::Listener
     static const juce::Identifier kToneTrebleDb;
     static const juce::Identifier kToneFilter;
 
-    // Leveler is currently persisted as the user-facing amount knob.
-    static const juce::Identifier kLevelerAmount;
     static const juce::Identifier kPunchAmount;
     static const juce::Identifier kSaturationDrive;
     static const juce::Identifier kSaturationMix;
@@ -1145,6 +1146,7 @@ class ProjectState : public juce::ValueTree::Listener
 
     // Envelope stays one array property for atomic edits.
     static const juce::Identifier kEnvelopePoints;
+    static const juce::Identifier kClipGainDb;
     static const juce::Identifier kEnvelopeTimeMs;
     static const juce::Identifier kEnvelopeGain;
 

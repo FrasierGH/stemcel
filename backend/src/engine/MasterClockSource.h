@@ -156,6 +156,11 @@ class MasterClockSource : public juce::AudioSource
         mixGlue.setParams(amount, snap);
     }
 
+    void setMixGlueMakeup(float db, bool snap) noexcept
+    {
+        mixGlue.setMakeupDb(db, snap);
+    }
+
     /** Monitor-only trim on the arrangement, 0..1. A recording session borrows it
      *  to set how loud the backing sits under the performer; it is never
      *  persisted, never part of the mix, and never reaches a bounce. It sits here

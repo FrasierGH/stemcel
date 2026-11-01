@@ -35,6 +35,7 @@ struct MixdownSnapshot
         double durationMs{0.0};
         double effectiveDurationMs{0.0};
         juce::Array<juce::var> envelopePoints;
+        double gainDb{0.0};
         bool edgeFadeIn{false};
         double edgeFadeInStartMs{0.0};
         double edgeFadeInEndMs{0.0};
@@ -72,7 +73,6 @@ struct MixdownSnapshot
         float toneMidDb{0.0F};
         float toneTrebleDb{0.0F};
         float toneFilter{0.0F};
-        float levelerAmount{0.0F};
         float punchAmount{0.0F};
         float saturationDrive{0.0F};
         float saturationMix{1.0F};
@@ -104,6 +104,7 @@ struct MixdownSnapshot
     float masterGain{1.0F};
     bool safetyLimiterEnabled{true};
     float mixGlueAmount{0.0F};
+    float mixGlueMakeupDb{0.0F};
     // Offline render uses the same SharedFx settings as playback for export parity.
     float reverbSize{0.0F};
     float reverbDecay{0.0F};

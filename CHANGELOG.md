@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Zoom** goes out as far as the project needs (half the zoom that fits it all, and at least 1.25 px/s), and **Fit** shows the whole project.
+- **Follow** pauses when you scroll away from the playhead while it plays, and picks up again when it comes back into view or play restarts.
+- **Resizable panes**: drag the bar above the library or mixer, beside the track headers, and the bottom edge of an automation lane. The transition editor's window resizes.
+- **Glue makeup**: Glue makes up what it takes off (up to 12 dB) and a Makeup knob adds more; both can be automated on the master.
+- **Clip gain**: a gain slider in the clip editor (-24 to +12 dB), shown in the clip's header.
+
+### Changed
+
+- The playhead is drawn exactly where it is repainted, at 60 Hz, so no trail is left behind it.
+
+### Removed
+
+- The track **Leveler**; the project's Glue is the compressor. An older project's Leveler setting and lanes are dropped when it opens.
+
 ## 0.1.0
 
 The first Stemcel release: the native app, renamed, relicensed (AGPL-3.0) and with its own logo.

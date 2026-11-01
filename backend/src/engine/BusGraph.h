@@ -168,7 +168,6 @@ public:
                       float bassDb, float midDb, float trebleDb, float filter,
                       bool snap);
 
-    void setTrackLeveler(const juce::String& trackId, float amount, bool snap);
     void setTrackPunch(const juce::String& trackId, float amount, bool snap);
     void setTrackSaturation(const juce::String& trackId, float drive, float mix, bool snap);
     void setTrackBitCrusher(const juce::String& trackId, float rate, int bits,
@@ -325,7 +324,6 @@ private:
     };
     std::unordered_map<juce::String, ToneParams> pendingTone;
 
-    std::unordered_map<juce::String, float> pendingLeveler;
     std::unordered_map<juce::String, float> pendingPunch;
 
     struct SaturationParams

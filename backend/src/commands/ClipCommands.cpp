@@ -101,6 +101,18 @@ void handleClipRemove(const juce::var& payload, stemcel::AudioEngine& engine,
     bridge.broadcast("CLIP_REMOVED", juce::var(p));
 }
 
+void handleClipSetGain(const juce::var& payload, stemcel::AudioEngine& engine, stemcel::ProjectState& projectState,
+                       stemcel::BridgeServer& bridge)
+{
+    const juce::String clipId = tryGetRequiredString(payload, "clipId").value_or(juce::String{});
+    const auto gainDb = tryGetNumber(payload, "gainDb");
+    if (clipId.isEmpty() || !gainDb.has_value()) return;
+    if (!projectState.setClipGainDb(clipId, *gainDb)) return;
+    const double stored = projectState.getClipGainDb(clipId);
+    engine.setClipUserGain(clipId, stored);
+    broadcastApplied(bridge, "CLIP_GAIN_APPLIED", {{"clipId", clipId}, {"gainDb", stored}});
+}
+
 void handleClipSetEnvelope(const juce::var& payload, stemcel::AudioEngine& engine,
                            stemcel::ProjectState& projectState,
                            stemcel::BridgeServer& bridge)

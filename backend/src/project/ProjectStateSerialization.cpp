@@ -160,12 +160,6 @@ juce::var ProjectState::tracksAsJson() const
             trackObj->setProperty("toneFilter",
                                   static_cast<double>(track.getProperty(kToneFilter, 0.0)));
         }
-        // Emit Leveler only when non-default so flat tracks stay byte-clean.
-        if (track.hasProperty(kLevelerAmount))
-        {
-            trackObj->setProperty("levelerAmount",
-                                  static_cast<double>(track.getProperty(kLevelerAmount, 0.0)));
-        }
         if (track.hasProperty(kPunchAmount))
         {
             trackObj->setProperty("punchAmount",
@@ -336,6 +330,8 @@ juce::var ProjectState::tracksAsJson() const
                 // Stored envelope arrays are already renderer-schema JSON.
                 clipObj->setProperty("envelopePoints", clip.getProperty(kEnvelopePoints));
             }
+            if (clip.hasProperty(kClipGainDb))
+                clipObj->setProperty("gainDb", static_cast<double>(clip.getProperty(kClipGainDb, 0.0)));
             // Resolve through the library item so missing sources surface as unresolved.
             const juce::String resolvedFilePath = getLibraryItemFilePath(libraryItemId);
             const bool unresolved =
@@ -374,6 +370,33 @@ void removeLegacyClipFadeProperties(juce::ValueTree& tree)
     {
         auto child = tree.getChild(i);
         removeLegacyClipFadeProperties(child);
+    }
+}
+
+// The track Leveler was removed (the project Glue is the compressor now): an older project's
+// `levelerAmount` and its `leveler` automation lanes go when it loads.
+void removeLegacyTrackLeveler(juce::ValueTree& tree)
+{
+    static const juce::Identifier amount{"levelerAmount"};
+    static const juce::Identifier automationId{"automation"};
+    static const juce::Identifier laneViewId{"automationLaneView"};
+    if (tree.hasType(juce::Identifier{"TRACK"}))
+    {
+        tree.removeProperty(amount, nullptr);
+        for (const auto& key : {automationId, laneViewId})
+        {
+            const auto* lanes = tree.getProperty(key).getArray();
+            if (lanes == nullptr) continue;
+            juce::Array<juce::var> kept;
+            for (const auto& lane : *lanes)
+                if (lane.getProperty("paramId", {}).toString() != "leveler") kept.add(lane);
+            if (kept.size() != lanes->size()) tree.setProperty(key, kept, nullptr);
+        }
+    }
+    for (int i = 0; i < tree.getNumChildren(); ++i)
+    {
+        auto child = tree.getChild(i);
+        removeLegacyTrackLeveler(child);
     }
 }
 
@@ -527,6 +550,7 @@ juce::Result ProjectState::replaceTree(const juce::ValueTree& newTree, const juc
         root.removeAllProperties(nullptr);
         root.copyPropertiesAndChildrenFrom(newTree, nullptr);
         removeLegacyClipFadeProperties(root);
+        removeLegacyTrackLeveler(root);
         migrateLegacyAudioType(root);
         migrateLegacyLibraryKind(root);
         migrateOneShotTempo(root);

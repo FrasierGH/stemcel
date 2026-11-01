@@ -19,7 +19,6 @@ enum class AutomationParam
     toneTreble,
     reverbSend,
     delaySend,
-    leveler,
     punch,
     saturationDrive,
     saturationMix,
@@ -38,6 +37,7 @@ enum class AutomationParam
     reverbTone,
     delayTone,
     glue,
+    glueMakeup,
     count_
 };
 
@@ -50,7 +50,6 @@ inline bool automationParamFromString(const juce::String& id, AutomationParam& o
     if (id == "toneTreble") { out = AutomationParam::toneTreble; return true; }
     if (id == "reverbSend") { out = AutomationParam::reverbSend; return true; }
     if (id == "delaySend") { out = AutomationParam::delaySend; return true; }
-    if (id == "leveler") { out = AutomationParam::leveler; return true; }
     if (id == "punch") { out = AutomationParam::punch; return true; }
     if (id == "saturationDrive") { out = AutomationParam::saturationDrive; return true; }
     if (id == "saturationMix") { out = AutomationParam::saturationMix; return true; }
@@ -67,6 +66,7 @@ inline bool automationParamFromString(const juce::String& id, AutomationParam& o
     if (id == "reverbTone") { out = AutomationParam::reverbTone; return true; }
     if (id == "delayTone") { out = AutomationParam::delayTone; return true; }
     if (id == "glue") { out = AutomationParam::glue; return true; }
+    if (id == "glueMakeup") { out = AutomationParam::glueMakeup; return true; }
     return false;
 }
 
