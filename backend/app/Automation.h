@@ -54,7 +54,7 @@ struct Lane
 };
 
 constexpr int kDefaultLaneHeight = 80;
-constexpr int kMinLaneHeight = 80;
+constexpr int kMinLaneHeight = 40;
 constexpr int kMaxLaneHeight = 220;
 
 // Every automatable track parameter, in the renderer's picker order.

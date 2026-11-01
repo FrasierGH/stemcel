@@ -27,6 +27,7 @@ class TransitionEditor final : public juce::Component, private juce::Timer
 
     void paint(juce::Graphics&) override;
     void resized() override;
+    int graphHeight() const;
     void mouseDown(const juce::MouseEvent&) override;
     void mouseDrag(const juce::MouseEvent&) override;
     void mouseUp(const juce::MouseEvent&) override;

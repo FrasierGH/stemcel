@@ -25,6 +25,7 @@
 #include "SectionAnalysis.h"
 #include "FxPanels.h"
 #include "PluginCatalogue.h"
+#include "ResizeBar.h"
 #include "TrackAutomationSnapshot.h"
 #include "Tracklist.h"
 #include "WaveformStore.h"
@@ -2374,6 +2375,59 @@ void SmokeTest::addTempoJourney()
                      {
                          report.add(everyParamLine);
                          return everyParamOk;
+                     }});
+    // The panes resize by their drag bars: the library 60 px taller, the track headers 40 px
+    // wider, each saved, then both dragged back so the user's own sizes are left as they were.
+    steps.push_back({"resize bars",
+                     [this]
+                     {
+                         auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
+                         auto* workspace = window != nullptr ? findDescendant<Workspace>(window) : nullptr;
+                         auto* headers = window != nullptr ? findDescendant<TrackHeaders>(window) : nullptr;
+                         auto* library = window != nullptr ? findDescendant<LibraryPanel>(window) : nullptr;
+                         if (workspace == nullptr || headers == nullptr || library == nullptr) return;
+                         std::vector<ResizeBar*> bars;
+                         for (auto* child : workspace->getChildren())
+                             if (auto* bar = dynamic_cast<ResizeBar*>(child)) bars.push_back(bar);
+                         if (bars.size() != 2) return;
+                         auto drag = [](ResizeBar* bar, int dx, int dy)
+                         {
+                             const auto now = juce::Time::getCurrentTime();
+                             const juce::Point<float> from{2.0f, 2.0f}, to{2.0f + static_cast<float>(dx), 2.0f + static_cast<float>(dy)};
+                             auto event = [&](juce::Point<float> at, bool dragged)
+                             {
+                                 return juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(), at, {}, 1.0f, 0.0f, 0.0f, 0.0f,
+                                                         0.0f, bar, bar, now, from, now, 1, dragged);
+                             };
+                             bar->mouseDown(event(from, false));
+                             bar->mouseDrag(event(to, true));
+                             bar->mouseUp(event(to, true));
+                         };
+                         // bottomBar is added first, then headerBar.
+                         const int libraryBefore = library->getHeight(), headersBefore = headers->getWidth();
+                         drag(bars[0], 0, -60);
+                         drag(bars[1], 40, 0);
+                         const int libraryAfter = library->getHeight(), headersAfter = headers->getWidth();
+                         // What the app saved, read back from its preferences file.
+                         AppPreferences saved;
+                         saved.load();
+                         const int savedLibrary = static_cast<int>(saved.get("ui", "nativeLibraryHeight", 0));
+                         const int savedHeaders = static_cast<int>(saved.get("ui", "trackHeaderWidth", 0));
+                         // Back to where they were (and saved so).
+                         drag(bars[0], 0, 60);
+                         drag(bars[1], -40, 0);
+                         resizeLine = "library " + juce::String(libraryBefore) + " -> " + juce::String(libraryAfter) + " px (saved "
+                                      + juce::String(savedLibrary) + "), headers " + juce::String(headersBefore) + " -> "
+                                      + juce::String(headersAfter) + " px (saved " + juce::String(savedHeaders) + "), restored to "
+                                      + juce::String(library->getHeight()) + " / " + juce::String(headers->getWidth());
+                         resizeOk = libraryAfter == libraryBefore + 60 && headersAfter == headersBefore + 40 && savedLibrary == libraryAfter
+                                    && savedHeaders == headersAfter && library->getHeight() == libraryBefore && headers->getWidth() == headersBefore;
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         report.add(resizeLine);
+                         return resizeOk;
                      }});
     // Fit shows the whole project at a zoom the floor allows, and a scroll away from the
     // playhead while following stays where it was put (follow pauses instead of snapping back).

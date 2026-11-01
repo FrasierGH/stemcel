@@ -144,6 +144,8 @@ class SmokeTest final : private juce::Timer
     int fitWidth = 0;
     juce::uint32 followStartedAt = 0;
     int followStage = 0;
+    juce::String resizeLine;
+    bool resizeOk = false;
     bool everyParamOk = false;
     std::shared_ptr<std::atomic<bool>> pluginDirScanDone;
     int dragClipsBefore = 0, dragTracksBefore = 0;

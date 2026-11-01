@@ -241,13 +241,34 @@ bool resizeZone(int y, int clipHeight)
     return clipHeight > 0 && std::abs(y - clipHeight) <= 4;
 }
 
+int TrackHeaderRow::laneEdgeAt(int y) const
+{
+    int bottom = clipLaneHeight;
+    for (size_t i = 0; i < lanes.size(); ++i)
+    {
+        bottom += lanes[i].heightPx;
+        if (std::abs(y - bottom) <= 3) return static_cast<int>(i);
+    }
+    return -1;
+}
+
 void TrackHeaderRow::mouseMove(const juce::MouseEvent& e)
 {
-    setMouseCursor(resizeZone(e.y, clipLaneHeight) ? juce::MouseCursor::UpDownResizeCursor : juce::MouseCursor::NormalCursor);
+    setMouseCursor(resizeZone(e.y, clipLaneHeight) || laneEdgeAt(e.y) >= 0 ? juce::MouseCursor::UpDownResizeCursor
+                                                                             : juce::MouseCursor::NormalCursor);
 }
 
 void TrackHeaderRow::mouseDrag(const juce::MouseEvent& e)
 {
+    if (resizingLane >= 0 && resizingLane < static_cast<int>(lanes.size()))
+    {
+        auto next = lanes;
+        next[static_cast<size_t>(resizingLane)].heightPx =
+            juce::jlimit(automation::kMinLaneHeight, automation::kMaxLaneHeight, resizeStartHeight + e.getDistanceFromDragStartY());
+        if (next[static_cast<size_t>(resizingLane)].heightPx != lanes[static_cast<size_t>(resizingLane)].heightPx)
+            actions.setAutomationLanes(trackId, next);
+        return;
+    }
     if (!resizing) return;
     const int next = juce::jlimit(TimelineViewState::kMinTrackHeight, TimelineViewState::kMaxTrackHeight,
                                   resizeStartHeight + e.getDistanceFromDragStartY());
@@ -257,6 +278,7 @@ void TrackHeaderRow::mouseDrag(const juce::MouseEvent& e)
 void TrackHeaderRow::mouseUp(const juce::MouseEvent&)
 {
     resizing = false;
+    resizingLane = -1;
 }
 
 void TrackHeaderRow::mouseDown(const juce::MouseEvent& e)
@@ -265,6 +287,12 @@ void TrackHeaderRow::mouseDown(const juce::MouseEvent& e)
     {
         resizing = true;
         resizeStartHeight = clipLaneHeight;
+        return;
+    }
+    if (const int lane = laneEdgeAt(e.y); lane >= 0 && !e.mods.isPopupMenu())
+    {
+        resizingLane = lane;
+        resizeStartHeight = lanes[static_cast<size_t>(lane)].heightPx;
         return;
     }
     view.selectedTrackId = trackId;

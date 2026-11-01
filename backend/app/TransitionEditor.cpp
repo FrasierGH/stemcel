@@ -475,8 +475,9 @@ void TransitionEditor::show(ProjectMirror& mirror, TimelineActions& actions, con
     options.dialogBackgroundColour = colours::background;
     options.escapeKeyTriggersCloseButton = true;
     options.useNativeTitleBar = true;
-    options.resizable = false;
-    options.launchAsync();
+    options.resizable = true;
+    if (auto* window = options.launchAsync())
+        window->setResizeLimits(820, 720, 4000, 3000);
 }
 
 double TransitionEditor::windowBars() const
@@ -518,7 +519,7 @@ void TransitionEditor::timerCallback()
 
 juce::Rectangle<int> TransitionEditor::graphArea() const
 {
-    return getLocalBounds().reduced(14).withTrimmedTop(52).withHeight(200);
+    return getLocalBounds().reduced(14).withTrimmedTop(52).withHeight(graphHeight());
 }
 
 juce::Rectangle<float> TransitionEditor::band(bool outgoing) const
@@ -782,13 +783,19 @@ void TransitionEditor::paint(juce::Graphics& g)
     draw(join.in, false);
 }
 
+int TransitionEditor::graphHeight() const
+{
+    // The halves' rows keep their size; the graph gets the rest.
+    return juce::jmax(200, getHeight() - 520);
+}
+
 void TransitionEditor::resized()
 {
     auto area = getLocalBounds().reduced(14);
     heading.setBounds(area.removeFromTop(22));
     sub.setBounds(area.removeFromTop(28));
     area.removeFromTop(2);
-    area.removeFromTop(200); // the graph
+    area.removeFromTop(graphHeight());
     hint.setBounds(area.removeFromTop(16));
     area.removeFromTop(6);
     auto buttons = area.removeFromBottom(28);

@@ -59,6 +59,9 @@ class TrackHeaderRow final : public juce::Component
     int trackCount = 0;
     bool resizing = false;
     int resizeStartHeight = 0;
+    int resizingLane = -1; // the lane whose bottom edge is being dragged
+    // The lane whose bottom edge is at `y`, or -1.
+    int laneEdgeAt(int y) const;
     std::vector<automation::Lane> lanes;
     juce::var plugins; // the inserts, for their parameter lanes
     void toggleLane(const juce::String& paramId);
