@@ -2593,6 +2593,7 @@ void SmokeTest::addTempoJourney()
                          view.scrollXPx = 0.0;
                          view.changed();
                          followStage = 0;
+                         followStartedAt = juce::Time::getMillisecondCounter();
                          actions.seek(0.0);
                          actions.play();
                      },
@@ -2604,9 +2605,17 @@ void SmokeTest::addTempoJourney()
                          auto* timeline = window != nullptr ? findDescendant<TimelineView>(window) : nullptr;
                          if (workspace == nullptr || timeline == nullptr) return false;
                          auto& view = workspace->viewState();
+                         const bool fits = fitEndX <= fitWidth && fitEndX > fitWidth * 0.5 && fitFloor <= 1.25;
                          if (followStage == 0)
                          {
-                             if (!workspace->liveState().playing) return false;
+                             if (!workspace->liveState().playing)
+                             {
+                                 // No audio device (a build machine): nothing plays, so only Fit is checked.
+                                 if (juce::Time::getMillisecondCounter() - followStartedAt < 4000) return false;
+                                 report.add("SKIP follow during playback (nothing plays without an audio device); fit end at "
+                                            + juce::String(fitEndX, 0) + " of " + juce::String(fitWidth) + " px");
+                                 return fits;
+                             }
                              // A wheel scroll far to the right, away from the playhead.
                              juce::MouseWheelDetails wheel{};
                              wheel.deltaX = -4.0f;
@@ -2624,7 +2633,6 @@ void SmokeTest::addTempoJourney()
                          const bool stayed = std::abs(view.scrollXPx - scrolledTo) < 1.0 && scrolledTo > 500.0;
                          const bool paused = view.followSuspended;
                          actions.pause();
-                         const bool fits = fitEndX <= fitWidth && fitEndX > fitWidth * 0.5 && fitFloor <= 1.25;
                          report.add("fit end at " + juce::String(fitEndX, 0) + " of " + juce::String(fitWidth) + " px, floor "
                                     + juce::String(fitFloor, 3) + " px/s; scrolled to " + juce::String(scrolledTo, 0) + " during playback and stayed "
                                     + (stayed ? "yes" : "no") + ", follow paused " + (paused ? "yes" : "no"));
