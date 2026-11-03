@@ -147,10 +147,14 @@ KeyWheel::~KeyWheel()
     mirror.removeChangeListener(this);
 }
 
-void KeyWheel::show(ProjectMirror& mirror, TimelineActions& actions, std::vector<juce::String> clipIds, std::vector<juce::String> itemIds)
+void KeyWheel::show(ProjectMirror& mirror, TimelineActions& actions, std::vector<juce::String> clipIds, std::vector<juce::String> itemIds,
+                    int leader, std::map<juce::String, std::vector<juce::String>> companions)
 {
     juce::DialogWindow::LaunchOptions options;
-    options.content.setOwned(new KeyWheel(mirror, actions, std::move(clipIds), std::move(itemIds)));
+    auto* wheel = new KeyWheel(mirror, actions, std::move(clipIds), std::move(itemIds));
+    wheel->companions = std::move(companions);
+    wheel->setLeaderForTest(leader);
+    options.content.setOwned(wheel);
     options.dialogTitle = "Key Wheel";
     options.dialogBackgroundColour = colours::background;
     options.escapeKeyTriggersCloseButton = true;
@@ -436,7 +440,11 @@ void KeyWheel::apply(automix::Camelot target, bool all)
                                            for (size_t i = 0; i < list.size(); ++i)
                                                if (list[i].clipId.isNotEmpty() && (all || applies(i)))
                                                    if (const auto shift = targetShift(list[i], target))
+                                                   {
                                                        actions.setClipKeyShift(list[i].clipId, *shift);
+                                                       if (const auto it = companions.find(list[i].clipId); it != companions.end())
+                                                           for (const auto& part : it->second) actions.setClipKeyShift(part, *shift);
+                                                   }
                                        });
 }
 

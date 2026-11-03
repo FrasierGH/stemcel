@@ -52,7 +52,8 @@ class TimelineActions
     // The clip's own gain, -24..+12 dB.
     void setClipGain(const juce::String& clipId, double gainDb);
     void setClipBrake(const juce::String& clipId, bool on);
-    void setClipBackspin(const juce::String& clipId, bool on);
+    // `seconds` / `speed` > 0: the clip's own spin; otherwise the defaults (Preferences).
+    void setClipBackspin(const juce::String& clipId, bool on, double seconds = 0.0, double speed = 0.0);
     // Saves the clip's window as a library clip and binds the clip to it; returns its id.
     juce::String saveClipToLibrary(const juce::String& clipId);
     // Renders the clip (as heard) into a new sample in the library.

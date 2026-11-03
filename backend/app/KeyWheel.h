@@ -6,6 +6,7 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <map>
 #include <optional>
 
 namespace stemcel::native
@@ -25,8 +26,10 @@ class KeyWheel final : public juce::Component, private juce::ChangeListener
   public:
     KeyWheel(ProjectMirror& mirror, TimelineActions& actions, std::vector<juce::String> clipIds, std::vector<juce::String> itemIds);
     ~KeyWheel() override;
+    // `companions`: per clip, other clips (its track's other parts) given the same shifts.
     static void show(ProjectMirror& mirror, TimelineActions& actions, std::vector<juce::String> clipIds,
-                     std::vector<juce::String> itemIds);
+                     std::vector<juce::String> itemIds, int leader = 0,
+                     std::map<juce::String, std::vector<juce::String>> companions = {});
 
     // The smallest shift (semitones from its source key) within `maxShift` that puts `sourceKey`
     // on `target` (a pitch shift keeps major or minor, so only keys of its mode are reached).
@@ -90,6 +93,7 @@ class KeyWheel final : public juce::Component, private juce::ChangeListener
     int chosen = -1; // the subject a click shifts; -1 for all
     int leader = 0;
     size_t builtFor = 0;
+    std::map<juce::String, std::vector<juce::String>> companions;
     juce::Point<float> centre;
     float radius = 0.0f;
 };

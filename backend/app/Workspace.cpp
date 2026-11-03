@@ -1,5 +1,7 @@
 #include "Workspace.h"
 
+#include "KeyWheel.h"
+
 #include "AutoMix.h"
 #include "ClipEditor.h"
 #include "ProjectDialogs.h"
@@ -68,6 +70,14 @@ Workspace::Workspace(EngineClient& engineClient, AppController& appController, A
     mashup = std::make_unique<MashupBuilder>(engine, mirror, actions, stems);
     mashup->onNotify = notify;
     mashup->onPlaced = [this](double from, double to, const juce::String& trackId) { timeline.revealRange(from, to, trackId); };
+    mashup->onKeys = [this](std::vector<juce::String> clips, std::map<juce::String, std::vector<juce::String>> companions)
+    { KeyWheel::show(mirror, actions, std::move(clips), {}, 0, std::move(companions)); };
+    const auto quickMashup = [this](std::vector<juce::String> ids)
+    {
+        quickmashup::show(mirror, std::move(ids),
+                          [this](std::vector<MashupBuilder::Request> requests, int leader) { mashup->start(std::move(requests), leader); });
+    };
+    timeline.onQuickMashup = quickMashup;
     auto panel = std::make_unique<LibraryPanel>(LibraryContext{engine, mirror, actions, view, live, prefs, importer,
                                                                sharedRekordbox(), audition, notify,
                                                                [this](const juce::String& itemId) { stems.openDialog(itemId, {}); },
@@ -77,7 +87,7 @@ Workspace::Workspace(EngineClient& engineClient, AppController& appController, A
                                                                { ClipEditor::showLibraryItem(engine, mirror, actions, waveforms, itemId); },
                                                                [this](std::vector<juce::String> ids, bool reorder, const juce::String& style, bool matchKeys)
                                                                { runAutoMix(std::move(ids), reorder, style, matchKeys); },
-                                                               [this](const juce::String& vocal, const juce::String& beat) { mashup->start(vocal, beat); },
+                                                               quickMashup,
                                                                [this](const juce::String& itemId) { sectionAnalyser.analyse(itemId, true); },
                                                                [this](const juce::String& itemId)
                                                                { TempoReport::show(mirror, actions, tempoAnalyser, itemId, {}); }});
@@ -593,6 +603,8 @@ bool Workspace::keyPressed(const juce::KeyPress& key)
 
     if (code == juce::KeyPress::spaceKey && plain && !mods.isShiftDown())
     {
+        // While a clip is dragged, Space beat-syncs it instead.
+        if (timeline.beatSyncKey()) return true;
         togglePlay();
         return true;
     }

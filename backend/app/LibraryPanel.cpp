@@ -931,18 +931,7 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
             autoMix.addSubMenu("In Harmonic Order, Matching Keys", matched);
             autoMix.addSubMenu("In This Order", asListed);
             menu.addSubMenu("Auto Mix " + juce::String(static_cast<int>(ids.size())) + " Tracks", autoMix);
-            if (ids.size() == 2 && ctx.mashup != nullptr)
-            {
-                const auto* a = ctx.mirror.model().findLibraryItem(ids[0]);
-                const auto* b = ctx.mirror.model().findLibraryItem(ids[1]);
-                if (a != nullptr && b != nullptr)
-                {
-                    juce::PopupMenu mashup;
-                    mashup.addItem("Vocals of " + displayTitle(*a) + " over " + displayTitle(*b), [this, ids] { ctx.mashup(ids[0], ids[1]); });
-                    mashup.addItem("Vocals of " + displayTitle(*b) + " over " + displayTitle(*a), [this, ids] { ctx.mashup(ids[1], ids[0]); });
-                    menu.addSubMenu("Mashup", mashup);
-                }
-            }
+            if (ctx.mashup != nullptr) menu.addItem("Quick Mashup...", [this, ids] { ctx.mashup(ids); });
         }
         if (item->kind == "stem" || item->kind == "sample")
             menu.addItem("Save to Sample Library", [this, id] { saveToSampleLibrary(id); });

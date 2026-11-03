@@ -240,7 +240,7 @@ bool ProjectState::isClipBrake(const juce::String& clipId) const
     return static_cast<bool>(clip.getProperty(kBrake, false));
 }
 
-bool ProjectState::setClipBackspin(const juce::String& clipId, bool backspin)
+bool ProjectState::setClipBackspin(const juce::String& clipId, bool backspin, double seconds, double speed)
 {
     auto clip = findClip(clipId);
     if (!clip.isValid())
@@ -256,7 +256,25 @@ bool ProjectState::setClipBackspin(const juce::String& clipId, bool backspin)
     {
         clip.removeProperty(kBackspin, &undoManager);
     }
+    if (backspin && seconds > 0.0)
+        clip.setProperty(kBackspinSeconds, seconds, &undoManager);
+    else
+        clip.removeProperty(kBackspinSeconds, &undoManager);
+    if (backspin && speed > 0.0)
+        clip.setProperty(kBackspinSpeed, speed, &undoManager);
+    else
+        clip.removeProperty(kBackspinSpeed, &undoManager);
     return true;
+}
+
+double ProjectState::clipBackspinSeconds(const juce::String& clipId) const
+{
+    return static_cast<double>(findClip(clipId).getProperty(kBackspinSeconds, 0.0));
+}
+
+double ProjectState::clipBackspinSpeed(const juce::String& clipId) const
+{
+    return static_cast<double>(findClip(clipId).getProperty(kBackspinSpeed, 0.0));
 }
 
 bool ProjectState::isClipBackspin(const juce::String& clipId) const

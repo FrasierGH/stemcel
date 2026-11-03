@@ -223,6 +223,13 @@ std::vector<Preset> buildPresets()
                             1, {{"filter", ramp(0.0, 0.98, 0.0, 0.5)}}, {{"level", step(0.999, kSilentDb, 0.0)}}),
                      true, true, 1);
     roll.extra = Extra::loopRoll;
+    auto& wheelUp = add(preset("echoWheelUp", "Echoed Wheel Up", "Cuts",
+                               "A CDJ jog wheel spun hard: the outgoing track is thrown into the echo, then winds back fast "
+                               "over its last beat while the repeats ring on, and the incoming track drops on the downbeat.",
+                               1, {{"delaySend", ramp(0.6, 0.85, 0.0, 1.0)}}, {{"level", step(0.999, kSilentDb, 0.0)}}),
+                        true, true, 1);
+    wheelUp.extra = Extra::wheelUp;
+    wheelUp.usesEcho = true;
     return list;
 }
 
@@ -425,6 +432,7 @@ void applyExtra(TimelineActions& actions, const ProjectModel& model, const Track
     {
         case Extra::brake: actions.setClipBrake(outClipId, true); break;
         case Extra::backspin: actions.setClipBackspin(outClipId, true); break;
+        case Extra::wheelUp: actions.setClipBackspin(outClipId, true, kWheelUpSeconds, kWheelUpSpeed); break;
         case Extra::loopRoll:
         {
             // The last bar, in shrinking repeats.
@@ -444,7 +452,7 @@ void undoExtra(TimelineActions& actions, const ProjectModel& model, const TrackM
                Extra extra, double start, double end)
 {
     if (extra == Extra::brake) actions.setClipBrake(outClipId, false);
-    if (extra == Extra::backspin) actions.setClipBackspin(outClipId, false);
+    if (extra == Extra::backspin || extra == Extra::wheelUp) actions.setClipBackspin(outClipId, false);
     if (extra == Extra::loopRoll)
         if (const auto* regions = outTrack.raw.getProperty("beatRepeats", {}).getArray())
         {
@@ -689,6 +697,7 @@ const char* extraName(Extra e)
     {
         case Extra::brake: return "brake";
         case Extra::backspin: return "backspin";
+        case Extra::wheelUp: return "wheelUp";
         case Extra::loopRoll: return "loopRoll";
         case Extra::tempoRamp: return "tempoRamp";
         case Extra::none: break;
@@ -700,6 +709,7 @@ Extra extraFrom(const juce::String& name)
 {
     if (name == "brake") return Extra::brake;
     if (name == "backspin") return Extra::backspin;
+    if (name == "wheelUp") return Extra::wheelUp;
     if (name == "loopRoll") return Extra::loopRoll;
     return Extra::none;
 }
@@ -819,6 +829,12 @@ std::vector<HalfKind> buildHalfKinds()
     {
         auto& h = add("Backspin", "A hand-pulled spinback at the clip's end.", true, half("backspinOut", 1.0, 1.0, "none"));
         h.extra = Extra::backspin;
+    }
+    {
+        auto& h = add("Echoed Wheel Up", "Thrown into the echo, then a hard, fast spin back over the last beat.", true,
+                      half("wheelUpOut", 0.6, 0.85, "none"));
+        h.extra = Extra::wheelUp;
+        h.effect = "echo";
     }
     {
         auto& h = add("Loop Roll", "The last bar stutters in shrinking loops under a rising filter.", true,
@@ -1078,6 +1094,7 @@ Join joinForPreset(const juce::String& presetId)
         j = {with("cutOut", [](Half& h) { h.from = h.to = 0.999; }), with("fadeIn", [](Half& h) { h.to = 0.5; h.low = "swap"; h.swapAt = 0.999; }), false};
     else if (id == "brake") j = {with("brakeOut"), with("dropIn"), false};
     else if (id == "backspin") j = {with("backspinOut"), with("dropIn"), false};
+    else if (id == "echoWheelUp") j = {with("wheelUpOut"), with("dropIn"), false};
     else if (id == "loopRoll") j = {with("loopRollOut"), with("dropIn"), false};
     else j = {with("fadeOut"), with("fadeIn"), false};
     return j;

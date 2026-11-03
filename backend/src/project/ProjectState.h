@@ -333,7 +333,12 @@ class ProjectState : public juce::ValueTree::Listener
     /** Read a clip's brake flag. Defaults to false. */
     bool isClipBrake(const juce::String& clipId) const;
 
-    bool setClipBackspin(const juce::String& clipId, bool backspin);
+    // `seconds` / `speed` > 0: the clip's own spin (Echoed Wheel Up's hard, fast one); 0 for
+    // the app's defaults.
+    bool setClipBackspin(const juce::String& clipId, bool backspin, double seconds = 0.0, double speed = 0.0);
+    // The clip's own spin length and speed, or 0 when it uses the defaults.
+    double clipBackspinSeconds(const juce::String& clipId) const;
+    double clipBackspinSpeed(const juce::String& clipId) const;
 
     /** Read a clip's backspin flag. Defaults to false. */
     bool isClipBackspin(const juce::String& clipId) const;
@@ -1063,6 +1068,8 @@ class ProjectState : public juce::ValueTree::Listener
     static const juce::Identifier kBeatOffsetMs;
     static const juce::Identifier kBrake;
     static const juce::Identifier kBackspin;
+    static const juce::Identifier kBackspinSeconds;
+    static const juce::Identifier kBackspinSpeed;
     static const juce::Identifier kScratchPatternId;
     static const juce::Identifier kViewPxPerSecond;
     static const juce::Identifier kViewScrollX;

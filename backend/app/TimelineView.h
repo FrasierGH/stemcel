@@ -46,6 +46,10 @@ class TimelineView final : public juce::Component,
                            private juce::Timer
 {
   public:
+    // Space while dragging a clip: a tap moves it the least that puts its beats on the beats of
+    // the clip it overlaps (else the grid); held past 0.35 s, a menu of placements opens at the
+    // pointer. False when no clip is being dragged (Space then plays as usual).
+    bool beatSyncKey();
     // Clips on other tracks this one could hand over to, or take over from, without
     // overlapping yet: the nearest starting within 16 bars after it ends, and the nearest
     // ending within 16 bars before it starts. As (outgoing, incoming).
@@ -87,6 +91,8 @@ class TimelineView final : public juce::Component,
     // The BPM variability check for a clip's source (TempoReport).
     std::function<void(const juce::String& itemId, const juce::String& clipId)> onTempoReport;
     std::function<void(const juce::String& clipId)> onOpenScratch;
+    // Quick Mashup of these library items (the source tracks of the selected clips).
+    std::function<void(std::vector<juce::String> itemIds)> onQuickMashup;
     std::function<void(const juce::String& clipId, const juce::StringArray& channels)> onSplitChannels;
 
     // Zoom keeping `anchorMs` under the same x (or the playhead/centre when unset).
@@ -202,6 +208,10 @@ class TimelineView final : public juce::Component,
     double dragPreviewStartMs = 0.0;
     double dragPreviewEndMs = 0.0;
     juce::String dragPreviewTrackId;
+    bool beatSyncHeld = false;  // Space is down during a drag (key repeats are ignored)
+    bool beatSynced = false;    // the preview sits where Space put it until the pointer moves on
+    int beatSyncMouseX = 0;
+    void showBeatSyncMenu();
     bool dragDuplicates = false; // Alt/Option held as a clip move began: drop a copy, leave the clip
     double panStartScrollX = 0.0, panStartScrollY = 0.0;
     std::optional<std::pair<double, double>> rangePreview;

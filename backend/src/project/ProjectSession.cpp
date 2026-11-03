@@ -99,8 +99,12 @@ void applyClipEffectsToEngine(stemcel::AudioEngine& engine, stemcel::ProjectStat
         engine.setClipBrake(clipId, 0.0, engine.getBrakeDefaultCurve());
 
     if (static_cast<bool>(clip.getProperty("backspin", false)))
-        engine.setClipBackspin(clipId, engine.getBackspinDefaultSeconds(),
-                               engine.getBackspinDefaultSpeed(), engine.getBackspinDefaultCurve());
+    {
+        const double seconds = static_cast<double>(clip.getProperty("backspinSeconds", 0.0));
+        const double speed = static_cast<double>(clip.getProperty("backspinSpeed", 0.0));
+        engine.setClipBackspin(clipId, seconds > 0.0 ? seconds : engine.getBackspinDefaultSeconds(),
+                               speed > 0.0 ? speed : engine.getBackspinDefaultSpeed(), engine.getBackspinDefaultCurve());
+    }
     else
         engine.setClipBackspin(clipId, 0.0, engine.getBackspinDefaultSpeed(),
                                engine.getBackspinDefaultCurve());

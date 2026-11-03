@@ -282,6 +282,10 @@ juce::var ProjectState::tracksAsJson() const
             if (static_cast<bool>(clip.getProperty(kBackspin, false)))
             {
                 clipObj->setProperty("backspin", true);
+                if (clip.hasProperty(kBackspinSeconds))
+                    clipObj->setProperty("backspinSeconds", static_cast<double>(clip.getProperty(kBackspinSeconds)));
+                if (clip.hasProperty(kBackspinSpeed))
+                    clipObj->setProperty("backspinSpeed", static_cast<double>(clip.getProperty(kBackspinSpeed)));
             }
             // Emit only a shifted beat grid; clips on the unshifted source grid stay absent.
             if (clip.hasProperty(kBeatOffsetMs))

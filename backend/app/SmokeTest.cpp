@@ -29,6 +29,7 @@
 #include "PluginCatalogue.h"
 #include "ResizeBar.h"
 #include "TrackAutomationSnapshot.h"
+#include "BeatSync.h"
 #include "KeyWheel.h"
 #include "TempoReport.h"
 #include "Tracklist.h"
@@ -1457,8 +1458,8 @@ void SmokeTest::addTempoJourney()
                          int named = 0;
                          double start = -1.0;
                          bool aligned = true;
-                         for (const auto& t : model().tracks)
-                             if (t.name.startsWith("Mashup ") && !t.clips.empty())
+                         for (size_t i = static_cast<size_t>(juce::jmax(0, mashupTracksBefore)); i < model().tracks.size(); ++i)
+                             if (const auto& t = model().tracks[i]; !t.clips.empty())
                              {
                                  ++named;
                                  if (start < 0.0) start = t.clips.front().offsetMs;
@@ -1471,6 +1472,63 @@ void SmokeTest::addTempoJourney()
                          return ok;
                      }});
     steps.back().poll = true;
+    // Quick Mashup: the vocals of the first over the drums and bass of the second, which leads:
+    // three tracks, the vocals in the leader's key, and the key wheel offered both tracks.
+    steps.push_back({"quick mashup",
+                     [this]
+                     {
+                         mashupTracksBefore = static_cast<int>(model().tracks.size());
+                         quickMashupKeyed = 0;
+                         mashupBuilder->onKeys = [this](std::vector<juce::String> clips, std::map<juce::String, std::vector<juce::String>> companions)
+                         {
+                             quickMashupKeyed = static_cast<int>(clips.size());
+                             quickMashupLeadClip = clips.front();
+                             quickMashupFollowers = companions[clips.front()].size();
+                             quickMashupVocalClip = clips.back();
+                         };
+                         mashupBuilder->start({{tempoItemIds[0], {"Vocals"}}, {tempoItemIds[1], {"Drums", "Bass"}}}, 1);
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         if (mashupBuilder->busy()) return false;
+                         mirror.refreshNow();
+                         const int added = static_cast<int>(model().tracks.size()) - mashupTracksBefore;
+                         const auto* lead = model().findClip(quickMashupLeadClip);
+                         const auto* vocal = model().findClip(quickMashupVocalClip);
+                         const bool keyed = lead != nullptr && vocal != nullptr
+                                            && (!automix::camelot(automix::clipKey(model(), *lead)).valid()
+                                                || automix::keyDistance(automix::camelot(automix::clipKey(model(), *lead)),
+                                                                        automix::camelot(automix::clipKey(model(), *vocal))) == 0);
+                         lastTempoLine = "quick mashup: " + juce::String(added) + " tracks, wheel on " + juce::String(quickMashupKeyed)
+                                         + " (leader with " + juce::String(static_cast<int>(quickMashupFollowers)) + " more part), vocals "
+                                         + (vocal != nullptr ? automix::clipKey(model(), *vocal) : juce::String("missing")) + " for leader "
+                                         + (lead != nullptr ? automix::clipKey(model(), *lead) : juce::String("missing"));
+                         const bool ok = added == 3 && quickMashupKeyed == 2 && quickMashupFollowers == 1 && keyed;
+                         if (ok) report.add(lastTempoLine);
+                         return ok;
+                     }});
+    steps.back().poll = true;
+    // Echoed Wheel Up: the preset throws the echo and spins the outgoing clip hard; a clip's own
+    // spin length and speed are kept in the project.
+    steps.push_back({"echoed wheel up",
+                     [this] { actions.setClipBackspin(tempoLateClipId, true, mix::kWheelUpSeconds, mix::kWheelUpSpeed); },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         mirror.refreshNow();
+                         const mix::Preset* found = nullptr;
+                         for (const auto& p : mix::presets())
+                             if (p.id == "echoWheelUp") found = &p;
+                         const auto* clip = model().findClip(tempoLateClipId);
+                         const bool ok = found != nullptr && found->usesEcho && found->extra == mix::Extra::wheelUp && clip != nullptr
+                                         && clip->backspin
+                                         && std::abs(static_cast<double>(clip->raw.getProperty("backspinSpeed", 0.0)) - mix::kWheelUpSpeed) < 1e-6
+                                         && std::abs(static_cast<double>(clip->raw.getProperty("backspinSeconds", 0.0)) - mix::kWheelUpSeconds) < 1e-6;
+                         actions.setClipBackspin(tempoLateClipId, false);
+                         if (ok) report.add("echoed wheel up: echo throw + a 1 s spin at 10x, kept on the clip");
+                         return ok;
+                     }});
     // The auto mixer's harmonic arithmetic (no UI): keys onto the Camelot wheel, and which mix.
     steps.push_back({"camelot keys", [] {}, {},
                      [this](const juce::var&)
@@ -2921,6 +2979,51 @@ void SmokeTest::addTempoJourney()
                          for (const auto& id : wheelClips) actions.setClipKeyShift(id, 0);
                          engine.host().project().setLibraryItemKey(wheelItemId, wheelItemKey);
                          return true;
+                     }});
+    steps.back().poll = true;
+    // Beat sync: a clip dropped 37 ms off the beats of a clip of the same track on another
+    // track is moved back onto them (Space during a drag), and the held-Space menu offers bars.
+    steps.push_back({"beat sync on drag",
+                     [this]
+                     {
+                         mirror.refreshNow();
+                         beatSyncLine.clear();
+                         const auto* item = model().findLibraryItem(tempoItemIds[0]);
+                         if (item == nullptr || item->bpm <= 0.0) return;
+                         const double at = model().contentEndMs() + 30000.0;
+                         const double bpm = item->bpm;
+                         const auto a = actions.addTrack();
+                         mirror.refreshNow();
+                         beatSyncClips[0] = actions.addClip(a, *model().findLibraryItem(tempoItemIds[0]), at);
+                         mirror.refreshNow(); // every model pointer is fetched again after a refresh
+                         const auto b = actions.addTrack();
+                         mirror.refreshNow();
+                         const auto* first = model().findClip(beatSyncClips[0]);
+                         if (first == nullptr) return;
+                         const double period = 60000.0 / bpm / juce::jmax(0.01, first->effectiveTempoRatio);
+                         beatSyncExpected = at + 8.0 * period;
+                         beatSyncClips[1] = actions.addClip(b, *model().findLibraryItem(tempoItemIds[0]), beatSyncExpected + 37.0);
+                         mirror.refreshNow();
+                         const auto* second = model().findClip(beatSyncClips[1]);
+                         if (second == nullptr) return;
+                         beatSyncResult = beatsync::nearestBeat(model(), *second, second->offsetMs, second->trackId);
+                         juce::StringArray labels;
+                         for (const auto& p : beatsync::placements(model(), *second, second->offsetMs, second->trackId)) labels.add(p.label);
+                         beatSyncLine = "37 ms off -> " + juce::String(beatSyncResult - beatSyncExpected, 2) + " ms; menu: " + labels.joinIntoString(", ");
+                         beatSyncMenuOk = labels.contains("Nearest beat") && labels.contains("Nearest bar");
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         const bool ok = beatSyncLine.isNotEmpty() && std::abs(beatSyncResult - beatSyncExpected) <= 2.0 && beatSyncMenuOk;
+                         lastTempoLine = "beat sync: " + beatSyncLine;
+                         if (ok) report.add(lastTempoLine);
+                         juce::StringArray tracks;
+                         for (const auto& id : beatSyncClips)
+                             if (const auto* c = model().findClip(id)) tracks.add(c->trackId);
+                         for (const auto& t : tracks) actions.removeTrack(t);
+                         mirror.refreshNow();
+                         return ok;
                      }});
     steps.back().poll = true;
     // Two files dropped at once: the prompt, answered "as dropped", mixes them on two decks.

@@ -7,6 +7,7 @@
 #include "Automation.h"
 #include "MixTransitions.h"
 #include "SectionAnalysis.h"
+#include "BeatSync.h"
 #include "KeyWheel.h"
 #include "TempoReport.h"
 #include "TransitionEditor.h"
@@ -1549,6 +1550,9 @@ void TimelineView::mouseDrag(const juce::MouseEvent& e)
     case DragKind::move:
     {
         if (e.getDistanceFromDragStart() <= kDragThresholdPx) return;
+        // A beat-synced preview holds until the pointer really moves.
+        if (beatSynced && std::abs(e.x - beatSyncMouseX) < 6) return;
+        beatSynced = false;
         dragPreviewStartMs = snapped(dragOriginStartMs + (ms - dragAnchorMs));
         dragPreviewEndMs = dragPreviewStartMs + (dragOriginEndMs - dragOriginStartMs);
         if (const int index = trackRowIndexAtY(juce::jlimit(view.headerHeight(), getHeight() - 1, e.y)); index >= 0)
@@ -1600,8 +1604,91 @@ void TimelineView::mouseDrag(const juce::MouseEvent& e)
     }
 }
 
+bool TimelineView::beatSyncKey()
+{
+    if (drag != DragKind::move) return false;
+    if (beatSyncHeld) return true; // the key repeating while held
+    const auto* clip = model().findClip(dragClipId);
+    if (clip == nullptr) return true;
+    beatSyncHeld = true;
+    dragPreviewStartMs = beatsync::nearestBeat(model(), *clip, dragPreviewStartMs, dragPreviewTrackId);
+    dragPreviewEndMs = dragPreviewStartMs + (dragOriginEndMs - dragOriginStartMs);
+    beatSynced = true;
+    beatSyncMouseX = getMouseXYRelative().x;
+    repaint();
+    juce::Timer::callAfterDelay(350,
+                                [safe = juce::Component::SafePointer<TimelineView>(this)]
+                                {
+                                    if (safe == nullptr) return;
+                                    const bool still = juce::KeyPress::isKeyCurrentlyDown(juce::KeyPress::spaceKey);
+                                    if (still && safe->drag == DragKind::move) safe->showBeatSyncMenu();
+                                    safe->beatSyncHeld = false;
+                                });
+    return true;
+}
+
+void TimelineView::showBeatSyncMenu()
+{
+    const auto* clip = model().findClip(dragClipId);
+    if (clip == nullptr) return;
+    const auto options = beatsync::placements(model(), *clip, dragPreviewStartMs, dragPreviewTrackId);
+    const double beatMs = 60000.0 / juce::jmax(1.0, model().bpm);
+    juce::PopupMenu menu;
+    menu.addSectionHeader("Place the clip");
+    for (size_t i = 0; i < options.size(); ++i)
+    {
+        const auto& o = options[i];
+        if (o.startMs < 0.0)
+        {
+            menu.addItem(static_cast<int>(i) + 1, o.label, false);
+            continue;
+        }
+        const double move = o.startMs - dragPreviewStartMs;
+        const auto by = std::abs(move) < 1.0 ? juce::String("here")
+                        : std::abs(move) < beatMs * 0.75
+                            ? juce::String(move > 0 ? "+" : "") + juce::String(juce::roundToInt(move)) + " ms"
+                            : juce::String(move > 0 ? "+" : "") + juce::String(move / beatMs, 1) + " beats";
+        menu.addItem(static_cast<int>(i) + 1, o.label + "   (" + by + ")");
+    }
+    const auto origin = dragOriginStartMs, originEnd = dragOriginEndMs;
+    const auto clipId = dragClipId, trackId = dragPreviewTrackId;
+    const bool duplicate = dragDuplicates;
+    // The menu takes the pointer: the drag ends here, placed by the choice (Esc: not moved).
+    drag = DragKind::none;
+    beatSynced = false;
+    const auto at = juce::Desktop::getMousePosition();
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea({at.x, at.y, 1, 1}),
+                       [safe = juce::Component::SafePointer<TimelineView>(this), options, origin, originEnd, clipId, trackId, duplicate](int result)
+                       {
+                           if (safe == nullptr) return;
+                           auto& self = *safe;
+                           if (result <= 0 || result > static_cast<int>(options.size()) || options[static_cast<size_t>(result - 1)].startMs < 0.0)
+                           {
+                               self.repaint();
+                               return;
+                           }
+                           const double start = options[static_cast<size_t>(result - 1)].startMs;
+                           if (duplicate)
+                           {
+                               const auto copy = self.actions.duplicateClipTo(clipId, trackId, start);
+                               if (copy.isNotEmpty()) self.view.selectedClipIds = {copy};
+                               self.view.changed();
+                           }
+                           else
+                               self.actions.engineClient().inUndoGroup("Move clip",
+                                                                       [&]
+                                                                       {
+                                                                           self.actions.moveClip(clipId, start, trackId);
+                                                                           self.mirror.refreshNow();
+                                                                           self.retimeTransitions(clipId, origin, originEnd);
+                                                                       });
+                           self.repaint();
+                       });
+}
+
 void TimelineView::mouseUp(const juce::MouseEvent& e)
 {
+    beatSynced = false;
     if (tempoDragIndex >= 0)
     {
         tempoDragIndex = -1;
@@ -2195,6 +2282,19 @@ void TimelineView::showClipMenu(const juce::String& clipId, double atMs)
         keyMenu.addItem("Down a Semitone", shift > -12, false, [this, clipId, shift] { actions.setClipKeyShift(clipId, shift - 1); });
         keyMenu.addItem("Reset Key", shift != 0, false, [this, clipId] { actions.setClipKeyShift(clipId, 0); });
         // The wheel: this clip, or every selected clip when it is one of them.
+        if (view.selectedClipIds.count(clipId) != 0 && view.selectedClipIds.size() > 1 && onQuickMashup)
+        {
+            // Each selected clip's track (a stem's source), once each.
+            std::vector<juce::String> items;
+            for (const auto& id : view.selectedClipIds)
+                if (const auto* c = model().findClip(id))
+                    if (const auto* item = model().findLibraryItem(c->libraryItemId))
+                    {
+                        const auto source = item->kind == "stem" && item->sourceItemId.isNotEmpty() ? item->sourceItemId : item->id;
+                        if (std::find(items.begin(), items.end(), source) == items.end()) items.push_back(source);
+                    }
+            if (items.size() >= 2) menu.addItem("Quick Mashup...", [this, items] { onQuickMashup(items); });
+        }
         keyMenu.addItem("Key Wheel...", [this, clipId]
                         {
                             std::vector<juce::String> ids{clipId};

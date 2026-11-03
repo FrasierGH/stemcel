@@ -223,9 +223,12 @@ void handleClipSetBackspin(const juce::var& payload, stemcel::AudioEngine& engin
     {
         return;
     }
-    projectState.setClipBackspin(clipId, on);
-    engine.setClipBackspin(clipId, on ? engine.getBackspinDefaultSeconds() : 0.0,
-                           engine.getBackspinDefaultSpeed(), engine.getBackspinDefaultCurve());
+    // Optional: the clip's own spin (seconds, speed); otherwise the app's defaults.
+    const double seconds = static_cast<double>(payload.getProperty("seconds", 0.0));
+    const double speed = static_cast<double>(payload.getProperty("speed", 0.0));
+    projectState.setClipBackspin(clipId, on, seconds, speed);
+    engine.setClipBackspin(clipId, on ? (seconds > 0.0 ? seconds : engine.getBackspinDefaultSeconds()) : 0.0,
+                           speed > 0.0 ? speed : engine.getBackspinDefaultSpeed(), engine.getBackspinDefaultCurve());
 }
 
 void handleClipRename(const juce::var& payload, stemcel::ProjectState& projectState)

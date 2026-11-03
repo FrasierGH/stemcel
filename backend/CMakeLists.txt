@@ -786,6 +786,7 @@ if(STEMCEL_BUILD_NATIVE_APP)
         app/Tracklist.cpp
         app/TempoReport.cpp
         app/KeyWheel.cpp
+        app/BeatSync.cpp
         app/RekordboxBrowser.cpp
         app/EngineClient.cpp
         app/ExportDialog.cpp
