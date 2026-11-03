@@ -152,7 +152,7 @@ jobs:
           Get-Content (Join-Path $dir 'smoke-result.txt') -ErrorAction SilentlyContinue
           if ($p.ExitCode -ne 0) {
             # Where it stopped: the app's own log (the result file is only written at the end).
-            Get-Content (Join-Path $env:USERPROFILE 'Stemcel\Diagnosticsackend.log') -Tail 120 -ErrorAction SilentlyContinue
+            Get-Content (Join-Path $env:USERPROFILE 'Stemcel/Diagnostics/backend.log') -Tail 120 -ErrorAction SilentlyContinue
             Write-Host "::error::Native smoke test exited $($p.ExitCode)"; exit 1
           }
 
