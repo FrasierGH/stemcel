@@ -61,6 +61,10 @@ struct Preset
 };
 
 const std::vector<Preset>& presets();
+// The tempo map ramps from its tempo at `start` to `targetBpm` at `end` (and stays there), and
+// the outgoing clip is re-trimmed to still end on `end`.
+void rampTempoTo(EngineClient& engine, TimelineActions& actions, const ProjectModel& model, const ClipModel& out, double targetBpm,
+                 double start, double end);
 const Preset* find(const juce::String& id);
 juce::StringArray categories();
 

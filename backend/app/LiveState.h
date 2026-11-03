@@ -38,7 +38,8 @@ class TimelineViewState final : public juce::ChangeBroadcaster
     static constexpr double kMinPxPerSecond = 0.02;
     static constexpr double kMaxPxPerSecond = 800.0;
     static constexpr int kRulerHeight = 28;
-    static constexpr int kTempoLaneHeight = 56;
+    static constexpr int kTempoLaneHeight = 56; // its least height; drag its bottom edge for more
+    static constexpr int kMaxTempoLaneHeight = 400;
     static constexpr int kDefaultTrackHeight = 120;
     static constexpr int kMinTrackHeight = 120;
     static constexpr int kMaxTrackHeight = 400;
@@ -62,8 +63,9 @@ class TimelineViewState final : public juce::ChangeBroadcaster
     bool skipToMarkers = true;
     // The tempo lane under the ruler (the tempo map's curve and points).
     bool tempoLaneVisible = false;
+    int tempoLaneHeight = kTempoLaneHeight;
     // Where the tracks start: below the ruler and, when shown, the tempo lane.
-    int headerHeight() const { return kRulerHeight + (tempoLaneVisible ? kTempoLaneHeight : 0); }
+    int headerHeight() const { return kRulerHeight + (tempoLaneVisible ? tempoLaneHeight : 0); }
 
     double msToX(double ms) const { return ms / 1000.0 * pxPerSecond - scrollXPx; }
     double xToMs(double x) const { return (x + scrollXPx) / pxPerSecond * 1000.0; }

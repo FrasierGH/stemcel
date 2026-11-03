@@ -11,6 +11,7 @@
 #include "KeyWheel.h"
 #include "TempoReport.h"
 #include "TransitionEditor.h"
+#include "Log.h"
 #include "Theme.h"
 
 #include <cmath>
@@ -854,8 +855,17 @@ void TimelineView::paint(juce::Graphics& g)
                     if (drag == DragKind::trimStart) ghost.inMs = c->inMs + (dragPreviewStartMs - c->offsetMs) * ratio;
                     ghost.durationMs = ghost.effectiveDurationMs * ratio;
                     const auto* track = model().findTrack(trackId);
-                    paintClip(g, ghost, clipBounds(ghost, rows[i]), false,
-                              track != nullptr && track->colorIndex >= 0 ? track->colorIndex : static_cast<int>(i), 0.85f);
+                    const auto bounds = clipBounds(ghost, rows[i]);
+                    paintClip(g, ghost, bounds, false, track != nullptr && track->colorIndex >= 0 ? track->colorIndex : static_cast<int>(i), 0.85f);
+                    if (drag == DragKind::move && beatSynced && beatSyncLabel.isNotEmpty())
+                    {
+                        const auto label = juce::Rectangle<float>(bounds.getX() + 4.0f, bounds.getBottom() - 22.0f, 360.0f, 18.0f);
+                        g.setColour(colours::zinc950.withAlpha(0.85f));
+                        g.fillRoundedRectangle(label, 3.0f);
+                        g.setColour(colours::zinc100);
+                        g.setFont(uiFont(11.0f, true));
+                        g.drawText(beatSyncLabel, label.reduced(6.0f, 0.0f).toNearestInt(), juce::Justification::centredLeft, true);
+                    }
                 }
             }
         }
@@ -939,20 +949,35 @@ void TimelineView::paintMixTransitions(juce::Graphics& g)
             g.drawRect(area, 1.0f);
             juce::Path fade;
             const auto body = area.reduced(2.0f, 6.0f);
-            constexpr int kSteps = 24;
-            for (int i = 0; i <= kSteps; ++i)
+            // The track's level automation over the window: the fade the transition wrote
+            // (right-click it for its curve). A transition with no level move shows none.
+            const auto* clip = model().findClip(t.getProperty(outgoing ? "outClipId" : "inClipId", {}).toString());
+            const auto* track = clip != nullptr ? model().findTrack(clip->trackId) : nullptr;
+            const auto* level = automation::find("level");
+            const auto points = track != nullptr ? automation::pointsOf(*track, "level") : std::vector<automation::Point>{};
+            if (level != nullptr && !points.empty())
             {
-                const float u = static_cast<float>(i) / kSteps;
-                // Equal-power shape: the curve the default blend follows.
-                const float gain = outgoing ? std::cos(u * juce::MathConstants<float>::halfPi)
-                                            : std::sin(u * juce::MathConstants<float>::halfPi);
-                const float x = body.getX() + u * body.getWidth();
-                const float y = body.getBottom() - gain * body.getHeight();
-                if (i == 0) fade.startNewSubPath(x, y);
-                else fade.lineTo(x, y);
+                const double fromMs = view.xToMs(body.getX()), toMs = view.xToMs(body.getRight());
+                constexpr int kSteps = 64;
+                for (int i = 0; i <= kSteps; ++i)
+                {
+                    const float u = static_cast<float>(i) / kSteps;
+                    const double v = automation::valueAt(points, fromMs + (toMs - fromMs) * u, level->defaultValue);
+                    const float x = body.getX() + u * body.getWidth();
+                    const float y = body.getBottom() - static_cast<float>(automation::toFraction(*level, v)) * body.getHeight();
+                    if (i == 0) fade.startNewSubPath(x, y);
+                    else fade.lineTo(x, y);
+                }
+                g.setColour(colours::zinc100.withAlpha(0.85f));
+                g.strokePath(fade, juce::PathStrokeType(1.6f));
+                for (const auto& p : points)
+                    if (p.timeMs >= fromMs && p.timeMs <= toMs)
+                    {
+                        const auto x = static_cast<float>(view.msToX(p.timeMs));
+                        const float y = body.getBottom() - static_cast<float>(automation::toFraction(*level, p.value)) * body.getHeight();
+                        g.fillEllipse(x - 3.5f, y - 3.5f, 7.0f, 7.0f);
+                    }
             }
-            g.setColour(colours::zinc100.withAlpha(0.85f));
-            g.strokePath(fade, juce::PathStrokeType(1.6f));
         }
         if (!shape->connector.isEmpty())
         {
@@ -1115,7 +1140,12 @@ void TimelineView::applyTransitionPlacing(const juce::String& outId, const juce:
 juce::Rectangle<int> TimelineView::tempoLaneArea() const
 {
     if (!view.tempoLaneVisible) return {};
-    return {0, VS::kRulerHeight, getWidth(), VS::kTempoLaneHeight};
+    return {0, VS::kRulerHeight, getWidth(), view.tempoLaneHeight};
+}
+
+bool TimelineView::overTempoLaneEdge(int y) const
+{
+    return view.tempoLaneVisible && std::abs(y - (VS::kRulerHeight + view.tempoLaneHeight)) <= 3;
 }
 
 std::vector<TempoPoint> TimelineView::shownTempoMap() const
@@ -1294,6 +1324,12 @@ void TimelineView::mouseDown(const juce::MouseEvent& e)
         return;
     }
 
+    if (overTempoLaneEdge(e.y) && !e.mods.isPopupMenu())
+    {
+        tempoResizing = true;
+        tempoResizeStartHeight = view.tempoLaneHeight;
+        return;
+    }
     if (tempoLaneMouseDown(e)) return;
     if (e.y < VS::kRulerHeight)
     {
@@ -1354,6 +1390,7 @@ void TimelineView::mouseDown(const juce::MouseEvent& e)
         return;
     }
 
+    if (e.mods.isPopupMenu() && showTransitionCurveMenu(e.getPosition().toFloat())) return;
     // A transition's label moves it; its band edges stretch it (snapped; Cmd/Ctrl frees it).
     if (!e.mods.isPopupMenu())
         if (const auto handle = transitionHandleAt(e.getPosition().toFloat()))
@@ -1441,6 +1478,13 @@ void TimelineView::mouseDown(const juce::MouseEvent& e)
 
 void TimelineView::mouseDrag(const juce::MouseEvent& e)
 {
+    if (tempoResizing)
+    {
+        view.tempoLaneHeight = juce::jlimit(VS::kTempoLaneHeight, VS::kMaxTempoLaneHeight,
+                                            tempoResizeStartHeight + e.getDistanceFromDragStartY());
+        view.changed();
+        return;
+    }
     const double ms = juce::jmax(0.0, view.xToMs(e.x));
     if (drag == DragKind::pan)
     {
@@ -1604,25 +1648,68 @@ void TimelineView::mouseDrag(const juce::MouseEvent& e)
     }
 }
 
+bool TimelineView::keyPressed(const juce::KeyPress& key)
+{
+    // During a clip drag the timeline has the keyboard: Space beat-syncs (Workspace plays
+    // otherwise).
+    if (key.getKeyCode() == juce::KeyPress::spaceKey && beatSyncKey()) return true;
+    return false;
+}
+
+bool TimelineView::keyStateChanged(bool isKeyDown)
+{
+    // Space let go: a hold ends (and a tap stays a tap).
+    if (!isKeyDown && beatSyncHeld && !juce::KeyPress::isKeyCurrentlyDown(juce::KeyPress::spaceKey)) beatSyncHeld = false;
+    return false;
+}
+
+void TimelineView::beginMoveDragForTest(const juce::String& clipId)
+{
+    const auto* clip = model().findClip(clipId);
+    if (clip == nullptr) return;
+    drag = DragKind::move;
+    dragDuplicates = false;
+    dragClipId = clip->id;
+    dragOriginStartMs = dragPreviewStartMs = clip->offsetMs;
+    dragOriginEndMs = dragPreviewEndMs = clip->endMs();
+    dragPreviewTrackId = clip->trackId;
+    beatSynced = beatSyncHeld = false;
+}
+
 bool TimelineView::beatSyncKey()
 {
     if (drag != DragKind::move) return false;
-    if (beatSyncHeld) return true; // the key repeating while held
+    const auto now = juce::Time::getMillisecondCounter();
+    if (beatSyncHeld)
+    {
+        // The key repeating while held: past the hold time the menu opens (in case the timer's
+        // check came too early).
+        if (!beatSyncMenuShown && now - beatSyncPressedAt >= 300) showBeatSyncMenu();
+        return true;
+    }
     const auto* clip = model().findClip(dragClipId);
     if (clip == nullptr) return true;
     beatSyncHeld = true;
+    beatSyncMenuShown = false;
+    beatSyncPressedAt = now;
+    const double before = dragPreviewStartMs;
     dragPreviewStartMs = beatsync::nearestBeat(model(), *clip, dragPreviewStartMs, dragPreviewTrackId);
     dragPreviewEndMs = dragPreviewStartMs + (dragOriginEndMs - dragOriginStartMs);
     beatSynced = true;
     beatSyncMouseX = getMouseXYRelative().x;
+    const auto* partner = beatsync::partnerFor(model(), *clip, dragPreviewStartMs, dragPreviewTrackId);
+    const auto* partnerItem = partner != nullptr ? model().findLibraryItem(partner->libraryItemId) : nullptr;
+    const double moved = dragPreviewStartMs - before;
+    beatSyncLabel = "Beat synced to " + (partnerItem != nullptr ? partnerItem->displayName() : juce::String("the grid")) + " ("
+                    + (moved >= 0 ? "+" : "") + juce::String(juce::roundToInt(moved)) + " ms) - hold Space for more";
+    log::info("beatsync", "tap clip=" + dragClipId + " moved=" + juce::String(moved, 1) + "ms");
     repaint();
     juce::Timer::callAfterDelay(350,
                                 [safe = juce::Component::SafePointer<TimelineView>(this)]
                                 {
-                                    if (safe == nullptr) return;
-                                    const bool still = juce::KeyPress::isKeyCurrentlyDown(juce::KeyPress::spaceKey);
-                                    if (still && safe->drag == DragKind::move) safe->showBeatSyncMenu();
-                                    safe->beatSyncHeld = false;
+                                    // Still held (no release came): the placements.
+                                    if (safe != nullptr && safe->beatSyncHeld && !safe->beatSyncMenuShown && safe->drag == DragKind::move)
+                                        safe->showBeatSyncMenu();
                                 });
     return true;
 }
@@ -1631,6 +1718,8 @@ void TimelineView::showBeatSyncMenu()
 {
     const auto* clip = model().findClip(dragClipId);
     if (clip == nullptr) return;
+    beatSyncMenuShown = true;
+    log::info("beatsync", "menu clip=" + dragClipId);
     const auto options = beatsync::placements(model(), *clip, dragPreviewStartMs, dragPreviewTrackId);
     const double beatMs = 60000.0 / juce::jmax(1.0, model().bpm);
     juce::PopupMenu menu;
@@ -1656,8 +1745,8 @@ void TimelineView::showBeatSyncMenu()
     // The menu takes the pointer: the drag ends here, placed by the choice (Esc: not moved).
     drag = DragKind::none;
     beatSynced = false;
-    const auto at = juce::Desktop::getMousePosition();
-    menu.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea({at.x, at.y, 1, 1}),
+    beatSyncLabel.clear();
+    menu.showMenuAsync(juce::PopupMenu::Options().withMousePosition(),
                        [safe = juce::Component::SafePointer<TimelineView>(this), options, origin, originEnd, clipId, trackId, duplicate](int result)
                        {
                            if (safe == nullptr) return;
@@ -1689,6 +1778,12 @@ void TimelineView::showBeatSyncMenu()
 void TimelineView::mouseUp(const juce::MouseEvent& e)
 {
     beatSynced = false;
+    beatSyncLabel.clear();
+    if (std::exchange(tempoResizing, false))
+    {
+        setMouseCursor(juce::MouseCursor::NormalCursor);
+        return;
+    }
     if (tempoDragIndex >= 0)
     {
         tempoDragIndex = -1;
@@ -1783,6 +1878,11 @@ void TimelineView::mouseUp(const juce::MouseEvent& e)
 
 void TimelineView::mouseMove(const juce::MouseEvent& e)
 {
+    if (overTempoLaneEdge(e.y))
+    {
+        setMouseCursor(juce::MouseCursor::UpDownResizeCursor);
+        return;
+    }
     if (e.y < VS::kRulerHeight)
     {
         setMouseCursor(markerAt(e.getPosition()) != nullptr ? juce::MouseCursor::LeftRightResizeCursor
@@ -2182,6 +2282,21 @@ void TimelineView::showClipMenu(const juce::String& clipId, double atMs)
                          view.changed();
                      });
         menu.addSeparator();
+        menu.addItem("Key Wheel...", [this, ids] { KeyWheel::show(mirror, actions, ids, {}); });
+        if (onQuickMashup)
+        {
+            // Each selected clip's track (a stem's source), once each.
+            std::vector<juce::String> items;
+            for (const auto& id : ids)
+                if (const auto* c = model().findClip(id))
+                    if (const auto* item = model().findLibraryItem(c->libraryItemId))
+                    {
+                        const auto source = item->kind == "stem" && item->sourceItemId.isNotEmpty() ? item->sourceItemId : item->id;
+                        if (std::find(items.begin(), items.end(), source) == items.end()) items.push_back(source);
+                    }
+            if (items.size() >= 2) menu.addItem("Quick Mashup...", [this, items] { onQuickMashup(items); });
+        }
+        menu.addSeparator();
         menu.addItem("Deselect", [this] { view.selectedClipIds.clear(); view.changed(); });
         menu.showMenuAsync(juce::PopupMenu::Options().withMousePosition(), [this, ids](int result)
                            {
@@ -2282,26 +2397,7 @@ void TimelineView::showClipMenu(const juce::String& clipId, double atMs)
         keyMenu.addItem("Down a Semitone", shift > -12, false, [this, clipId, shift] { actions.setClipKeyShift(clipId, shift - 1); });
         keyMenu.addItem("Reset Key", shift != 0, false, [this, clipId] { actions.setClipKeyShift(clipId, 0); });
         // The wheel: this clip, or every selected clip when it is one of them.
-        if (view.selectedClipIds.count(clipId) != 0 && view.selectedClipIds.size() > 1 && onQuickMashup)
-        {
-            // Each selected clip's track (a stem's source), once each.
-            std::vector<juce::String> items;
-            for (const auto& id : view.selectedClipIds)
-                if (const auto* c = model().findClip(id))
-                    if (const auto* item = model().findLibraryItem(c->libraryItemId))
-                    {
-                        const auto source = item->kind == "stem" && item->sourceItemId.isNotEmpty() ? item->sourceItemId : item->id;
-                        if (std::find(items.begin(), items.end(), source) == items.end()) items.push_back(source);
-                    }
-            if (items.size() >= 2) menu.addItem("Quick Mashup...", [this, items] { onQuickMashup(items); });
-        }
-        keyMenu.addItem("Key Wheel...", [this, clipId]
-                        {
-                            std::vector<juce::String> ids{clipId};
-                            if (view.selectedClipIds.count(clipId) != 0 && view.selectedClipIds.size() > 1)
-                                ids.assign(view.selectedClipIds.begin(), view.selectedClipIds.end());
-                            KeyWheel::show(mirror, actions, ids, {});
-                        });
+        keyMenu.addItem("Key Wheel...", [this, clipId] { KeyWheel::show(mirror, actions, {clipId}, {}); });
         bool first = true;
         for (const auto& [outId, inId] : mix::pairsFor(model(), clipId))
         {
@@ -2591,6 +2687,59 @@ void TimelineView::paintLanes(juce::Graphics& g, const TrackRow& row, const Trac
         g.drawText(juce::String(param->label) + "  " + automation::format(lane.paramId, current),
                    area.reduced(6.0f, 2.0f).toNearestInt(), juce::Justification::topLeft, false);
     }
+}
+
+bool TimelineView::showTransitionCurveMenu(juce::Point<float> p)
+{
+    const auto* list = model().raw.getProperty("mixTransitions", {}).getArray();
+    if (list == nullptr) return false;
+    for (const auto& t : *list)
+    {
+        const auto shape = transitionShape(t, std::nullopt);
+        if (!shape) continue;
+        for (const auto& [area, outgoing] : {std::pair{shape->out, true}, std::pair{shape->in, false}})
+        {
+            if (!area.contains(p)) continue;
+            const auto outId = t.getProperty("outClipId", {}).toString();
+            const auto inId = t.getProperty("inClipId", {}).toString();
+            const auto* clip = model().findClip(outgoing ? outId : inId);
+            if (clip == nullptr) return false;
+            const auto trackId = clip->trackId;
+            const auto points = automation::pointsOf(*model().findTrack(trackId), "level");
+            const double ms = view.xToMs(p.x);
+            // The segment leaving a point near the pointer, else the one under it.
+            int segment = -1;
+            for (size_t i = 0; i < points.size(); ++i)
+                if (std::abs(view.msToX(points[i].timeMs) - p.x) <= 6.0) segment = static_cast<int>(i);
+            if (segment < 0)
+                for (size_t i = 0; i + 1 < points.size(); ++i)
+                    if (points[i].timeMs <= ms && ms < points[i + 1].timeMs) segment = static_cast<int>(i);
+            juce::PopupMenu menu;
+            if (segment >= 0 && segment + 1 < static_cast<int>(points.size()))
+            {
+                menu.addSectionHeader(juce::String(outgoing ? "Fade out" : "Fade in") + " curve");
+                const auto& current = points[static_cast<size_t>(segment)];
+                for (const auto& [id, label] : automation::curveShapes())
+                    menu.addItem(label, true, current.curve == id,
+                                 [this, trackId, segment, shapeId = juce::String(id)]
+                                 {
+                                     if (const auto* tr = model().findTrack(trackId))
+                                     {
+                                         auto next = automation::pointsOf(*tr, "level");
+                                         if (segment + 1 >= static_cast<int>(next.size())) return;
+                                         next[static_cast<size_t>(segment)].curve = shapeId;
+                                         next[static_cast<size_t>(segment)].tension = 0.0;
+                                         actions.setAutomation(trackId, "level", next);
+                                     }
+                                 });
+                menu.addSeparator();
+            }
+            menu.addItem("Edit Transition...", [this, outId, inId] { TransitionEditor::show(mirror, actions, outId, inId); });
+            menu.showMenuAsync(juce::PopupMenu::Options().withMousePosition());
+            return true;
+        }
+    }
+    return false;
 }
 
 void TimelineView::showAutomationMenu(const juce::String& trackId, const juce::String& paramId, int pointIndex, double atMs)

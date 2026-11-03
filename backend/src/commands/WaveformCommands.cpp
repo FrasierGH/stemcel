@@ -19,9 +19,7 @@ using stemcel::bridge::tryGetRequiredString;
 
 double effectivePeaksPerSecond(const stemcel::waveform::PeaksResult& result)
 {
-    if (result.sampleRate <= 0.0 || result.peaksPerSecond <= 0) return static_cast<double>(result.peaksPerSecond);
-    const int samplesPerPeak = juce::jmax(1, static_cast<int>(result.sampleRate / result.peaksPerSecond));
-    return result.sampleRate / static_cast<double>(samplesPerPeak);
+    return result.bucketsPerSecond();
 }
 
 bool clipAddRequestsWaveform(const juce::var& payload)

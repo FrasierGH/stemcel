@@ -3033,7 +3033,7 @@ void SmokeTest::addTempoJourney()
                      {
                          autoTargetTracksBefore = static_cast<int>(model().tracks.size());
                          autoTargetLine = automix::build(engine, mirror, actions, *mixWaveforms, {tempoItemIds[0], tempoItemIds[1]}, false,
-                                                         "Smooth", false, 12.0);
+                                                         "Smooth", false, {{tempoItemIds[0], 12.0}, {tempoItemIds[1], 12.0}});
                      },
                      {},
                      [this](const juce::var&)
@@ -3077,6 +3077,72 @@ void SmokeTest::addTempoJourney()
                          return ok;
                      }});
     steps.back().poll = true;
+    // Auto mix with the tempo following the tracks: the tempo map starts the mix at the first
+    // track's tempo and ramps to the second's over the join, so neither is warped to the other.
+    steps.push_back({"auto mix with the tempo following",
+                     [this]
+                     {
+                         mirror.refreshNow();
+                         autoTargetTracksBefore = static_cast<int>(model().tracks.size());
+                         tempoMapBefore = model().tempoMap;
+                         autoTargetLine = automix::build(engine, mirror, actions, *mixWaveforms, {tempoItemIds[0], tempoItemIds[1]}, false,
+                                                         "Smooth", false, {}, true);
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         mirror.refreshNow();
+                         const auto* a = model().findLibraryItem(tempoItemIds[0]);
+                         const auto* b = model().findLibraryItem(tempoItemIds[1]);
+                         if (a == nullptr || b == nullptr || static_cast<int>(model().tracks.size()) < autoTargetTracksBefore + 2) return false;
+                         const auto& deckA = model().tracks[static_cast<size_t>(autoTargetTracksBefore)];
+                         const auto& deckB = model().tracks[static_cast<size_t>(autoTargetTracksBefore) + 1];
+                         if (deckA.clips.empty() || deckB.clips.empty()) return false;
+                         const auto curve = model().tempoCurve();
+                         const double atA = curve.bpmAt(deckA.clips.front().offsetMs + 1000.0);
+                         const double atB = curve.bpmAt(deckB.clips.front().endMs() - 1000.0);
+                         lastTempoLine = "auto mix, tempo following: " + juce::String(atA, 1) + " BPM under " + a->displayName() + " ("
+                                         + juce::String(a->bpm, 1) + "), " + juce::String(atB, 1) + " under " + b->displayName() + " ("
+                                         + juce::String(b->bpm, 1) + ")";
+                         const bool ok = std::abs(atA - a->bpm) < 0.1 && std::abs(atB - b->bpm) < 0.1;
+                         if (ok) report.add(lastTempoLine);
+                         juce::StringArray added;
+                         for (size_t i = static_cast<size_t>(autoTargetTracksBefore); i < model().tracks.size(); ++i) added.add(model().tracks[i].id);
+                         for (const auto& id : added) actions.removeTrack(id);
+                         actions.setTempoMap(tempoMapBefore);
+                         mirror.refreshNow();
+                         return ok;
+                     }});
+    steps.back().poll = true;
+    // Space during a clip drag reaches the timeline (through the window's key handling) and
+    // beat-syncs the clip rather than starting playback.
+    steps.push_back({"space during a drag",
+                     [this]
+                     {
+                         mirror.refreshNow();
+                         spaceDragOk = false;
+                         auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
+                         auto* timeline = window != nullptr ? findDescendant<TimelineView>(window) : nullptr;
+                         if (timeline == nullptr || model().tracks.empty()) return;
+                         juce::String clipId;
+                         for (const auto& t : model().tracks)
+                             if (!t.clips.empty() && clipId.isEmpty() && !t.clips.front().locked) clipId = t.clips.front().id;
+                         if (clipId.isEmpty() || window->getPeer() == nullptr) return;
+                         timeline->grabKeyboardFocus();
+                         timeline->beginMoveDragForTest(clipId);
+                         auto* workspace = findDescendant<Workspace>(window);
+                         if (workspace == nullptr) return;
+                         const bool wasPlaying = workspace->liveState().playing;
+                         window->getPeer()->handleKeyPress(juce::KeyPress(juce::KeyPress::spaceKey));
+                         spaceDragOk = timeline->isBeatSyncedForTest() && workspace->liveState().playing == wasPlaying;
+                         timeline->endDragForTest();
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         if (spaceDragOk) report.add("space during a drag: the timeline beat-synced the clip; playback untouched");
+                         return spaceDragOk;
+                     }});
     // Two files dropped at once: the prompt, answered "as dropped", mixes them on two decks.
     steps.push_back({"auto mix on drop",
                      [this]
@@ -3104,6 +3170,8 @@ void SmokeTest::addTempoJourney()
                              }
                              return false;
                          }
+                         // The Auto Mix dialog opens once the files are in: mix as it is set.
+                         automix::runOpenDialogForTest();
                          mirror.refreshNow();
                          const auto& m = model();
                          if (static_cast<int>(m.tracks.size()) < dropTracksBefore + 2) return false;
@@ -3326,6 +3394,9 @@ void SmokeTest::finish(bool ok, const juce::String& message)
     workDir.getChildFile("smoke-result.txt").replaceWithText(report.joinIntoString("\n") + "\n");
     log::info("smoke", report.joinIntoString(" | "));
     juce::JUCEApplicationBase::getInstance()->setApplicationReturnValue(ok ? 0 : 1);
+    // For trying something by hand in the finished smoke project (its own folder, never the
+    // user's open app or tabs): leave the window open.
+    if (juce::SystemStats::getEnvironmentVariable("STEMCEL_SMOKE_KEEP_OPEN", {}).isNotEmpty()) return;
     juce::JUCEApplicationBase::quit();
 }
 

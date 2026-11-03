@@ -921,8 +921,7 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
             const auto ids = selectedInOrder();
             menu.addItem("Auto Mix " + juce::String(static_cast<int>(ids.size())) + " Tracks...", [this, ids]
                          {
-                             automix::showDialog(static_cast<int>(ids.size()), [this, ids](automix::Options o)
-                                                 { ctx.autoMix(ids, o.reorder, o.style, o.matchKeys, o.targetSec); });
+                             automix::showDialog(ctx.mirror.model(), ids, true, [this, ids](automix::Options o) { ctx.autoMix(ids, o); });
                          });
             if (ctx.mashup != nullptr) menu.addItem("Quick Mashup...", [this, ids] { ctx.mashup(ids); });
         }

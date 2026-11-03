@@ -625,7 +625,7 @@ void TrackHeaders::paintHeader(juce::Graphics& g)
     g.fillAll(colours::zinc900);
     if (view.tempoLaneVisible)
     {
-        const juce::Rectangle<int> lane(0, VS::kRulerHeight, getWidth(), VS::kTempoLaneHeight);
+        const juce::Rectangle<int> lane(0, VS::kRulerHeight, getWidth(), view.tempoLaneHeight);
         g.setColour(colours::zinc950);
         g.fillRect(lane);
         auto text = lane.reduced(8, 10);

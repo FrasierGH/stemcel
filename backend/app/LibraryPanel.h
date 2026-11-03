@@ -2,6 +2,7 @@
 
 #include "AppPreferences.h"
 #include "AudioImport.h"
+#include "AutoMix.h"
 #include "EngineClient.h"
 #include "LiveState.h"
 #include "ProjectModel.h"
@@ -59,7 +60,7 @@ struct LibraryContext
     std::function<void(const juce::String& itemId)> openScratch;
     std::function<void(const juce::String& itemId)> openEditor;
     // Lays the tracks out as a DJ mix (automix::build): harmonically reordered or as given.
-    std::function<void(std::vector<juce::String> itemIds, bool reorder, const juce::String& style, bool matchKeys, double targetSec)> autoMix;
+    std::function<void(std::vector<juce::String> itemIds, automix::Options options)> autoMix;
     // Quick Mashup of these tracks (the dialog, then MashupBuilder).
     std::function<void(std::vector<juce::String> itemIds)> mashup;
     // Stemcel's own analysis of a track's sections (SectionAnalyser), run again.
