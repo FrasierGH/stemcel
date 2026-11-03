@@ -6,6 +6,37 @@
 
 namespace stemcel::plugins
 {
+#if JUCE_MAC
+// PluginEditorWindowMac.mm: [owner addChildWindow:child ordered:NSWindowAbove].
+void attachChildWindow(void* ownerView, void* childView);
+#endif
+
+namespace
+{
+juce::Component::SafePointer<juce::Component>& owner()
+{
+    static juce::Component::SafePointer<juce::Component> window;
+    return window;
+}
+
+// Makes the editor an owned window of the main window (Windows) or its child window (macOS).
+void attachToOwner(juce::Component& editorWindow)
+{
+    auto* main = owner().getComponent();
+    if (main == nullptr || main->getPeer() == nullptr || editorWindow.getPeer() == nullptr) return;
+#if JUCE_WINDOWS
+    ::SetWindowLongPtr(static_cast<HWND>(editorWindow.getWindowHandle()), GWLP_HWNDPARENT,
+                       reinterpret_cast<LONG_PTR>(main->getWindowHandle()));
+#elif JUCE_MAC
+    attachChildWindow(main->getWindowHandle(), editorWindow.getWindowHandle());
+#endif
+}
+} // namespace
+
+void PluginEditorWindow::setOwner(juce::Component* mainWindow)
+{
+    owner() = mainWindow;
+}
 #if JUCE_WINDOWS
 namespace
 {
@@ -50,6 +81,7 @@ PluginEditorWindow::PluginEditorWindow(juce::AudioPluginInstance& plugin,
     setResizable(editor->isResizable(), false);
     centreWithSize(getWidth(), getHeight());
     setVisible(true);
+    attachToOwner(*this);
     bringToFrontAndFocus();
 }
 

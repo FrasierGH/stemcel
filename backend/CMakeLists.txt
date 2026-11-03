@@ -546,6 +546,7 @@ target_compile_definitions(stemcel_backend_core PUBLIC
     JUCE_PLUGINHOST_ARA=0)
 if(APPLE)
     target_compile_definitions(stemcel_backend_core PUBLIC JUCE_PLUGINHOST_AU=1)
+    target_sources(stemcel_backend_core PRIVATE src/plugins/PluginEditorWindowMac.mm)
 else()
     target_compile_definitions(stemcel_backend_core PUBLIC JUCE_PLUGINHOST_AU=0)
 endif()

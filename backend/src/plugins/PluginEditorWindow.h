@@ -25,6 +25,10 @@ class PluginEditorWindow final : public juce::DocumentWindow
 
     void closeButtonPressed() override;
 
+    // The window plugin editors belong to (the app's main window): they stay in front of it,
+    // not of other apps, and minimise with it. Null: free-standing windows.
+    static void setOwner(juce::Component* mainWindow);
+
   private:
     std::function<void()> closedCallback;
 
