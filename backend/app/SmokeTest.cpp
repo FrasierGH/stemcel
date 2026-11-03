@@ -1,5 +1,7 @@
 #include "SmokeTest.h"
 
+#include "ProjectSession.h"
+
 #include "RekordboxBrowser.h"
 
 #include "Db.h"
@@ -2214,6 +2216,9 @@ void SmokeTest::addTempoJourney()
                          tabsTracksBefore = static_cast<int>(model().tracks.size());
                          actions.copyClips({tempoLateClipId});
                          if (const auto* clip = model().findClip(tempoLateClipId)) tabsPastedItem = clip->libraryItemId;
+                         // A stem file of this tab's, unsaved: a new tab must not take it away.
+                         tabsTempMarker = stemcel::tempArtifactsRoot().getChildFile("stems").getChildFile("smoke-marker.wav");
+                         tabsTempMarker.create();
                          if (auto* strip = findDescendant<ProjectTabStrip>(juce::TopLevelWindow::getTopLevelWindow(0)))
                              strip->controller.newProject();
                      },
@@ -2256,10 +2261,10 @@ void SmokeTest::addTempoJourney()
                          const auto& tabs = strip->controller.projectTabs();
                          const bool ok = strip->controller.activeTabIndex() == 0 && static_cast<int>(model().tracks.size()) == tabsTracksBefore
                                          && model().findClip(tempoLateClipId) != nullptr && tabs.size() == 2 && tabs[1].parked.existsAsFile()
-                                         && !tabs[0].parked.existsAsFile();
+                                         && !tabs[0].parked.existsAsFile() && tabsTempMarker.existsAsFile();
                          lastTempoLine = "tabs: back with " + juce::String(static_cast<int>(model().tracks.size())) + " tracks (had "
                                          + juce::String(tabsTracksBefore) + "), tab 2 parked=" + (tabs.size() == 2 && tabs[1].parked.existsAsFile() ? "yes" : "no");
-                         if (ok) report.add(lastTempoLine);
+                         if (ok) report.add(lastTempoLine + ", its temp stems kept");
                          return ok;
                      }});
     steps.back().poll = true;

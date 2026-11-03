@@ -1,5 +1,6 @@
 #include "AppController.h"
 #include "AppPaths.h"
+#include "ProjectSession.h"
 
 #include "Log.h"
 #include "MediaStore.h"
@@ -66,6 +67,7 @@ AppController::AppController(EngineClient& engineClient, AppPreferences& prefere
                          changed();
                      });
     startTimer(seamlessSaveSeconds * 1000);
+    sweepOldTempSessions();
     subscriptions.on("PROJECT_LOAD_FAILED",
                      [this](const juce::var& p)
                      {
@@ -104,6 +106,7 @@ void AppController::newProject()
     if (workspaceOpen) parkActive();
     addTab();
     awaitingTabState = true;
+    enterTabScope();
     engine.send("PROJECT_NEW");
     workspaceOpen = true;
     changed();
@@ -144,6 +147,7 @@ void AppController::openProject(const juce::File& file)
                        && !tabs[static_cast<size_t>(activeTab)].dirty && !tabs[static_cast<size_t>(activeTab)].parked.existsAsFile();
     if (!reuse) addTab();
     awaitingTabState = true;
+    enterTabScope();
     engine.send("PROJECT_LOAD", filePathPayload(file));
     // PROJECT_LOAD_FAILED reports a failure; success arrives as a reset PROJECT_STATE.
     workspaceOpen = true;
@@ -158,6 +162,7 @@ void AppController::restoreAutosave(const Autosave::Entry& entry)
 {
     if (workspaceOpen) parkActive();
     if (workspaceOpen || tabs.empty()) addTab();
+    enterTabScope();
     autosave.restore(entry);
     workspaceOpen = true;
     changed();
@@ -187,6 +192,7 @@ void AppController::timerCallback()
         return;
     }
     startTimer(seamlessSaveSeconds * 1000);
+    sweepOldTempSessions();
     quietSave = true;
     if (saveViewState) saveViewState();
     engine.send("PROJECT_SAVE");
@@ -261,10 +267,11 @@ void AppController::requestQuit()
     // Parked tabs go with a deliberate quit; after a crash they stay, ordinary projects to open.
     const auto quit = [this]
     {
-        guardUnsavedChanges([]
+        guardUnsavedChanges([this]
                             {
                                 for (const auto& f : tabStore().findChildFiles(juce::File::findFiles, false, "*.stemcel"))
                                     f.deleteFile();
+                                for (const auto& t : tabs) stemcel::tempArtifactsRootFor(t.id).deleteRecursively();
                                 juce::JUCEApplicationBase::quit();
                             });
     };
@@ -287,6 +294,22 @@ void AppController::requestQuit()
 juce::File AppController::tabStore()
 {
     return juce::File::getSpecialLocation(juce::File::userHomeDirectory).getChildFile(appFolderName()).getChildFile("Tabs");
+}
+
+void AppController::enterTabScope()
+{
+    if (activeTab >= 0 && activeTab < static_cast<int>(tabs.size()))
+        stemcel::setTempSessionScope(tabs[static_cast<size_t>(activeTab)].id);
+}
+
+void AppController::sweepOldTempSessions()
+{
+    // Workspaces of tabs from earlier runs (a crash, or a parked tab never reopened): kept two
+    // weeks, as a parked tab's project may still point into one, then removed.
+    const auto root = systemTempDirectory().getChildFile(appFolderName());
+    const auto cutoff = juce::Time::getCurrentTime() - juce::RelativeTime::days(14);
+    for (const auto& dir : root.findChildFiles(juce::File::findDirectories, false, "session-*"))
+        if (dir.getLastModificationTime() < cutoff) dir.deleteRecursively();
 }
 
 void AppController::addTab()
@@ -335,6 +358,7 @@ void AppController::switchToTab(int index)
     parkActive();
     activeTab = index;
     awaitingTabState = true;
+    enterTabScope();
     auto& tab = tabs[static_cast<size_t>(index)];
     if (tab.parked.existsAsFile())
     {
@@ -359,6 +383,8 @@ void AppController::closeTab(int index)
     const auto remove = [this, index]
     {
         tabs[static_cast<size_t>(index)].parked.deleteFile();
+        // Its unsaved stems, samples and recordings go with it (once another project is open).
+        const auto closedScope = stemcel::tempArtifactsRootFor(tabs[static_cast<size_t>(index)].id);
         const bool wasActive = index == activeTab;
         tabs.erase(tabs.begin() + index);
         if (tabs.empty())
@@ -367,6 +393,7 @@ void AppController::closeTab(int index)
             activeTab = -1;
             addTab();
             awaitingTabState = true;
+            enterTabScope();
             engine.send("PROJECT_NEW");
         }
         else if (wasActive)
@@ -375,6 +402,7 @@ void AppController::closeTab(int index)
             const int next = juce::jmin(index, static_cast<int>(tabs.size()) - 1);
             activeTab = next;
             awaitingTabState = true;
+            enterTabScope();
             auto& tab = tabs[static_cast<size_t>(next)];
             if (tab.parked.existsAsFile())
             {
@@ -392,6 +420,7 @@ void AppController::closeTab(int index)
         }
         else if (index < activeTab)
             --activeTab;
+        closedScope.deleteRecursively();
         changed();
     };
     if (index == activeTab)

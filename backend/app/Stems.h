@@ -49,6 +49,7 @@ class StemService final
     struct Job
     {
         juce::String sourceItemId, clipId, sourceName, mediaId;
+        juce::String scope; // the tab that asked: its stems are added there
         double sourceInMs = 0.0;
         double startMs = 0.0;
         std::set<juce::String> placed;
@@ -68,6 +69,14 @@ class StemService final
     AppPreferences& prefs;
     Subscriptions subscriptions;
     std::map<juce::String, Job> jobs;
+    // Separations that finished while another tab was open, added when theirs is again.
+    struct Finished
+    {
+        Job job;
+        std::map<juce::String, juce::File> stems;
+    };
+    std::vector<Finished> waiting;
+    void deliverWaiting();
     juce::String activeJob;
     std::unique_ptr<uvr::Job> uvrJob;
 };

@@ -548,9 +548,41 @@ void rebuildEngineFromProject(stemcel::AudioEngine& engine, stemcel::ProjectStat
     syncEngineProjectSettings(engine, projectState);
 }
 
+namespace
+{
+juce::CriticalSection& scopeLock()
+{
+    static juce::CriticalSection lock;
+    return lock;
+}
+juce::String& scopeValue()
+{
+    static juce::String scope;
+    return scope;
+}
+} // namespace
+
+void setTempSessionScope(const juce::String& scope)
+{
+    const juce::ScopedLock sl(scopeLock());
+    scopeValue() = scope;
+}
+
+juce::String tempSessionScope()
+{
+    const juce::ScopedLock sl(scopeLock());
+    return scopeValue();
+}
+
+juce::File tempArtifactsRootFor(const juce::String& scope)
+{
+    const auto safe = scope.retainCharacters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_");
+    return systemTempDirectory().getChildFile(appFolderName()).getChildFile("session-" + (safe.isNotEmpty() ? safe : juce::String("default")));
+}
+
 juce::File tempArtifactsRoot()
 {
-    return systemTempDirectory().getChildFile(appFolderName());
+    return tempArtifactsRootFor(tempSessionScope());
 }
 
 juce::File projectArtifactsBaseDir(const juce::String& projectPath, const juce::String& subdir)

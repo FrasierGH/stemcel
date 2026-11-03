@@ -93,6 +93,9 @@ class AppController : private juce::Timer
     void parkActive();
     void syncActiveTab();
     void addTab();
+    // Points the engine's temp workspace at the active tab's own folder (before a load or new).
+    void enterTabScope();
+    static void sweepOldTempSessions();
     void changed();
     void notify(const juce::String& message, bool isError);
 

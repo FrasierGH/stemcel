@@ -168,6 +168,7 @@ class SmokeTest final : private juce::Timer
     int mashupTracksBefore = 0;
     int tabsTracksBefore = 0;
     juce::String tabsPastedItem;
+    juce::File tabsTempMarker;
     std::unique_ptr<juce::Component> editorView;
 };
 

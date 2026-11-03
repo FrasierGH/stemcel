@@ -17,9 +17,15 @@ struct ProjectSession
 
 juce::StringArray collectClipIds(const ProjectState& projectState);
 
-// Root of the per-session temporary workspace for an unsaved project's generated
-// artifacts (separated stems, exported samples). Everything beneath it is
-// discarded when the project is saved or a new project is started.
+// Each project tab works in a temporary workspace of its own (<temp>/Stemcel/session-<scope>)
+// for an unsaved project's generated artifacts (separated stems, exported samples,
+// recordings), so opening, switching or closing one tab never touches another's files. The
+// app sets the scope (the tab's id) before it loads or starts a project in that tab.
+void setTempSessionScope(const juce::String& scope);
+juce::String tempSessionScope();
+juce::File tempArtifactsRootFor(const juce::String& scope);
+// The current tab's workspace: moved into the project folder on its first save, and removed
+// by the app only when its tab is closed without saving.
 juce::File tempArtifactsRoot();
 
 // Base directory for a generated-artifact category (e.g. "stems", "samples"):
