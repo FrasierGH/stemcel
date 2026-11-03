@@ -2123,16 +2123,33 @@ void TimelineView::itemDropped(const SourceDetails& details)
         repaint();
         return;
     }
-    const auto itemId = details.description.toString().fromFirstOccurrenceOf("libraryItem:", false, false);
-    const auto* item = model().findLibraryItem(itemId);
-    if (item == nullptr) return;
+    // One library item, or several (comma-separated): placed one after another on the track.
+    const auto ids = juce::StringArray::fromTokens(details.description.toString().fromFirstOccurrenceOf("libraryItem:", false, false), ",", {});
+    if (ids.isEmpty() || model().findLibraryItem(ids[0]) == nullptr) return;
     juce::String trackId;
     if (const int index = trackRowIndexAtY(details.localPosition.y); index >= 0)
         trackId = rows[static_cast<size_t>(index)].trackId;
     else
         trackId = actions.addTrack();
-    const auto clipId = actions.addClip(trackId, *item, actions.snap(view.xToMs(details.localPosition.x)));
-    view.selectedClipIds = {clipId};
+    double at = actions.snap(view.xToMs(details.localPosition.x));
+    std::set<juce::String> placed;
+    actions.engineClient().inUndoGroup(ids.size() > 1 ? "Add clips" : "Add clip", [&]
+    {
+        for (const auto& id : ids)
+        {
+            mirror.refreshNow();
+            const auto* item = model().findLibraryItem(id);
+            if (item == nullptr) continue;
+            const auto clipId = actions.addClip(trackId, *item, at);
+            mirror.refreshNow();
+            if (const auto* clip = model().findClip(clipId))
+            {
+                placed.insert(clipId);
+                at = clip->endMs();
+            }
+        }
+    });
+    view.selectedClipIds = placed;
     view.selectedTrackId = trackId;
     view.changed();
 }

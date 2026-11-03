@@ -3133,7 +3133,12 @@ void SmokeTest::addTempoJourney()
                          auto* workspace = findDescendant<Workspace>(window);
                          if (workspace == nullptr) return;
                          const bool wasPlaying = workspace->liveState().playing;
-                         window->getPeer()->handleKeyPress(juce::KeyPress(juce::KeyPress::spaceKey));
+                         // Through the window when the timeline has the keyboard; a build machine's
+                         // window is never active, so there it goes to the timeline directly.
+                         if (juce::Component::getCurrentlyFocusedComponent() == timeline)
+                             window->getPeer()->handleKeyPress(juce::KeyPress(juce::KeyPress::spaceKey));
+                         else
+                             timeline->keyPressed(juce::KeyPress(juce::KeyPress::spaceKey));
                          spaceDragOk = timeline->isBeatSyncedForTest() && workspace->liveState().playing == wasPlaying;
                          timeline->endDragForTest();
                      },

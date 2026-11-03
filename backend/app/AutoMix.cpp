@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <utility>
 
 namespace stemcel::native::automix
 {
@@ -506,6 +507,9 @@ class OptionsDialog final : public juce::Component
 
     void runNow()
     {
+        // Once: the window closes asynchronously, and a second click (or test poll) must not mix again.
+        if (std::exchange(ran, true)) return;
+        if (openDialog == this) openDialog = nullptr;
         Options o;
         o.reorder = order.getSelectedItemIndex() == 0;
         o.style = style.getText();
@@ -562,6 +566,7 @@ class OptionsDialog final : public juce::Component
     juce::ToggleButton matchKeys{"Match keys"};
     juce::ToggleButton tempoFollows{"Tempo follows each track (no warping to the first track's BPM)"};
     juce::TextButton go, cancel{"Cancel"};
+    bool ran = false;
 };
 } // namespace
 

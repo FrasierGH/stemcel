@@ -728,7 +728,11 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
         dragStarted = true;
         // Onto a track to place it (the timeline takes one item per drop).
         if (auto* container = juce::DragAndDropContainer::findParentDragContainerFor(this))
-            container->startDragging("libraryItem:" + hit->itemId, &canvas,
+            // Several selected: all of them, in on-screen order (ids joined by commas).
+            container->startDragging("libraryItem:" + (selection.count(hit->itemId) != 0 && selection.size() > 1
+                                                           ? juce::StringArray([&] { juce::StringArray a; for (const auto& id : selectedInOrder()) a.add(id); return a; }()).joinIntoString(",")
+                                                           : hit->itemId),
+                                     &canvas,
                                      juce::ScaledImage(canvas.createComponentSnapshot(hit->bounds.withHeight(juce::jmin(hit->bounds.getHeight(), 40)))));
     }
 
