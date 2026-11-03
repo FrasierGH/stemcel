@@ -150,7 +150,11 @@ jobs:
           $exe = 'backend/build/StemcelNative_artefacts/Debug/Stemcel.exe'
           $p = Start-Process -FilePath $exe -ArgumentList '--smoke-test', "`"$dir`"" -Wait -PassThru
           Get-Content (Join-Path $dir 'smoke-result.txt') -ErrorAction SilentlyContinue
-          if ($p.ExitCode -ne 0) { Write-Host "::error::Native smoke test exited $($p.ExitCode)"; exit 1 }
+          if ($p.ExitCode -ne 0) {
+            # Where it stopped: the app's own log (the result file is only written at the end).
+            Get-Content (Join-Path $env:USERPROFILE 'Stemcel\Diagnosticsackend.log') -Tail 120 -ErrorAction SilentlyContinue
+            Write-Host "::error::Native smoke test exited $($p.ExitCode)"; exit 1
+          }
 
       # Handed to the e2e job so it runs the binary this job proved, and so the
       # backend is built once rather than twice. The directory is otherwise
