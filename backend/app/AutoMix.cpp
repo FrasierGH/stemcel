@@ -355,9 +355,14 @@ juce::String build(EngineClient& engine, ProjectMirror& mirror, TimelineActions&
                     if (tempoFollows && item->bpm > 0.0)
                     {
                         mirror.refreshNow();
+                        const double inBpm = item->bpm;
                         if (const auto* out = mirror.model().findClip(previousClip))
-                            mix::rampTempoTo(engine, actions, mirror.model(), *out, item->bpm, windowStart, windowEnd);
+                            mix::rampTempoTo(engine, actions, mirror.model(), *out, inBpm, windowStart, windowEnd);
                         mirror.refreshNow();
+                        // A refresh rebuilds the model: fetch the incoming item again.
+                        item = mirror.model().findLibraryItem(itemIds[i]);
+                        before = nullptr;
+                        if (item == nullptr) continue;
                     }
                 }
             const auto clipId = actions.addClip(deck, *item, windowStart);
