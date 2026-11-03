@@ -673,14 +673,51 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
             if (filter.getText().trim().isEmpty()) setCollapsed(hit->itemId, expanded(*ctx.mirror.model().findLibraryItem(hit->itemId)));
             return;
         }
-        if (e.mods.isCommandDown())
+        if (e.mods.isShiftDown() && anchor.isNotEmpty() && !e.mods.isPopupMenu())
+        {
+            // A span, from the last plain or Cmd/Ctrl click to this one, in on-screen order;
+            // with Cmd/Ctrl too it is added to what is selected.
+            if (!e.mods.isCommandDown()) selection.clear();
+            const auto order = onScreenOrder();
+            const auto from = std::find(order.begin(), order.end(), anchor);
+            const auto to = std::find(order.begin(), order.end(), hit->itemId);
+            if (from == order.end() || to == order.end())
+                selection.insert(hit->itemId);
+            else
+                for (auto it = std::min(from, to); it <= std::max(from, to); ++it) selection.insert(*it);
+        }
+        else if (e.mods.isCommandDown())
         {
             if (!selection.erase(hit->itemId)) selection.insert(hit->itemId);
+            anchor = hit->itemId;
         }
         else if (selection.count(hit->itemId) == 0 || !e.mods.isPopupMenu())
+        {
             selection = {hit->itemId};
+            anchor = hit->itemId;
+        }
         canvas.repaint();
         if (e.mods.isPopupMenu()) showMenu(hit->itemId);
+    }
+
+    // Every item as the panel shows it, top to bottom and left to right (collapsed rows aside).
+    std::vector<juce::String> onScreenOrder() const
+    {
+        std::vector<juce::String> out;
+        for (const auto& h : hits)
+            if (h.kind != Hit::Kind::toggle && std::find(out.begin(), out.end(), h.itemId) == out.end()) out.push_back(h.itemId);
+        return out;
+    }
+
+    // The selection in on-screen order: what multi-item actions take them in.
+    std::vector<juce::String> selectedInOrder() const
+    {
+        std::vector<juce::String> out;
+        for (const auto& id : onScreenOrder())
+            if (selection.count(id) != 0) out.push_back(id);
+        for (const auto& id : selection)
+            if (std::find(out.begin(), out.end(), id) == out.end()) out.push_back(id);
+        return out;
     }
 
     void canvasDrag(const juce::MouseEvent& e)
@@ -881,9 +918,7 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
         // Two or more tracks selected: mix them (in the library's order, or harmonically).
         if (selection.count(id) != 0 && selection.size() >= 2 && ctx.autoMix != nullptr)
         {
-            std::vector<juce::String> ids;
-            for (const auto& i : ctx.mirror.model().library)
-                if (selection.count(i.id) != 0) ids.push_back(i.id);
+            const auto ids = selectedInOrder();
             juce::PopupMenu harmonic, matched, asListed;
             for (const auto& style : automix::styles())
             {
@@ -919,7 +954,7 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
         menu.addItem("Key Wheel...", [this, id]
                      {
                          std::vector<juce::String> ids{id};
-                         if (selection.count(id) != 0 && selection.size() > 1) ids.assign(selection.begin(), selection.end());
+                         if (selection.count(id) != 0 && selection.size() > 1) ids = selectedInOrder();
                          KeyWheel::show(ctx.mirror, ctx.actions, {}, ids);
                      });
         if (isFile)
@@ -1166,6 +1201,7 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
     std::vector<juce::Rectangle<int>> groupBounds;
     juce::Rectangle<int> orphanHeader;
     std::set<juce::String> selection;
+    juce::String anchor; // where a shift-click span starts
     std::map<juce::String, int> uses;
     std::map<juce::String, juce::var> metadataCache;
     std::map<juce::String, juce::Image> coverCache;
