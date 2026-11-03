@@ -2060,6 +2060,27 @@ void SmokeTest::addTempoJourney()
                      [this, clipTotal](const juce::var&)
                      { return clipTotal() == dragClipsBefore + 1 && static_cast<int>(model().tracks.size()) == dragTracksBefore + 1; }});
     steps.back().poll = true;
+    // Several library items dragged together: each placed, one after another, below the tracks.
+    steps.push_back({"drag several library items",
+                     [this, dropOnTimeline, clipTotal]
+                     {
+                         dragClipsBefore = clipTotal();
+                         dragTracksBefore = static_cast<int>(model().tracks.size());
+                         juce::String second;
+                         for (const auto& item : model().library)
+                             if (item.id != dragItemId && item.kind == "source" && second.isEmpty()) second = item.id;
+                         dropOnTimeline("libraryItem:" + dragItemId + "," + second, true);
+                     },
+                     {},
+                     [this, clipTotal](const juce::var&)
+                     {
+                         if (clipTotal() != dragClipsBefore + 2 || static_cast<int>(model().tracks.size()) != dragTracksBefore + 1) return false;
+                         const auto& clips = model().tracks.back().clips;
+                         const bool inTurn = clips.size() == 2 && std::abs(clips[1].offsetMs - clips[0].endMs()) < 1.0;
+                         if (inTurn) report.add("drag several library items: two clips, one after the other, on a new track");
+                         return inTurn;
+                     }});
+    steps.back().poll = true;
     steps.push_back({"drag file to timeline",
                      [this, dropOnTimeline, clipTotal]
                      {
