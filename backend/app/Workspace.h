@@ -83,7 +83,7 @@ class Workspace final : public juce::Component, public juce::DragAndDropContaine
     // after the arrangement: harmonically ordered, or in the order given.
     void importAndMix(std::vector<ImportRequest> requests, bool harmonic);
     // The library's Auto Mix: builds the mix and shows it.
-    void runAutoMix(std::vector<juce::String> itemIds, bool reorder, const juce::String& style, bool matchKeys);
+    void runAutoMix(std::vector<juce::String> itemIds, bool reorder, const juce::String& style, bool matchKeys, double targetSec = 0.0);
 
     ProjectMirror& projectMirror() { return mirror; }
     TimelineActions& timelineActions() { return actions; }

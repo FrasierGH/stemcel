@@ -160,6 +160,8 @@ class SmokeTest final : private juce::Timer
     double beatSyncExpected = 0.0, beatSyncResult = 0.0;
     bool beatSyncMenuOk = false;
     int quickMashupKeyed = 0;
+    int autoTargetTracksBefore = 0;
+    juce::String autoTargetLine;
     size_t quickMashupFollowers = 0;
     juce::String quickMashupLeadClip, quickMashupVocalClip;
     juce::String wheelLine, wheelItemId, wheelItemKey;

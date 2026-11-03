@@ -1,7 +1,11 @@
 #include "AutoMix.h"
 
+#include "BeatSync.h"
 #include "MixTransitions.h"
+#include "Theme.h"
 #include "TimelineActions.h"
+
+#include <juce_gui_basics/juce_gui_basics.h>
 
 #include <algorithm>
 #include <cmath>
@@ -239,7 +243,7 @@ std::vector<juce::String> harmonicOrder(const ProjectModel& model, WaveformStore
 }
 
 juce::String build(EngineClient& engine, ProjectMirror& mirror, TimelineActions& actions, WaveformStore& waveforms,
-                   std::vector<juce::String> itemIds, bool reorder, const juce::String& style, bool matchKeys)
+                   std::vector<juce::String> itemIds, bool reorder, const juce::String& style, bool matchKeys, double targetSec)
 {
     itemIds.erase(std::remove_if(itemIds.begin(), itemIds.end(),
                                  [&](const juce::String& id) { return mirror.model().findLibraryItem(id) == nullptr; }),
@@ -247,7 +251,7 @@ juce::String build(EngineClient& engine, ProjectMirror& mirror, TimelineActions&
     if (itemIds.size() < 2) return "Select at least two tracks to auto mix.";
     if (reorder) itemIds = harmonicOrder(mirror.model(), waveforms, itemIds);
 
-    int joins = 0, shifted = 0;
+    int joins = 0, shifted = 0, atSections = 0;
     juce::StringArray used;
     engine.inUndoGroup("Auto Mix", [&]
     {
@@ -283,13 +287,43 @@ juce::String build(EngineClient& engine, ProjectMirror& mirror, TimelineActions&
                     presetId = choice.presetId;
                     const auto* preset = mix::find(presetId);
                     const double lengthBeats = (preset != nullptr ? preset->bars : 8.0) * kBeatsPerBar;
-                    // The join starts on a phrase of the outgoing track, as late as its length allows.
+                    // The join starts on a phrase of the outgoing track: its phrases are counted from its
+                    // own first downbeat (it was placed with its downbeats on the bar lines).
                     const auto c = mirror.model().tempoCurve();
                     const double prevStart = c.beatAt(prev->offsetMs);
                     const double prevEnd = c.beatAt(prev->endMs());
-                    const double phrases = std::floor((prevEnd - lengthBeats - prevStart) / kPhraseBeats);
-                    const double startBeat = phrases >= 1.0 ? prevStart + phrases * kPhraseBeats
-                                                            : juce::jmax(prevStart, std::floor((prevEnd - lengthBeats) / kBeatsPerBar) * kBeatsPerBar);
+                    const auto fits = [&](double b) { return b >= prevStart - 0.01 && b + lengthBeats <= prevEnd + 0.01; };
+                    std::vector<size_t> down;
+                    const auto beats = beatsync::clipBeatsMs(mirror.model(), *prev, prev->offsetMs, &down);
+                    std::vector<double> phraseStarts;
+                    for (size_t k = 0; k < down.size(); k += static_cast<size_t>(kPhraseBeats / kBeatsPerBar))
+                        if (const double b = std::round(c.beatAt(beats[down[k]])); fits(b)) phraseStarts.push_back(b);
+                    double startBeat = -1.0;
+                    if (targetSec > 0.0)
+                    {
+                        // Near the target play time: a breakdown or outro first (within a third of
+                        // the target either way), else the nearest phrase.
+                        const double want = c.beatAt(prev->offsetMs + targetSec * 1000.0);
+                        const double slack = (want - prevStart) / 3.0;
+                        double bestDistance = slack;
+                        for (const double ms : beatsync::sectionStartsMs(mirror.model(), *prev, prev->offsetMs, {"breakdown", "outro"}))
+                            if (const double b = std::round(c.beatAt(ms) / kBeatsPerBar) * kBeatsPerBar; fits(b) && std::abs(b - want) <= bestDistance)
+                            {
+                                bestDistance = std::abs(b - want);
+                                startBeat = b;
+                            }
+                        if (startBeat >= 0.0) ++atSections;
+                        else
+                            for (const double b : phraseStarts)
+                                if (startBeat < 0.0 || std::abs(b - want) < std::abs(startBeat - want)) startBeat = b;
+                    }
+                    if (startBeat < 0.0 && !phraseStarts.empty()) startBeat = phraseStarts.back(); // as late as it fits
+                    if (startBeat < 0.0)
+                    {
+                        const double phrases = std::floor((prevEnd - lengthBeats - prevStart) / kPhraseBeats);
+                        startBeat = phrases >= 1.0 ? prevStart + phrases * kPhraseBeats
+                                                   : juce::jmax(prevStart, std::floor((prevEnd - lengthBeats) / kBeatsPerBar) * kBeatsPerBar);
+                    }
                     windowStart = c.msAtBeat(startBeat);
                     windowEnd = c.msAtBeat(startBeat + lengthBeats);
                     // The outgoing track mixes out at the end of the join.
@@ -297,6 +331,50 @@ juce::String build(EngineClient& engine, ProjectMirror& mirror, TimelineActions&
                 }
             const auto clipId = actions.addClip(deck, *item, windowStart);
             mirror.refreshNow();
+            // Beat-aligned: its first downbeat on the join's start, or, aiming at a play time, its
+            // first drop as the join ends (the intro under the join); nothing of it before the join.
+            if (const auto* placed = mirror.model().findClip(clipId))
+            {
+                std::vector<size_t> down;
+                const auto beats = beatsync::clipBeatsMs(mirror.model(), *placed, placed->offsetMs, &down);
+                double anchor = -1.0, to = windowStart;
+                if (targetSec > 0.0 && previousClip.isNotEmpty())
+                {
+                    const auto drops = beatsync::sectionStartsMs(mirror.model(), *placed, placed->offsetMs, {"drop", "chorus"});
+                    if (!drops.empty() && drops.front() - placed->offsetMs >= windowEnd - windowStart)
+                    {
+                        anchor = drops.front();
+                        to = windowEnd;
+                    }
+                }
+                if (anchor < 0.0 && !down.empty()) anchor = beats[down.front()];
+                const double offset = placed->offsetMs + (to - anchor);
+                if (anchor >= 0.0 && offset >= 0.0)
+                {
+                    // Then onto the grid by the median of all its downbeats, so a slight tempo
+                    // difference spreads both ways rather than piling up at the far end.
+                    const auto c = mirror.model().tempoCurve();
+                    std::vector<double> errors;
+                    for (const auto i : down)
+                    {
+                        const double t = beats[i] + (to - anchor);
+                        errors.push_back(c.msAtBeat(std::round(c.beatAt(t))) - t);
+                    }
+                    double fine = 0.0;
+                    if (!errors.empty())
+                    {
+                        std::nth_element(errors.begin(), errors.begin() + static_cast<std::ptrdiff_t>(errors.size() / 2), errors.end());
+                        fine = errors[errors.size() / 2];
+                    }
+                    actions.moveClip(clipId, juce::jmax(0.0, offset + fine), deck);
+                    mirror.refreshNow();
+                    if (const auto* moved = mirror.model().findClip(clipId); moved != nullptr && moved->offsetMs < windowStart - 0.5)
+                    {
+                        actions.trimClip(clipId, windowStart, moved->endMs());
+                        mirror.refreshNow();
+                    }
+                }
+            }
             if (keyShift != 0)
             {
                 actions.setClipKeyShift(clipId, keyShift);
@@ -319,7 +397,93 @@ juce::String build(EngineClient& engine, ProjectMirror& mirror, TimelineActions&
     });
     return "Auto mixed " + juce::String(static_cast<int>(itemIds.size())) + " tracks with " + juce::String(joins)
            + " transitions (" + used.joinIntoString(", ") + ")"
-           + (shifted > 0 ? ", " + juce::String(shifted) + " shifted into key" : juce::String());
+           + (shifted > 0 ? ", " + juce::String(shifted) + " shifted into key" : juce::String())
+           + (atSections > 0 ? ", " + juce::String(atSections) + " at a breakdown or outro" : juce::String());
+}
+
+namespace
+{
+class OptionsDialog final : public juce::Component
+{
+  public:
+    OptionsDialog(int count, std::function<void(Options)> onRun) : run(std::move(onRun))
+    {
+        const auto label = [this](juce::Label& l, const juce::String& text)
+        {
+            l.setText(text, juce::dontSendNotification);
+            l.setFont(uiFont(13.0f));
+            l.setColour(juce::Label::textColourId, colours::text);
+            addAndMakeVisible(l);
+        };
+        label(orderLabel, "Order");
+        label(styleLabel, "Style");
+        label(targetLabel, "Each track plays");
+        order.addItemList({"Harmonic (each into the closest key)", "As listed"}, 1);
+        order.setSelectedItemIndex(0, juce::dontSendNotification);
+        style.addItemList(styles(), 1);
+        style.setSelectedItemIndex(0, juce::dontSendNotification);
+        target.addItemList({"Full length", "About 2:00", "About 2:30", "About 3:00", "About 4:00"}, 1);
+        target.setSelectedItemIndex(0, juce::dontSendNotification);
+        target.setTooltip("How long each track plays before the next comes in: the join goes to the breakdown or outro "
+                          "nearest that (tracks with analysed sections), else to the nearest phrase");
+        matchKeys.setTooltip("Shift a clashing track up to 2 semitones into key with the one before");
+        for (auto* c : std::initializer_list<juce::Component*>{&order, &style, &target, &matchKeys, &go, &cancel}) addAndMakeVisible(c);
+        go.setButtonText("Mix " + juce::String(count) + " Tracks");
+        go.onClick = [this]
+        {
+            static const double seconds[] = {0.0, 120.0, 150.0, 180.0, 240.0};
+            Options o{order.getSelectedItemIndex() == 0, style.getText(), matchKeys.getToggleState(),
+                      seconds[juce::jlimit(0, 4, target.getSelectedItemIndex())]};
+            auto fn = run;
+            if (auto* w = findParentComponentOfClass<juce::DialogWindow>()) w->exitModalState(1);
+            if (fn) fn(o);
+        };
+        cancel.onClick = [this]
+        {
+            if (auto* w = findParentComponentOfClass<juce::DialogWindow>()) w->exitModalState(0);
+        };
+        setSize(440, 210);
+    }
+
+    void resized() override
+    {
+        auto area = getLocalBounds().reduced(14);
+        const auto row = [&](juce::Label& l, juce::Component& c)
+        {
+            auto r = area.removeFromTop(28);
+            l.setBounds(r.removeFromLeft(130));
+            c.setBounds(r.reduced(0, 2));
+            area.removeFromTop(6);
+        };
+        row(orderLabel, order);
+        row(styleLabel, style);
+        row(targetLabel, target);
+        matchKeys.setBounds(area.removeFromTop(26).withTrimmedLeft(130));
+        auto buttons = area.removeFromBottom(28);
+        cancel.setBounds(buttons.removeFromRight(90));
+        buttons.removeFromRight(8);
+        go.setBounds(buttons.removeFromRight(140));
+    }
+
+  private:
+    std::function<void(Options)> run;
+    juce::Label orderLabel, styleLabel, targetLabel;
+    juce::ComboBox order, style, target;
+    juce::ToggleButton matchKeys{"Match keys"};
+    juce::TextButton go, cancel{"Cancel"};
+};
+} // namespace
+
+void showDialog(int trackCount, std::function<void(Options)> run)
+{
+    juce::DialogWindow::LaunchOptions options;
+    options.content.setOwned(new OptionsDialog(trackCount, std::move(run)));
+    options.dialogTitle = "Auto Mix";
+    options.dialogBackgroundColour = colours::background;
+    options.escapeKeyTriggersCloseButton = true;
+    options.useNativeTitleBar = true;
+    options.resizable = false;
+    options.launchAsync();
 }
 
 int autoTransition(EngineClient& engine, ProjectMirror& mirror, TimelineActions& actions, WaveformStore& waveforms,

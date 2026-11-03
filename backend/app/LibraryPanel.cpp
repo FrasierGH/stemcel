@@ -919,18 +919,11 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
         if (selection.count(id) != 0 && selection.size() >= 2 && ctx.autoMix != nullptr)
         {
             const auto ids = selectedInOrder();
-            juce::PopupMenu harmonic, matched, asListed;
-            for (const auto& style : automix::styles())
-            {
-                harmonic.addItem(style, [this, ids, style] { ctx.autoMix(ids, true, style, false); });
-                matched.addItem(style, [this, ids, style] { ctx.autoMix(ids, true, style, true); });
-                asListed.addItem(style, [this, ids, style] { ctx.autoMix(ids, false, style, false); });
-            }
-            juce::PopupMenu autoMix;
-            autoMix.addSubMenu("In Harmonic Order", harmonic);
-            autoMix.addSubMenu("In Harmonic Order, Matching Keys", matched);
-            autoMix.addSubMenu("In This Order", asListed);
-            menu.addSubMenu("Auto Mix " + juce::String(static_cast<int>(ids.size())) + " Tracks", autoMix);
+            menu.addItem("Auto Mix " + juce::String(static_cast<int>(ids.size())) + " Tracks...", [this, ids]
+                         {
+                             automix::showDialog(static_cast<int>(ids.size()), [this, ids](automix::Options o)
+                                                 { ctx.autoMix(ids, o.reorder, o.style, o.matchKeys, o.targetSec); });
+                         });
             if (ctx.mashup != nullptr) menu.addItem("Quick Mashup...", [this, ids] { ctx.mashup(ids); });
         }
         if (item->kind == "stem" || item->kind == "sample")

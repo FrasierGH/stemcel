@@ -3026,6 +3026,57 @@ void SmokeTest::addTempoJourney()
                          return ok;
                      }});
     steps.back().poll = true;
+    // Auto mix aiming at a play time (12 s here, the test tracks being short): the join starts
+    // on a bar line, the incoming track's downbeats sit on the grid, the outgoing ends with it.
+    steps.push_back({"auto mix with a target play time",
+                     [this]
+                     {
+                         autoTargetTracksBefore = static_cast<int>(model().tracks.size());
+                         autoTargetLine = automix::build(engine, mirror, actions, *mixWaveforms, {tempoItemIds[0], tempoItemIds[1]}, false,
+                                                         "Smooth", false, 12.0);
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         mirror.refreshNow();
+                         const auto* list = model().raw.getProperty("mixTransitions", {}).getArray();
+                         if (list == nullptr || list->isEmpty()) return false;
+                         const auto& t = list->getReference(list->size() - 1);
+                         const auto* out = model().findClip(t.getProperty("outClipId", {}).toString());
+                         const auto* in = model().findClip(t.getProperty("inClipId", {}).toString());
+                         if (out == nullptr || in == nullptr) return false;
+                         const auto curve = model().tempoCurve();
+                         const double start = static_cast<double>(t.getProperty("startMs", 0.0));
+                         const double end = static_cast<double>(t.getProperty("endMs", 0.0));
+                         const double startBeat = curve.beatAt(start);
+                         const bool onBar = std::abs(startBeat - std::round(startBeat / 4.0) * 4.0) < 0.02;
+                         std::vector<size_t> down;
+                         const auto beats = beatsync::clipBeatsMs(model(), *in, in->offsetMs, &down);
+                         double worst = 0.0;
+                         std::vector<double> errors;
+                         for (const auto i : down)
+                         {
+                             const double b = curve.beatAt(beats[i]);
+                             errors.push_back(std::abs(beats[i] - curve.msAtBeat(std::round(b))));
+                             worst = juce::jmax(worst, errors.back());
+                         }
+                         std::sort(errors.begin(), errors.end());
+                         const double typical = errors.empty() ? 1.0e9 : errors[errors.size() / 2];
+                         const double played = (start - curve.msAtBeat(std::round(curve.beatAt(out->offsetMs)))) / 1000.0;
+                         lastTempoLine = "auto mix target 12 s: join at " + juce::String(played, 1) + " s into the outgoing, on a bar "
+                                         + (onBar ? "yes" : "no") + ", incoming downbeats " + juce::String(typical, 2) + " ms off the grid (median; at most "
+                                         + juce::String(worst, 2) + " ms); "
+                                         + autoTargetLine;
+                         const bool ok = onBar && !down.empty() && typical <= 5.0 && std::abs(out->endMs() - end) < 2.0
+                                         && std::abs(in->offsetMs - start) < 2.0 && played < 20.0;
+                         if (ok) report.add(lastTempoLine);
+                         juce::StringArray added;
+                         for (size_t i = static_cast<size_t>(autoTargetTracksBefore); i < model().tracks.size(); ++i) added.add(model().tracks[i].id);
+                         for (const auto& id : added) actions.removeTrack(id);
+                         mirror.refreshNow();
+                         return ok;
+                     }});
+    steps.back().poll = true;
     // Two files dropped at once: the prompt, answered "as dropped", mixes them on two decks.
     steps.push_back({"auto mix on drop",
                      [this]

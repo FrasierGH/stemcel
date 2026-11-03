@@ -17,6 +17,10 @@ namespace stemcel::native::beatsync
 std::vector<double> clipBeatsMs(const ProjectModel& model, const ClipModel& clip, double offsetMs,
                                 std::vector<size_t>* downbeats = nullptr);
 
+// Where the clip's sections of these kinds begin, on the timeline for the clip at `offsetMs`,
+// in order (empty when its item has no sections).
+std::vector<double> sectionStartsMs(const ProjectModel& model, const ClipModel& clip, double offsetMs, const juce::StringArray& kinds);
+
 // The clip on another track the dragged clip (at `startMs`, on `trackId`) overlaps most.
 const ClipModel* partnerFor(const ProjectModel& model, const ClipModel& dragged, double startMs, const juce::String& trackId);
 

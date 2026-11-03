@@ -12,6 +12,7 @@
 
 #include <juce_core/juce_core.h>
 
+#include <functional>
 #include <optional>
 #include <vector>
 
@@ -72,8 +73,24 @@ std::vector<juce::String> harmonicOrder(const ProjectModel& model, WaveformStore
 // (or the reason it could not).
 // With `matchKeys`, an incoming track whose key clashes is pitch-shifted (up to 2 semitones,
 // tempo untouched) into key with the outgoing one when that fixes it.
+// Each join starts on a phrase of the outgoing track (counted from its own first downbeat).
+// `targetSec` > 0 is how long each track plays before the next comes in: the join goes to
+// the breakdown or outro nearest that (from its sections), else the phrase nearest it, and
+// the incoming track's first drop lands as the join ends. 0 plays each track to its end.
+// The incoming track is placed so its downbeats sit on the bar lines.
 juce::String build(EngineClient& engine, ProjectMirror& mirror, TimelineActions& actions, WaveformStore& waveforms,
-                   std::vector<juce::String> itemIds, bool reorder, const juce::String& style, bool matchKeys = false);
+                   std::vector<juce::String> itemIds, bool reorder, const juce::String& style, bool matchKeys = false,
+                   double targetSec = 0.0);
+
+// The Auto Mix dialog: order, style, matching keys and the target play time per track.
+struct Options
+{
+    bool reorder = true;
+    juce::String style = "Auto";
+    bool matchKeys = false;
+    double targetSec = 0.0;
+};
+void showDialog(int trackCount, std::function<void(Options)> run);
 
 // Gives every overlapping pair among `clipIds` (all clips when empty) the preset that suits it.
 // Returns how many joins it set.

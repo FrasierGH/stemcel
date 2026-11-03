@@ -112,6 +112,15 @@ std::vector<double> clipBeatsMs(const ProjectModel& model, const ClipModel& clip
     return out;
 }
 
+std::vector<double> sectionStartsMs(const ProjectModel& model, const ClipModel& clip, double offsetMs, const juce::StringArray& kinds)
+{
+    std::vector<double> out;
+    for (const auto& m : sectionMarks(model, clip, offsetMs))
+        if (kinds.contains(m.kind)) out.push_back(m.ms);
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
 const ClipModel* partnerFor(const ProjectModel& model, const ClipModel& dragged, double startMs, const juce::String& trackId)
 {
     const double endMs = startMs + dragged.effectiveDurationMs;

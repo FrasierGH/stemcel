@@ -85,8 +85,8 @@ Workspace::Workspace(EngineClient& engineClient, AppController& appController, A
                                                                { ScratchEditor::show(engine, mirror, waveforms, {}, itemId, notify); },
                                                                [this](const juce::String& itemId)
                                                                { ClipEditor::showLibraryItem(engine, mirror, actions, waveforms, itemId); },
-                                                               [this](std::vector<juce::String> ids, bool reorder, const juce::String& style, bool matchKeys)
-                                                               { runAutoMix(std::move(ids), reorder, style, matchKeys); },
+                                                               [this](std::vector<juce::String> ids, bool reorder, const juce::String& style, bool matchKeys, double targetSec)
+                                                               { runAutoMix(std::move(ids), reorder, style, matchKeys, targetSec); },
                                                                quickMashup,
                                                                [this](const juce::String& itemId) { sectionAnalyser.analyse(itemId, true); },
                                                                [this](const juce::String& itemId)
@@ -205,10 +205,10 @@ void Workspace::showLibraryTab(int index)
     if (libraryPanel != nullptr) libraryPanel->showTab(index);
 }
 
-void Workspace::runAutoMix(std::vector<juce::String> ids, bool reorder, const juce::String& style, bool matchKeys)
+void Workspace::runAutoMix(std::vector<juce::String> ids, bool reorder, const juce::String& style, bool matchKeys, double targetSec)
 {
     const double before = mirror.model().contentEndMs();
-    const auto said = automix::build(engine, mirror, actions, waveforms, std::move(ids), reorder, style, matchKeys);
+    const auto said = automix::build(engine, mirror, actions, waveforms, std::move(ids), reorder, style, matchKeys, targetSec);
     if (toast) toast(said, false);
     mirror.refreshNow();
     // Show the new mix, from its first deck down.
