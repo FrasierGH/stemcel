@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.3.0
+
+### Added
+
+- **Quick Mashup** (library and clip menus, with two tracks or more selected): choose the parts of each track (all of it, or its vocals, drums, bass, other, guitar, piano) and a leader. Missing stems are separated, only the chosen parts go on the timeline, on the bar grid, the others shifted into the leader's key, and the key wheel opens on them.
+- **Key wheel for several clips**: a button per clip picks the one a click shifts ("All" shifts every clip), a **Leader** that stays put while the others follow, up to four **common keys** they can all reach, and **Shift from the current pitch**. It always starts from each clip's current key, however it was shifted.
+- **Beat sync while dragging a clip**: tap Space to put its beats on the clip it overlaps (else the grid); hold Space for a menu of placements: nearest beat, bar or phrase, its first drop on the other's next drop, its first drop where the other's breakdown or outro begins, or its intro over the other's outro.
+- **Echoed Wheel Up** transition: an echo throw, then a hard, fast spin back over the last beat (also in the transition editor and auto mix's Party style).
+- **Auto Mix dialog** with a **target play time** per track (full length, or about 2:00 to 4:00): the join goes to the breakdown or outro nearest it, and the incoming track's first drop lands as the join ends.
+- **Library**: shift-click selects a span; several selected tracks are taken in on-screen order.
+
+### Changed
+
+- Auto mix counts phrases from each track's own first downbeat and places each incoming track on the grid by its downbeats.
+- Plugin editor windows stay in front of the Stemcel window when it's clicked (and minimise with it).
+- The logo is in the Fusion theme's blue, and Show toast notifications has a hint under it.
+
+### Fixed
+
+- Stems, samples and recordings of an unsaved project no longer vanish when another project tab is opened or switched to: each tab keeps its temp files in its own folder, and a separation that finishes in another tab joins its own tab when you go back.
+- rekordbox: a OneLibrary (`exportLibrary.db`) with a title that isn't valid UTF-8 opens, read-only (it used to fail with "could not write exportLibrary.db").
+
 ## 0.2.0
 
 ### Added

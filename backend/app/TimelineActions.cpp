@@ -710,9 +710,12 @@ void TimelineActions::setClipBrake(const juce::String& clipId, bool on)
     engine.send("CLIP_SET_BRAKE", obj({{"clipId", clipId}, {"on", on}}));
 }
 
-void TimelineActions::setClipBackspin(const juce::String& clipId, bool on)
+void TimelineActions::setClipBackspin(const juce::String& clipId, bool on, double seconds, double speed)
 {
-    engine.send("CLIP_SET_BACKSPIN", obj({{"clipId", clipId}, {"on", on}}));
+    auto payload = obj({{"clipId", clipId}, {"on", on}});
+    if (on && seconds > 0.0) payload.getDynamicObject()->setProperty("seconds", seconds);
+    if (on && speed > 0.0) payload.getDynamicObject()->setProperty("speed", speed);
+    engine.send("CLIP_SET_BACKSPIN", payload);
 }
 
 juce::String TimelineActions::saveClipToLibrary(const juce::String& clipId)

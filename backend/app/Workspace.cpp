@@ -1,5 +1,7 @@
 #include "Workspace.h"
 
+#include "KeyWheel.h"
+
 #include "AutoMix.h"
 #include "ClipEditor.h"
 #include "ProjectDialogs.h"
@@ -68,6 +70,14 @@ Workspace::Workspace(EngineClient& engineClient, AppController& appController, A
     mashup = std::make_unique<MashupBuilder>(engine, mirror, actions, stems);
     mashup->onNotify = notify;
     mashup->onPlaced = [this](double from, double to, const juce::String& trackId) { timeline.revealRange(from, to, trackId); };
+    mashup->onKeys = [this](std::vector<juce::String> clips, std::map<juce::String, std::vector<juce::String>> companions)
+    { KeyWheel::show(mirror, actions, std::move(clips), {}, 0, std::move(companions)); };
+    const auto quickMashup = [this](std::vector<juce::String> ids)
+    {
+        quickmashup::show(mirror, std::move(ids),
+                          [this](std::vector<MashupBuilder::Request> requests, int leader) { mashup->start(std::move(requests), leader); });
+    };
+    timeline.onQuickMashup = quickMashup;
     auto panel = std::make_unique<LibraryPanel>(LibraryContext{engine, mirror, actions, view, live, prefs, importer,
                                                                sharedRekordbox(), audition, notify,
                                                                [this](const juce::String& itemId) { stems.openDialog(itemId, {}); },
@@ -75,9 +85,9 @@ Workspace::Workspace(EngineClient& engineClient, AppController& appController, A
                                                                { ScratchEditor::show(engine, mirror, waveforms, {}, itemId, notify); },
                                                                [this](const juce::String& itemId)
                                                                { ClipEditor::showLibraryItem(engine, mirror, actions, waveforms, itemId); },
-                                                               [this](std::vector<juce::String> ids, bool reorder, const juce::String& style, bool matchKeys)
-                                                               { runAutoMix(std::move(ids), reorder, style, matchKeys); },
-                                                               [this](const juce::String& vocal, const juce::String& beat) { mashup->start(vocal, beat); },
+                                                               [this](std::vector<juce::String> ids, bool reorder, const juce::String& style, bool matchKeys, double targetSec)
+                                                               { runAutoMix(std::move(ids), reorder, style, matchKeys, targetSec); },
+                                                               quickMashup,
                                                                [this](const juce::String& itemId) { sectionAnalyser.analyse(itemId, true); },
                                                                [this](const juce::String& itemId)
                                                                { TempoReport::show(mirror, actions, tempoAnalyser, itemId, {}); }});
@@ -195,10 +205,10 @@ void Workspace::showLibraryTab(int index)
     if (libraryPanel != nullptr) libraryPanel->showTab(index);
 }
 
-void Workspace::runAutoMix(std::vector<juce::String> ids, bool reorder, const juce::String& style, bool matchKeys)
+void Workspace::runAutoMix(std::vector<juce::String> ids, bool reorder, const juce::String& style, bool matchKeys, double targetSec)
 {
     const double before = mirror.model().contentEndMs();
-    const auto said = automix::build(engine, mirror, actions, waveforms, std::move(ids), reorder, style, matchKeys);
+    const auto said = automix::build(engine, mirror, actions, waveforms, std::move(ids), reorder, style, matchKeys, targetSec);
     if (toast) toast(said, false);
     mirror.refreshNow();
     // Show the new mix, from its first deck down.
@@ -593,6 +603,8 @@ bool Workspace::keyPressed(const juce::KeyPress& key)
 
     if (code == juce::KeyPress::spaceKey && plain && !mods.isShiftDown())
     {
+        // While a clip is dragged, Space beat-syncs it instead.
+        if (timeline.beatSyncKey()) return true;
         togglePlay();
         return true;
     }

@@ -27,6 +27,8 @@ const juce::Identifier ProjectState::kReversed{"reversed"};
 const juce::Identifier ProjectState::kBeatOffsetMs{"beatOffsetMs"};
 const juce::Identifier ProjectState::kBrake{"brake"};
 const juce::Identifier ProjectState::kBackspin{"backspin"};
+const juce::Identifier ProjectState::kBackspinSeconds{"backspinSeconds"};
+const juce::Identifier ProjectState::kBackspinSpeed{"backspinSpeed"};
 const juce::Identifier ProjectState::kScratchPatternId{"scratchPatternId"};
 const juce::Identifier ProjectState::kViewPxPerSecond{"viewPxPerSecond"};
 const juce::Identifier ProjectState::kViewScrollX{"viewScrollX"};

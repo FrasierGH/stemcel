@@ -40,9 +40,9 @@ void handleProjectNew(stemcel::AudioEngine& engine, stemcel::ProjectState& proje
     projectState.replaceTree(fresh);
     session.currentPath.clear();
 
-    // A new project abandons any unsaved session's generated artifacts; clear the
-    // temp workspace so stray stems/samples never leak into the next save.
-    stemcel::tempArtifactsRoot().deleteRecursively();
+    // Nothing is deleted here: each tab has its own temp workspace (tempArtifactsRoot), which
+    // the app removes when that tab is closed without saving. Wiping a shared one here took
+    // every other open tab's unsaved stems, recordings and samples with it.
 
     // replaceTree does not touch the live engine, so realign every project-scoped
     // setting with the new project's defaults. Shared with load/undo rather than

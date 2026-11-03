@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 
+#include "PluginEditorWindow.h"
 #include "Theme.h"
 
 namespace stemcel::native
@@ -16,6 +17,8 @@ MainWindow::MainWindow(EngineClient& engine, AppPreferences& preferences, AppCon
       prefs(preferences), controller(appController)
 {
     setUsingNativeTitleBar(true);
+    // Plugin editors stay in front of this window when it is clicked.
+    plugins::PluginEditorWindow::setOwner(this);
     mainComponent = new MainComponent(engine, preferences, appController, commands);
     setContentOwned(mainComponent, false);
 
@@ -45,6 +48,7 @@ MainWindow::MainWindow(EngineClient& engine, AppPreferences& preferences, AppCon
 
 MainWindow::~MainWindow()
 {
+    plugins::PluginEditorWindow::setOwner(nullptr);
 #if JUCE_MAC
     juce::MenuBarModel::setMacMainMenu(nullptr);
 #else

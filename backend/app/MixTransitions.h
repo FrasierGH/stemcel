@@ -40,8 +40,11 @@ enum class Extra
     brake,     // the outgoing clip stops like a turntable at its end
     backspin,  // the outgoing clip spins back at its end
     loopRoll,  // the outgoing deck's last bar repeats at 1/4, 1/8, then 1/16
-    tempoRamp  // the tempo map ramps from the outgoing tempo to the incoming one over the window
+    tempoRamp, // the tempo map ramps from the outgoing tempo to the incoming one over the window
+    wheelUp    // a hard jog-wheel spin: the outgoing clip winds back fast and short at its end
 };
+// Echoed Wheel Up's spin: a second at ten times speed (a backspin's default is gentler).
+inline constexpr double kWheelUpSeconds = 1.0, kWheelUpSpeed = 10.0;
 
 struct Preset
 {

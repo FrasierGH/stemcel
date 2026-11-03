@@ -154,6 +154,16 @@ class SmokeTest final : private juce::Timer
     int driftStage = 0;
     std::vector<juce::String> wheelClips;
     automix::Camelot wheelTarget;
+    bool wheelLeaderOk = false;
+    juce::String beatSyncClips[2];
+    juce::String beatSyncLine;
+    double beatSyncExpected = 0.0, beatSyncResult = 0.0;
+    bool beatSyncMenuOk = false;
+    int quickMashupKeyed = 0;
+    int autoTargetTracksBefore = 0;
+    juce::String autoTargetLine;
+    size_t quickMashupFollowers = 0;
+    juce::String quickMashupLeadClip, quickMashupVocalClip;
     juce::String wheelLine, wheelItemId, wheelItemKey;
     std::vector<double> driftBeats;
     juce::String driftItemId, driftClipId, driftLine;
@@ -168,6 +178,7 @@ class SmokeTest final : private juce::Timer
     int mashupTracksBefore = 0;
     int tabsTracksBefore = 0;
     juce::String tabsPastedItem;
+    juce::File tabsTempMarker;
     std::unique_ptr<juce::Component> editorView;
 };
 

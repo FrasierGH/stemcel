@@ -184,8 +184,10 @@ MixdownSnapshot snapshotProjectForMixdown(const ProjectState& project,
 
             clip.brakeSeconds = project.isClipBrake(clip.id) ? brakeSeconds : 0.0;
             clip.brakeCurve = brakeCurve;
-            clip.backspinSeconds = project.isClipBackspin(clip.id) ? backspinSeconds : 0.0;
-            clip.backspinSpeed = backspinSpeed;
+            const double ownSeconds = project.clipBackspinSeconds(clip.id);
+            const double ownSpeed = project.clipBackspinSpeed(clip.id);
+            clip.backspinSeconds = project.isClipBackspin(clip.id) ? (ownSeconds > 0.0 ? ownSeconds : backspinSeconds) : 0.0;
+            clip.backspinSpeed = ownSpeed > 0.0 ? ownSpeed : backspinSpeed;
             clip.backspinCurve = backspinCurve;
 
             clip.scratchPatternId = project.getClipScratchPatternId(clip.id);

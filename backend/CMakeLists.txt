@@ -11,7 +11,7 @@ endif()
 set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS version for the backend")
 
 project(StemcelBackend
-    VERSION 0.2.0
+    VERSION 0.3.0
     DESCRIPTION "Stemcel headless audio backend"
     LANGUAGES C CXX)
 
@@ -546,6 +546,7 @@ target_compile_definitions(stemcel_backend_core PUBLIC
     JUCE_PLUGINHOST_ARA=0)
 if(APPLE)
     target_compile_definitions(stemcel_backend_core PUBLIC JUCE_PLUGINHOST_AU=1)
+    target_sources(stemcel_backend_core PRIVATE src/plugins/PluginEditorWindowMac.mm)
 else()
     target_compile_definitions(stemcel_backend_core PUBLIC JUCE_PLUGINHOST_AU=0)
 endif()
@@ -786,6 +787,7 @@ if(STEMCEL_BUILD_NATIVE_APP)
         app/Tracklist.cpp
         app/TempoReport.cpp
         app/KeyWheel.cpp
+        app/BeatSync.cpp
         app/RekordboxBrowser.cpp
         app/EngineClient.cpp
         app/ExportDialog.cpp

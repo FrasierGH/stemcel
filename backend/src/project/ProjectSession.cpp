@@ -99,8 +99,12 @@ void applyClipEffectsToEngine(stemcel::AudioEngine& engine, stemcel::ProjectStat
         engine.setClipBrake(clipId, 0.0, engine.getBrakeDefaultCurve());
 
     if (static_cast<bool>(clip.getProperty("backspin", false)))
-        engine.setClipBackspin(clipId, engine.getBackspinDefaultSeconds(),
-                               engine.getBackspinDefaultSpeed(), engine.getBackspinDefaultCurve());
+    {
+        const double seconds = static_cast<double>(clip.getProperty("backspinSeconds", 0.0));
+        const double speed = static_cast<double>(clip.getProperty("backspinSpeed", 0.0));
+        engine.setClipBackspin(clipId, seconds > 0.0 ? seconds : engine.getBackspinDefaultSeconds(),
+                               speed > 0.0 ? speed : engine.getBackspinDefaultSpeed(), engine.getBackspinDefaultCurve());
+    }
     else
         engine.setClipBackspin(clipId, 0.0, engine.getBackspinDefaultSpeed(),
                                engine.getBackspinDefaultCurve());
@@ -548,9 +552,41 @@ void rebuildEngineFromProject(stemcel::AudioEngine& engine, stemcel::ProjectStat
     syncEngineProjectSettings(engine, projectState);
 }
 
+namespace
+{
+juce::CriticalSection& scopeLock()
+{
+    static juce::CriticalSection lock;
+    return lock;
+}
+juce::String& scopeValue()
+{
+    static juce::String scope;
+    return scope;
+}
+} // namespace
+
+void setTempSessionScope(const juce::String& scope)
+{
+    const juce::ScopedLock sl(scopeLock());
+    scopeValue() = scope;
+}
+
+juce::String tempSessionScope()
+{
+    const juce::ScopedLock sl(scopeLock());
+    return scopeValue();
+}
+
+juce::File tempArtifactsRootFor(const juce::String& scope)
+{
+    const auto safe = scope.retainCharacters("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_");
+    return systemTempDirectory().getChildFile(appFolderName()).getChildFile("session-" + (safe.isNotEmpty() ? safe : juce::String("default")));
+}
+
 juce::File tempArtifactsRoot()
 {
-    return systemTempDirectory().getChildFile(appFolderName());
+    return tempArtifactsRootFor(tempSessionScope());
 }
 
 juce::File projectArtifactsBaseDir(const juce::String& projectPath, const juce::String& subdir)

@@ -206,6 +206,14 @@ StemService::StemService(EngineClient& client, ProjectMirror& projectMirror, Tim
                          AppPreferences& preferences)
     : engine(client), mirror(projectMirror), actions(timelineActions), prefs(preferences), subscriptions(client)
 {
+    // A project now open in its tab again: stems that finished meanwhile join it (after the
+    // mirror has caught up with the new project).
+    subscriptions.on("PROJECT_STATE",
+                     [this](const juce::var& p)
+                     {
+                         if (waiting.empty() || !static_cast<bool>(p.getProperty("reset", false))) return;
+                         juce::MessageManager::callAsync([this] { juce::MessageManager::callAsync([this] { deliverWaiting(); }); });
+                     });
     subscriptions.on("CHANNEL_SPLIT_READY",
                      [this](const juce::var& p)
                      {
@@ -278,6 +286,7 @@ void StemService::startUvr(const juce::String& sourceItemId, const juce::String&
     job.clipId = clipId;
     job.sourceName = item->displayName();
     job.mediaId = item->mediaId;
+    job.scope = stemcel::tempSessionScope();
     juce::File input(item->audioPath());
     juce::File tempInput;
     if (const auto* c = mirror.model().findClip(clipId))
@@ -290,7 +299,7 @@ void StemService::startUvr(const juce::String& sourceItemId, const juce::String&
         formats.registerBasicFormats();
         if (std::unique_ptr<juce::AudioFormatReader> reader(formats.createReaderFor(input)); reader != nullptr)
         {
-            tempInput = systemTempDirectory().getChildFile(appFolderName()).getChildFile("uvr-" + juce::Uuid().toDashedString() + ".wav");
+            tempInput = stemcel::tempArtifactsRoot().getChildFile("uvr-" + juce::Uuid().toDashedString() + ".wav");
             tempInput.getParentDirectory().createDirectory();
             const auto start = static_cast<juce::int64>(c->inMs / 1000.0 * reader->sampleRate);
             const auto length = juce::jmin(reader->lengthInSamples - start, static_cast<juce::int64>(c->durationMs / 1000.0 * reader->sampleRate));
@@ -385,15 +394,27 @@ void StemService::finishUvr(const juce::String& jobId, bool ok, const juce::Stri
         juce::MessageManager::callAsync([this] { uvrJob.reset(); });
         return;
     }
-    for (const auto& [key, file] : stems)
+    for (auto s = stems.begin(); s != stems.end();)
     {
-        if (!keep.isEmpty() && !keep.contains(key))
+        if (!keep.isEmpty() && !keep.contains(s->first))
         {
-            file.deleteFile(); // not wanted: no stray files in the project folder
-            continue;
+            s->second.deleteFile(); // not wanted: no stray files in the project folder
+            s = stems.erase(s);
         }
-        importStem(it->second, key, file);
+        else
+            ++s;
     }
+    if (it->second.scope != stemcel::tempSessionScope())
+    {
+        // Another tab is open now: the stems wait (on disk, in their own tab's workspace) and
+        // join that tab's library when it is opened again.
+        if (onNotify) onNotify("Stems of " + it->second.sourceName + " are ready: they'll be added when you go back to its tab", false);
+        waiting.push_back({it->second, std::move(stems)});
+        jobs.erase(it);
+        juce::MessageManager::callAsync([this] { uvrJob.reset(); });
+        return;
+    }
+    for (const auto& [key, file] : stems) importStem(it->second, key, file);
     const int count = static_cast<int>(it->second.placed.size());
     if (onNotify)
         onNotify(count > 0 ? (it->second.clipId.isNotEmpty() ? "Added " : "Extracted ") + juce::String(count) + (count == 1 ? " stem from " : " stems from ") + it->second.sourceName
@@ -401,6 +422,23 @@ void StemService::finishUvr(const juce::String& jobId, bool ok, const juce::Stri
                  count == 0);
     jobs.erase(it);
     juce::MessageManager::callAsync([this] { uvrJob.reset(); });
+}
+
+void StemService::deliverWaiting()
+{
+    const auto scope = stemcel::tempSessionScope();
+    for (auto w = waiting.begin(); w != waiting.end();)
+    {
+        if (w->job.scope != scope || mirror.model().findLibraryItem(w->job.sourceItemId) == nullptr)
+        {
+            ++w;
+            continue;
+        }
+        for (const auto& [key, file] : w->stems)
+            if (file.existsAsFile()) importStem(w->job, key, file);
+        if (onNotify) onNotify("Added the stems of " + w->job.sourceName + " that finished while you were in another tab", false);
+        w = waiting.erase(w);
+    }
 }
 
 void StemService::cancel()

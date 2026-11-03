@@ -19,8 +19,8 @@ const juce::StringArray kBandIds{"none", "swap", "sweep"};
 const juce::StringArray kBandNames{"Untouched", "Swap at the swap point", "Sweep over the span"};
 const juce::StringArray kEffectIds{"none", "echo", "reverb", "crush"};
 const juce::StringArray kEffectNames{"No effect", "Echo throw", "Reverb wash", "Bitcrush"};
-const juce::StringArray kExtraIds{"none", "brake", "backspin", "loopRoll"};
-const juce::StringArray kExtraNames{"Nothing at the end", "Vinyl brake", "Backspin", "Loop roll"};
+const juce::StringArray kExtraIds{"none", "brake", "backspin", "wheelUp", "loopRoll"};
+const juce::StringArray kExtraNames{"Nothing at the end", "Vinyl brake", "Backspin", "Echoed wheel up (hard spin)", "Loop roll"};
 
 void fill(juce::ComboBox& box, const juce::StringArray& names)
 {
@@ -42,6 +42,7 @@ mix::Extra extraOf(const juce::String& id)
 {
     if (id == "brake") return mix::Extra::brake;
     if (id == "backspin") return mix::Extra::backspin;
+    if (id == "wheelUp") return mix::Extra::wheelUp;
     if (id == "loopRoll") return mix::Extra::loopRoll;
     return mix::Extra::none;
 }
@@ -52,6 +53,7 @@ juce::String extraId(mix::Extra e)
     {
         case mix::Extra::brake: return "brake";
         case mix::Extra::backspin: return "backspin";
+        case mix::Extra::wheelUp: return "wheelUp";
         case mix::Extra::loopRoll: return "loopRoll";
         case mix::Extra::tempoRamp:
         case mix::Extra::none: break;

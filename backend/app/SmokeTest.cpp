@@ -1,5 +1,7 @@
 #include "SmokeTest.h"
 
+#include "ProjectSession.h"
+
 #include "RekordboxBrowser.h"
 
 #include "Db.h"
@@ -27,6 +29,7 @@
 #include "PluginCatalogue.h"
 #include "ResizeBar.h"
 #include "TrackAutomationSnapshot.h"
+#include "BeatSync.h"
 #include "KeyWheel.h"
 #include "TempoReport.h"
 #include "Tracklist.h"
@@ -1455,8 +1458,8 @@ void SmokeTest::addTempoJourney()
                          int named = 0;
                          double start = -1.0;
                          bool aligned = true;
-                         for (const auto& t : model().tracks)
-                             if (t.name.startsWith("Mashup ") && !t.clips.empty())
+                         for (size_t i = static_cast<size_t>(juce::jmax(0, mashupTracksBefore)); i < model().tracks.size(); ++i)
+                             if (const auto& t = model().tracks[i]; !t.clips.empty())
                              {
                                  ++named;
                                  if (start < 0.0) start = t.clips.front().offsetMs;
@@ -1469,6 +1472,63 @@ void SmokeTest::addTempoJourney()
                          return ok;
                      }});
     steps.back().poll = true;
+    // Quick Mashup: the vocals of the first over the drums and bass of the second, which leads:
+    // three tracks, the vocals in the leader's key, and the key wheel offered both tracks.
+    steps.push_back({"quick mashup",
+                     [this]
+                     {
+                         mashupTracksBefore = static_cast<int>(model().tracks.size());
+                         quickMashupKeyed = 0;
+                         mashupBuilder->onKeys = [this](std::vector<juce::String> clips, std::map<juce::String, std::vector<juce::String>> companions)
+                         {
+                             quickMashupKeyed = static_cast<int>(clips.size());
+                             quickMashupLeadClip = clips.front();
+                             quickMashupFollowers = companions[clips.front()].size();
+                             quickMashupVocalClip = clips.back();
+                         };
+                         mashupBuilder->start({{tempoItemIds[0], {"Vocals"}}, {tempoItemIds[1], {"Drums", "Bass"}}}, 1);
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         if (mashupBuilder->busy()) return false;
+                         mirror.refreshNow();
+                         const int added = static_cast<int>(model().tracks.size()) - mashupTracksBefore;
+                         const auto* lead = model().findClip(quickMashupLeadClip);
+                         const auto* vocal = model().findClip(quickMashupVocalClip);
+                         const bool keyed = lead != nullptr && vocal != nullptr
+                                            && (!automix::camelot(automix::clipKey(model(), *lead)).valid()
+                                                || automix::keyDistance(automix::camelot(automix::clipKey(model(), *lead)),
+                                                                        automix::camelot(automix::clipKey(model(), *vocal))) == 0);
+                         lastTempoLine = "quick mashup: " + juce::String(added) + " tracks, wheel on " + juce::String(quickMashupKeyed)
+                                         + " (leader with " + juce::String(static_cast<int>(quickMashupFollowers)) + " more part), vocals "
+                                         + (vocal != nullptr ? automix::clipKey(model(), *vocal) : juce::String("missing")) + " for leader "
+                                         + (lead != nullptr ? automix::clipKey(model(), *lead) : juce::String("missing"));
+                         const bool ok = added == 3 && quickMashupKeyed == 2 && quickMashupFollowers == 1 && keyed;
+                         if (ok) report.add(lastTempoLine);
+                         return ok;
+                     }});
+    steps.back().poll = true;
+    // Echoed Wheel Up: the preset throws the echo and spins the outgoing clip hard; a clip's own
+    // spin length and speed are kept in the project.
+    steps.push_back({"echoed wheel up",
+                     [this] { actions.setClipBackspin(tempoLateClipId, true, mix::kWheelUpSeconds, mix::kWheelUpSpeed); },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         mirror.refreshNow();
+                         const mix::Preset* found = nullptr;
+                         for (const auto& p : mix::presets())
+                             if (p.id == "echoWheelUp") found = &p;
+                         const auto* clip = model().findClip(tempoLateClipId);
+                         const bool ok = found != nullptr && found->usesEcho && found->extra == mix::Extra::wheelUp && clip != nullptr
+                                         && clip->backspin
+                                         && std::abs(static_cast<double>(clip->raw.getProperty("backspinSpeed", 0.0)) - mix::kWheelUpSpeed) < 1e-6
+                                         && std::abs(static_cast<double>(clip->raw.getProperty("backspinSeconds", 0.0)) - mix::kWheelUpSeconds) < 1e-6;
+                         actions.setClipBackspin(tempoLateClipId, false);
+                         if (ok) report.add("echoed wheel up: echo throw + a 1 s spin at 10x, kept on the clip");
+                         return ok;
+                     }});
     // The auto mixer's harmonic arithmetic (no UI): keys onto the Camelot wheel, and which mix.
     steps.push_back({"camelot keys", [] {}, {},
                      [this](const juce::var&)
@@ -2214,6 +2274,9 @@ void SmokeTest::addTempoJourney()
                          tabsTracksBefore = static_cast<int>(model().tracks.size());
                          actions.copyClips({tempoLateClipId});
                          if (const auto* clip = model().findClip(tempoLateClipId)) tabsPastedItem = clip->libraryItemId;
+                         // A stem file of this tab's, unsaved: a new tab must not take it away.
+                         tabsTempMarker = stemcel::tempArtifactsRoot().getChildFile("stems").getChildFile("smoke-marker.wav");
+                         tabsTempMarker.create();
                          if (auto* strip = findDescendant<ProjectTabStrip>(juce::TopLevelWindow::getTopLevelWindow(0)))
                              strip->controller.newProject();
                      },
@@ -2256,10 +2319,10 @@ void SmokeTest::addTempoJourney()
                          const auto& tabs = strip->controller.projectTabs();
                          const bool ok = strip->controller.activeTabIndex() == 0 && static_cast<int>(model().tracks.size()) == tabsTracksBefore
                                          && model().findClip(tempoLateClipId) != nullptr && tabs.size() == 2 && tabs[1].parked.existsAsFile()
-                                         && !tabs[0].parked.existsAsFile();
+                                         && !tabs[0].parked.existsAsFile() && tabsTempMarker.existsAsFile();
                          lastTempoLine = "tabs: back with " + juce::String(static_cast<int>(model().tracks.size())) + " tracks (had "
                                          + juce::String(tabsTracksBefore) + "), tab 2 parked=" + (tabs.size() == 2 && tabs[1].parked.existsAsFile() ? "yes" : "no");
-                         if (ok) report.add(lastTempoLine);
+                         if (ok) report.add(lastTempoLine + ", its temp stems kept");
                          return ok;
                      }});
     steps.back().poll = true;
@@ -2882,13 +2945,22 @@ void SmokeTest::addTempoJourney()
                          const auto image = wheel.createComponentSnapshot(wheel.getLocalBounds());
                          juce::FileOutputStream out(workDir.getChildFile("key-wheel.png"));
                          if (out.openedOk()) juce::PNGImageFormat().writeImageToStream(image, out);
+                         // The second clip as leader: it stays put, so the first common key is its own.
+                         wheel.setLeaderForTest(1);
+                         juce::StringArray commons;
+                         for (const auto& k : wheel.commonKeysForTest()) commons.add(k.text());
+                         wheelLeaderOk = !wheel.commonKeysForTest().empty()
+                                         && (automix::keyDistance(wheel.commonKeysForTest().front(), automix::camelot(keys[1])) == 0
+                                             || !KeyWheel::shiftTo(keys[0], automix::camelot(keys[1]), 3));
+                         wheel.setLeaderForTest(0);
                          if (wheelTarget.valid()) wheel.applyForTest(wheelTarget);
-                         wheelLine = keys.joinIntoString(" and ") + " -> recommended " + wheelTarget.text();
+                         wheelLine = keys.joinIntoString(" and ") + " -> recommended " + wheelTarget.text() + "; led by the second, common keys "
+                                     + commons.joinIntoString(" ");
                      },
                      {},
                      [this](const juce::var&)
                      {
-                         if (wheelClips.size() < 2 || !wheelTarget.valid())
+                         if (wheelClips.size() < 2 || !wheelTarget.valid() || !wheelLeaderOk)
                          {
                              lastTempoLine = "key wheel: " + wheelLine;
                              return false;
@@ -2907,6 +2979,102 @@ void SmokeTest::addTempoJourney()
                          for (const auto& id : wheelClips) actions.setClipKeyShift(id, 0);
                          engine.host().project().setLibraryItemKey(wheelItemId, wheelItemKey);
                          return true;
+                     }});
+    steps.back().poll = true;
+    // Beat sync: a clip dropped 37 ms off the beats of a clip of the same track on another
+    // track is moved back onto them (Space during a drag), and the held-Space menu offers bars.
+    steps.push_back({"beat sync on drag",
+                     [this]
+                     {
+                         mirror.refreshNow();
+                         beatSyncLine.clear();
+                         const auto* item = model().findLibraryItem(tempoItemIds[0]);
+                         if (item == nullptr || item->bpm <= 0.0) return;
+                         const double at = model().contentEndMs() + 30000.0;
+                         const double bpm = item->bpm;
+                         const auto a = actions.addTrack();
+                         mirror.refreshNow();
+                         beatSyncClips[0] = actions.addClip(a, *model().findLibraryItem(tempoItemIds[0]), at);
+                         mirror.refreshNow(); // every model pointer is fetched again after a refresh
+                         const auto b = actions.addTrack();
+                         mirror.refreshNow();
+                         const auto* first = model().findClip(beatSyncClips[0]);
+                         if (first == nullptr) return;
+                         const double period = 60000.0 / bpm / juce::jmax(0.01, first->effectiveTempoRatio);
+                         beatSyncExpected = at + 8.0 * period;
+                         beatSyncClips[1] = actions.addClip(b, *model().findLibraryItem(tempoItemIds[0]), beatSyncExpected + 37.0);
+                         mirror.refreshNow();
+                         const auto* second = model().findClip(beatSyncClips[1]);
+                         if (second == nullptr) return;
+                         beatSyncResult = beatsync::nearestBeat(model(), *second, second->offsetMs, second->trackId);
+                         juce::StringArray labels;
+                         for (const auto& p : beatsync::placements(model(), *second, second->offsetMs, second->trackId)) labels.add(p.label);
+                         beatSyncLine = "37 ms off -> " + juce::String(beatSyncResult - beatSyncExpected, 2) + " ms; menu: " + labels.joinIntoString(", ");
+                         beatSyncMenuOk = labels.contains("Nearest beat") && labels.contains("Nearest bar");
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         const bool ok = beatSyncLine.isNotEmpty() && std::abs(beatSyncResult - beatSyncExpected) <= 2.0 && beatSyncMenuOk;
+                         lastTempoLine = "beat sync: " + beatSyncLine;
+                         if (ok) report.add(lastTempoLine);
+                         juce::StringArray tracks;
+                         for (const auto& id : beatSyncClips)
+                             if (const auto* c = model().findClip(id)) tracks.add(c->trackId);
+                         for (const auto& t : tracks) actions.removeTrack(t);
+                         mirror.refreshNow();
+                         return ok;
+                     }});
+    steps.back().poll = true;
+    // Auto mix aiming at a play time (12 s here, the test tracks being short): the join starts
+    // on a bar line, the incoming track's downbeats sit on the grid, the outgoing ends with it.
+    steps.push_back({"auto mix with a target play time",
+                     [this]
+                     {
+                         autoTargetTracksBefore = static_cast<int>(model().tracks.size());
+                         autoTargetLine = automix::build(engine, mirror, actions, *mixWaveforms, {tempoItemIds[0], tempoItemIds[1]}, false,
+                                                         "Smooth", false, 12.0);
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         mirror.refreshNow();
+                         const auto* list = model().raw.getProperty("mixTransitions", {}).getArray();
+                         if (list == nullptr || list->isEmpty()) return false;
+                         const auto& t = list->getReference(list->size() - 1);
+                         const auto* out = model().findClip(t.getProperty("outClipId", {}).toString());
+                         const auto* in = model().findClip(t.getProperty("inClipId", {}).toString());
+                         if (out == nullptr || in == nullptr) return false;
+                         const auto curve = model().tempoCurve();
+                         const double start = static_cast<double>(t.getProperty("startMs", 0.0));
+                         const double end = static_cast<double>(t.getProperty("endMs", 0.0));
+                         const double startBeat = curve.beatAt(start);
+                         const bool onBar = std::abs(startBeat - std::round(startBeat / 4.0) * 4.0) < 0.02;
+                         std::vector<size_t> down;
+                         const auto beats = beatsync::clipBeatsMs(model(), *in, in->offsetMs, &down);
+                         double worst = 0.0;
+                         std::vector<double> errors;
+                         for (const auto i : down)
+                         {
+                             const double b = curve.beatAt(beats[i]);
+                             errors.push_back(std::abs(beats[i] - curve.msAtBeat(std::round(b))));
+                             worst = juce::jmax(worst, errors.back());
+                         }
+                         std::sort(errors.begin(), errors.end());
+                         const double typical = errors.empty() ? 1.0e9 : errors[errors.size() / 2];
+                         const double played = (start - curve.msAtBeat(std::round(curve.beatAt(out->offsetMs)))) / 1000.0;
+                         lastTempoLine = "auto mix target 12 s: join at " + juce::String(played, 1) + " s into the outgoing, on a bar "
+                                         + (onBar ? "yes" : "no") + ", incoming downbeats " + juce::String(typical, 2) + " ms off the grid (median; at most "
+                                         + juce::String(worst, 2) + " ms); "
+                                         + autoTargetLine;
+                         const bool ok = onBar && !down.empty() && typical <= 5.0 && std::abs(out->endMs() - end) < 2.0
+                                         && std::abs(in->offsetMs - start) < 2.0 && played < 20.0;
+                         if (ok) report.add(lastTempoLine);
+                         juce::StringArray added;
+                         for (size_t i = static_cast<size_t>(autoTargetTracksBefore); i < model().tracks.size(); ++i) added.add(model().tracks[i].id);
+                         for (const auto& id : added) actions.removeTrack(id);
+                         mirror.refreshNow();
+                         return ok;
                      }});
     steps.back().poll = true;
     // Two files dropped at once: the prompt, answered "as dropped", mixes them on two decks.

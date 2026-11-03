@@ -59,9 +59,9 @@ struct LibraryContext
     std::function<void(const juce::String& itemId)> openScratch;
     std::function<void(const juce::String& itemId)> openEditor;
     // Lays the tracks out as a DJ mix (automix::build): harmonically reordered or as given.
-    std::function<void(std::vector<juce::String> itemIds, bool reorder, const juce::String& style, bool matchKeys)> autoMix;
-    // The vocals of one track over the instrumental of another (MashupBuilder).
-    std::function<void(const juce::String& vocalItemId, const juce::String& beatItemId)> mashup;
+    std::function<void(std::vector<juce::String> itemIds, bool reorder, const juce::String& style, bool matchKeys, double targetSec)> autoMix;
+    // Quick Mashup of these tracks (the dialog, then MashupBuilder).
+    std::function<void(std::vector<juce::String> itemIds)> mashup;
     // Stemcel's own analysis of a track's sections (SectionAnalyser), run again.
     std::function<void(const juce::String& itemId)> analyseSections;
     // The BPM variability check (TempoReport).

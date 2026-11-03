@@ -79,6 +79,9 @@ GeneralPreferencesPage::GeneralPreferencesPage(AppPreferences& preferences) : pr
         prefs.set("toasts", "enabled", toasts.getToggleState());
         prefs.save();
     };
+    toastsHint.setText("Pop-up messages for finished exports, ready stems and errors.", juce::dontSendNotification);
+    toastsHint.setFont(uiFont(11.0f));
+    toastsHint.setColour(juce::Label::textColourId, colours::textFaint);
     // Read once at startup (applyTheme): every component takes its colours when it is made.
     styleLabel(themeLabel);
     const auto savedTheme = prefs.get("ui", "theme", "terminal").toString();
@@ -94,7 +97,7 @@ GeneralPreferencesPage::GeneralPreferencesPage(AppPreferences& preferences) : pr
                                                                   : juce::String("Applies the next time Stemcel starts."),
                           juce::dontSendNotification);
     };
-    for (auto* c : std::initializer_list<juce::Component*>{&waveLabel, &waveMode, &toasts, &themeLabel, &themeBox, &themeNote})
+    for (auto* c : std::initializer_list<juce::Component*>{&waveLabel, &waveMode, &toasts, &toastsHint, &themeLabel, &themeBox, &themeNote})
         addAndMakeVisible(c);
 }
 
@@ -106,6 +109,7 @@ void GeneralPreferencesPage::resized()
     waveMode.setBounds(r.removeFromLeft(380).reduced(0, 2));
     area.removeFromTop(12);
     toasts.setBounds(area.removeFromTop(26));
+    toastsHint.setBounds(area.removeFromTop(18).withTrimmedLeft(26));
     area.removeFromTop(12);
     r = area.removeFromTop(28);
     themeLabel.setBounds(r.removeFromLeft(120));

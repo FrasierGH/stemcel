@@ -1,6 +1,7 @@
 #include "MediaStore.h"
 
 #include "AppPaths.h"
+#include "ProjectSession.h"
 
 namespace stemcel::native::media
 {
@@ -30,8 +31,8 @@ juce::String mimeForImage(const juce::File& file)
 juce::File rootFor(const juce::String& projectFile)
 {
     if (projectFile.isNotEmpty()) return juce::File(projectFile).getParentDirectory();
-    // The Electron app's unsaved workspace: <temp>/Stemcel.
-    return systemTempDirectory().getChildFile(appFolderName());
+    // An unsaved project's: its tab's temp workspace.
+    return stemcel::tempArtifactsRoot();
 }
 
 bool isSafeId(const juce::String& mediaId)

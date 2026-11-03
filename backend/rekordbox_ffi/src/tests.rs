@@ -242,6 +242,36 @@ fn a_device_export_opens_and_takes_playlist_edits() {
     let _ = track_id;
 }
 
+#[test]
+fn a_onelibrary_with_text_that_is_not_utf8_opens_read_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let audio = dir.path().join("source.wav");
+    std::fs::write(&audio, wav_bytes()).unwrap();
+    let stick = dir.path().join("stick");
+    let built = take_json(unsafe {
+        rbx_build_device_fixture(c(stick.to_str().unwrap()).as_ptr(), c(audio.to_str().unwrap()).as_ptr())
+    });
+    assert_eq!(built["ok"], true, "{built}");
+    // A title with a stray Latin-1 byte, as the user's SSD has: "XTREME DOLPHIN DIVE\xE9".
+    let db = device_database(&stick, Format::OneLibrary);
+    {
+        let conn = rbl_onelibrary::playlists::open_read_write(&db).unwrap();
+        conn.execute("UPDATE content SET title = CAST(X'585452454D4520444F4C5048494E2044495645E9' AS TEXT)", []).unwrap();
+    }
+    assert!(device_library::read(&stick, Format::OneLibrary).is_err(), "rbxport reads it strictly");
+
+    let mut error: *mut c_char = std::ptr::null_mut();
+    let library = unsafe { rbx_open_device(c(stick.to_str().unwrap()).as_ptr(), c("oneLibrary").as_ptr(), &mut error) };
+    assert!(!library.is_null(), "{}", take_json_text(error));
+    let snapshot = take_json(unsafe { rbx_snapshot_json(library) });
+    assert_eq!(snapshot["tracks"][0]["title"], "XTREME DOLPHIN DIVE\u{FFFD}");
+    let list = snapshot["playlists"].as_array().unwrap().iter().find(|p| p["name"] == "Stick list").cloned().unwrap();
+    assert_eq!(list["trackIds"].as_array().unwrap().len(), 1);
+    let refusal = take_json(unsafe { rbx_write_refusal_json(library) });
+    assert_eq!(refusal["ok"], false, "{refusal}");
+    unsafe { rbx_close(library) };
+}
+
 fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
     std::fs::create_dir_all(to).unwrap();
     for entry in std::fs::read_dir(from).unwrap() {
