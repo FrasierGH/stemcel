@@ -1,4 +1,4 @@
-"""Draws the Stemcel logo: Yggdrasil, the world tree, as a flat green print on a black circle.
+"""Draws the Stemcel logo: Yggdrasil, the world tree, as a flat blue print on a black circle.
 
 One symmetrical tree: a trunk that widens into its roots and divides into limbs, the limbs
 forking up into a rounded crown and the roots mirroring them below, every branch growing
@@ -14,7 +14,7 @@ import os
 from PIL import Image, ImageDraw
 
 SIZE = 4096
-GREEN = (51, 255, 110, 255)  # the theme's accent (Theme.h sky500)
+GREEN = (42, 130, 218, 255)  # the Fusion theme's blue (Theme.cpp fusionPalette::highlight, #2A82DA)
 BLACK = (0, 0, 0, 255)
 CENTRE = SIZE / 2
 RADIUS = SIZE * 0.48     # the black disc
