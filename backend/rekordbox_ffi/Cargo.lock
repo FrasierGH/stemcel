@@ -1134,6 +1134,8 @@ dependencies = [
  "rbl-devices",
  "rbl-export",
  "rbl-index",
+ "rbl-onelibrary",
+ "rusqlite",
  "serde_json",
  "symphonia",
  "tempfile",

@@ -32,7 +32,9 @@ enum Source {
     /// `read_root` is where its database is read from: the drive itself, or, when the drive
     /// holds exports in both `PIONEER` and `.PIONEER`, a folder linking to the newer one
     /// (`device_view`). Track paths always resolve on the drive (`root`).
-    Device { root: PathBuf, format: Format, library: device_library::Library, read_root: PathBuf },
+    /// `lenient`: read past text that isn't valid UTF-8 (see `read_one_lenient`), and so
+    /// never written to.
+    Device { root: PathBuf, format: Format, library: device_library::Library, read_root: PathBuf, lenient: bool },
 }
 
 fn format_name(format: Format) -> &'static str {
@@ -148,9 +150,18 @@ pub unsafe extern "C" fn rbx_open_device(
     let result = catch_unwind(AssertUnwindSafe(|| match (root, format) {
         (Some(root), Some(format)) => {
             let read_root = device_view(&root).unwrap_or_else(|| root.clone());
-            device_library::read(&read_root, format)
-                .map(|library| RbxLibrary { source: Source::Device { root, format, library, read_root } })
-                .map_err(|e| e.to_string())
+            match device_library::read(&read_root, format) {
+                Ok(library) => Ok(RbxLibrary { source: Source::Device { root, format, library, read_root, lenient: false } }),
+                // rbxport stops at the first title, artist or name that isn't valid UTF-8 (and
+                // calls every OneLibrary failure "could not write"): read it again ourselves,
+                // replacing what can't be decoded.
+                Err(e) if format == Format::OneLibrary && e.to_string().contains("utf-8") => {
+                    read_one_lenient(&device_database(&read_root, format))
+                        .map(|library| RbxLibrary { source: Source::Device { root, format, library, read_root, lenient: true } })
+                        .map_err(|e2| format!("Couldn't read this drive's OneLibrary: a track's text isn't valid UTF-8 ({e2})"))
+                }
+                Err(e) => Err(e.to_string()),
+            }
         }
         _ => Err("bad arguments".to_owned()),
     }));
@@ -881,6 +892,9 @@ fn same_volume(a: &Path, b: &Path) -> bool {
 }
 
 fn write_refusal(library: &RbxLibrary) -> Option<&'static str> {
+    if let Source::Device { lenient: true, .. } = &library.source {
+        return Some("Some of this drive's OneLibrary text isn't valid UTF-8 (shown with \u{FFFD} in its place). Stemcel reads it but won't write to it, so the original text is kept; export the drive again from rekordbox to fix it.");
+    }
     if let Source::Device { root, read_root, .. } = &library.source {
         if root != read_root {
             return Some("This drive holds rekordbox exports in both PIONEER and .PIONEER; Stemcel reads the newer one but won't write to either until one is removed.");
@@ -1127,6 +1141,139 @@ fn build_device_fixture(dir: &Path, audio: &Path) -> Result<String, String> {
     let track_id = library.tracks.first().map(|t| t.id.to_string()).unwrap_or_default();
     let playlist_id = library.nodes.iter().find(|n| n.name == "Stick list").map(|n| n.id.to_string()).unwrap_or_default();
     Ok(json!({ "ok": true, "root": dir.to_string_lossy(), "trackId": track_id, "playlistId": playlist_id }).to_string())
+}
+
+/// Puts nodes in tree order (rbxport's `device_library::tree_order`): depth first from the
+/// top level, siblings by sequence then id; a node under a missing parent goes to the top.
+fn tree_order(mut nodes: Vec<device_library::Node>) -> Vec<device_library::Node> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let folders: BTreeSet<u32> = nodes.iter().filter(|n| n.folder).map(|n| n.id).collect();
+    for node in &mut nodes {
+        if node.parent != 0 && (!folders.contains(&node.parent) || node.parent == node.id) {
+            node.parent = 0;
+        }
+    }
+    let mut children: BTreeMap<u32, Vec<device_library::Node>> = BTreeMap::new();
+    for node in nodes {
+        children.entry(node.parent).or_default().push(node);
+    }
+    for siblings in children.values_mut() {
+        siblings.sort_by_key(|n| (n.sequence, n.id));
+    }
+    let mut out = Vec::new();
+    let mut stack: Vec<device_library::Node> = children.remove(&0).unwrap_or_default().into_iter().rev().collect();
+    while let Some(node) = stack.pop() {
+        if let Some(under) = children.remove(&node.id) {
+            stack.extend(under.into_iter().rev());
+        }
+        out.push(node);
+    }
+    out.extend(children.into_values().flatten());
+    out
+}
+
+/// A column as text, whatever its bytes: invalid UTF-8 becomes U+FFFD, a number its digits.
+fn lossy(row: &rusqlite::Row, i: usize) -> rusqlite::Result<String> {
+    use rusqlite::types::ValueRef;
+    Ok(match row.get_ref(i)? {
+        ValueRef::Text(bytes) | ValueRef::Blob(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+        ValueRef::Integer(v) => v.to_string(),
+        ValueRef::Real(v) => v.to_string(),
+        ValueRef::Null => String::new(),
+    })
+}
+
+/// rbxport's OneLibrary reader (`device_library::read_one`), reading text leniently.
+fn read_one_lenient(path: &Path) -> Result<device_library::Library, String> {
+    let db = rbl_onelibrary::ExportLibrary::open_read_only(path).map_err(|e| e.to_string())?;
+    let conn = db.connection();
+    let id = |v: i64| u32::try_from(v).unwrap_or(0);
+    let mut contents: std::collections::BTreeMap<i64, Vec<i64>> = std::collections::BTreeMap::new();
+    {
+        let mut st = conn
+            .prepare("SELECT playlist_id, content_id FROM playlist_content ORDER BY playlist_id, sequenceNo, rowid")
+            .map_err(|e| e.to_string())?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))).map_err(|e| e.to_string())?;
+        for row in rows {
+            let (playlist, content) = row.map_err(|e| e.to_string())?;
+            contents.entry(playlist).or_default().push(content);
+        }
+    }
+    let mut st = conn
+        .prepare(
+            "SELECT playlist_id, COALESCE(playlist_id_parent, 0), name, COALESCE(attribute, 0), COALESCE(sequenceNo, 0)
+             FROM playlist ORDER BY playlist_id",
+        )
+        .map_err(|e| e.to_string())?;
+    let nodes = st
+        .query_map([], |r| {
+            let pid: i64 = r.get(0)?;
+            let folder = r.get::<_, i64>(3)? == rbl_onelibrary::playlists::FOLDER;
+            Ok(device_library::Node {
+                id: id(pid),
+                parent: id(r.get(1)?),
+                name: lossy(r, 2)?,
+                folder,
+                sequence: id(r.get(4)?),
+                tracks: Vec::new(),
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|mut n| {
+            if !n.folder {
+                n.tracks = contents.remove(&i64::from(n.id)).unwrap_or_default().into_iter().map(id).collect();
+            }
+            n
+        })
+        .collect();
+    let mut st = conn
+        .prepare(
+            "SELECT c.content_id, c.title, a.name, al.name, g.name, l.name, k.name, c.djComment,
+                    c.dateAdded, COALESCE(c.bpmx100,0), COALESCE(c.length,0), COALESCE(c.rating,0),
+                    COALESCE(c.color_id,0), c.path, c.analysisDataFilePath, i.path,
+                    COALESCE(c.masterDbId,0), COALESCE(c.masterContentId,0)
+             FROM content c
+             LEFT JOIN artist a ON a.artist_id = c.artist_id_artist
+             LEFT JOIN album al ON al.album_id = c.album_id
+             LEFT JOIN genre g ON g.genre_id = c.genre_id
+             LEFT JOIN label l ON l.label_id = c.label_id
+             LEFT JOIN key k ON k.key_id = c.key_id
+             LEFT JOIN image i ON i.image_id = c.image_id",
+        )
+        .map_err(|e| e.to_string())?;
+    let mut tracks = st
+        .query_map([], |r| {
+            let raw_rating: i64 = r.get(11)?;
+            let stars = if raw_rating > 5 { raw_rating / 51 } else { raw_rating };
+            Ok(device_library::Track {
+                id: r.get(0)?,
+                title: lossy(r, 1)?,
+                artist: lossy(r, 2)?,
+                album: lossy(r, 3)?,
+                genre: lossy(r, 4)?,
+                label: lossy(r, 5)?,
+                key: lossy(r, 6)?,
+                comment: lossy(r, 7)?,
+                date_added: lossy(r, 8)?,
+                bpm_x100: r.get(9)?,
+                duration_sec: r.get(10)?,
+                rating: u8::try_from(stars.clamp(0, 5)).unwrap_or(0),
+                color: r.get(12)?,
+                path: lossy(r, 13)?,
+                analysis_path: lossy(r, 14)?,
+                artwork_path: lossy(r, 15)?,
+                master_db_id: u64::try_from(r.get::<_, i64>(16)?).unwrap_or(0),
+                master_content_id: u64::try_from(r.get::<_, i64>(17)?).unwrap_or(0),
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())?;
+    tracks.sort_by_key(|t| t.id);
+    Ok(device_library::Library { format: Format::OneLibrary, nodes: tree_order(nodes), tracks })
 }
 
 #[cfg(test)]
