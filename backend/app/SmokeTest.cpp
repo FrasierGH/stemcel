@@ -2887,13 +2887,22 @@ void SmokeTest::addTempoJourney()
                          const auto image = wheel.createComponentSnapshot(wheel.getLocalBounds());
                          juce::FileOutputStream out(workDir.getChildFile("key-wheel.png"));
                          if (out.openedOk()) juce::PNGImageFormat().writeImageToStream(image, out);
+                         // The second clip as leader: it stays put, so the first common key is its own.
+                         wheel.setLeaderForTest(1);
+                         juce::StringArray commons;
+                         for (const auto& k : wheel.commonKeysForTest()) commons.add(k.text());
+                         wheelLeaderOk = !wheel.commonKeysForTest().empty()
+                                         && (automix::keyDistance(wheel.commonKeysForTest().front(), automix::camelot(keys[1])) == 0
+                                             || !KeyWheel::shiftTo(keys[0], automix::camelot(keys[1]), 3));
+                         wheel.setLeaderForTest(0);
                          if (wheelTarget.valid()) wheel.applyForTest(wheelTarget);
-                         wheelLine = keys.joinIntoString(" and ") + " -> recommended " + wheelTarget.text();
+                         wheelLine = keys.joinIntoString(" and ") + " -> recommended " + wheelTarget.text() + "; led by the second, common keys "
+                                     + commons.joinIntoString(" ");
                      },
                      {},
                      [this](const juce::var&)
                      {
-                         if (wheelClips.size() < 2 || !wheelTarget.valid())
+                         if (wheelClips.size() < 2 || !wheelTarget.valid() || !wheelLeaderOk)
                          {
                              lastTempoLine = "key wheel: " + wheelLine;
                              return false;

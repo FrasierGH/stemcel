@@ -154,6 +154,7 @@ class SmokeTest final : private juce::Timer
     int driftStage = 0;
     std::vector<juce::String> wheelClips;
     automix::Camelot wheelTarget;
+    bool wheelLeaderOk = false;
     juce::String wheelLine, wheelItemId, wheelItemKey;
     std::vector<double> driftBeats;
     juce::String driftItemId, driftClipId, driftLine;
