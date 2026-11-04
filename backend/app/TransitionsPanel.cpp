@@ -110,13 +110,13 @@ TransitionsPanel::TransitionsPanel(LibraryContext& context) : ctx(context)
         for (const auto& p : mix::presets())
             if (p.category == category) fullRows.push_back({{}, "transition:preset:" + p.id, p.name, p.description, {}});
     }
-    outs = std::make_unique<Column>(ctx, "OUTS: how the outgoing track leaves", colours::amber400, std::move(outRows));
-    ins = std::make_unique<Column>(ctx, "INS: how the incoming track arrives", colours::sky400, std::move(inRows));
-    full = std::make_unique<Column>(ctx, "FULL TRANSITIONS: an out and an in together", colours::violet500, std::move(fullRows));
+    outs = std::make_unique<Column>(ctx, "OUTS", colours::amber400, std::move(outRows));
+    ins = std::make_unique<Column>(ctx, "INS", colours::sky400, std::move(inRows));
+    full = std::make_unique<Column>(ctx, "FULL TRANSITIONS", colours::violet500, std::move(fullRows));
     for (auto* c : {outs.get(), ins.get(), full.get()}) addAndMakeVisible(c);
 
-    hint.setText("Drag onto a clip that overlaps a clip on another track: an Out where it ends, an In where it starts. Double-click "
-                 "a transition on the timeline to tweak its span, curves and EQ.",
+    hint.setText("Drag onto a clip that overlaps one on another track: an Out where it ends, an In where it starts. Double-click "
+                 "a transition on the timeline to edit it.",
                  juce::dontSendNotification);
     hint.setFont(uiFont(11.0f));
     hint.setColour(juce::Label::textColourId, colours::textDim);

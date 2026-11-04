@@ -429,11 +429,10 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
         ids.addArray(orphans);
         for (auto it = selection.begin(); it != selection.end();)
             it = ids.contains(*it) ? std::next(it) : selection.erase(it);
-        empty.setText(m.library.empty() ? juce::String("Drop audio files here, or click Import to add them.")
-                      : filter.getText().trim().isEmpty() ? "No " + kindFilter.getText().toLowerCase() + " in the library yet."
-                                                          : "No library items match \"" + filter.getText().trim() + "\".",
+        empty.setText(filter.getText().trim().isEmpty() ? "No " + kindFilter.getText().toLowerCase() + " in the library yet."
+                                                        : "No library items match \"" + filter.getText().trim() + "\".",
                       juce::dontSendNotification);
-        empty.setVisible(m.library.empty() || ids.isEmpty());
+        empty.setVisible(!m.library.empty() && ids.isEmpty());
         layout();
     }
 
@@ -1380,6 +1379,8 @@ LibraryPanel::LibraryPanel(LibraryContext context) : ctx(std::move(context))
         auto* tab = tabs.add(new juce::TextButton(names[index]));
         tab->setConnectedEdges(juce::Button::ConnectedOnLeft | juce::Button::ConnectedOnRight);
         tab->getProperties().set("tab", true); // drawn as a tab (Theme.cpp)
+        if (index == 0) tab->setTooltip("Drop audio files here, or click Import to add them");
+        if (index == 1) tab->setTooltip("Add a folder of samples or music to browse it here");
         tab->onClick = [this, index] { showTab(index); };
         addAndMakeVisible(tab);
     }

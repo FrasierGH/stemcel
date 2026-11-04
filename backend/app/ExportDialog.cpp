@@ -19,7 +19,7 @@ const juce::StringArray kLengthModes{"fixed-duration", "trim-to-last-clip", "sel
 const juce::Array<int> kLeadInsMs{0, 100, 250, 500, 1000};
 const juce::StringArray kLeadInLabels{"None", "0.1 s", "0.25 s", "0.5 s", "1 s"};
 const juce::StringArray kLoudnessPresets{"off", "streaming-14", "apple-16", "broadcast-23", "analyze", "custom"};
-const juce::StringArray kLoudnessLabels{"None - export as-is",
+const juce::StringArray kLoudnessLabels{"None",
                                         "Streaming -14 LUFS (Spotify, YouTube, SoundCloud, Tidal, Amazon)",
                                         "Apple Music -16 LUFS",
                                         "EBU R128 / AES Broadcast -23 LUFS",
@@ -366,7 +366,7 @@ void ExportDialog::updateEnablement()
         c->setVisible(custom);
     duration.setEnabled(length.getSelectedItemIndex() == 0);
     const double skip = startBarMs();
-    startHint.setText(skip > 0.0 ? "Skips the first " + formatTime(skip) + "." : juce::String("Renders from the project start."),
+    startHint.setText(skip > 0.0 ? "Skips the first " + formatTime(skip) + "." : juce::String(),
                       juce::dontSendNotification);
 
     const auto t = number(target.getText());

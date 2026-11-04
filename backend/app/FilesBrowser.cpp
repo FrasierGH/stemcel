@@ -129,7 +129,7 @@ void FilesBrowser::rebuildTree()
     for (const auto& r : roots())
         if (juce::File(r).isDirectory()) treeRoot->addSubItem(new FolderItem(*this, juce::File(r), true));
     tree.setRootItem(treeRoot.get());
-    hint.setVisible(treeRoot->getNumSubItems() == 0);
+    hint.setVisible(false); // the Files tab's tooltip says how to add a folder
     if (treeRoot->getNumSubItems() > 0 && tree.getNumSelectedItems() == 0) treeRoot->getSubItem(0)->setSelected(true, true);
 }
 

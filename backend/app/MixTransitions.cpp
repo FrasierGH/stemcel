@@ -87,18 +87,17 @@ std::vector<Preset> buildPresets()
 
     // ── Blends ─────────────────────────────────────────────────────────────────
     add(preset("smoothBlend", "Smooth Blend", "Blends",
-               "A long equal-power crossfade: both tracks ride together and trade places. For tracks in key.", 16,
+               "A long equal-power crossfade. Best for tracks in key.", 16,
                {{"level", fadeOut(0.0, 1.0)}}, {{"level", fadeIn(0.0, 1.0)}}),
         false, false, 0);
     add(preset("bassSwap", "Bass Swap", "Blends",
                "The incoming track comes in without its bass; on the middle downbeat the basslines swap, then the "
-               "outgoing track fades. The house and techno standard.",
+               "outgoing track fades.",
                8, {{"toneBass", step(0.5, 0.0, kKillDb)}, {"level", fadeOut(0.5, 1.0)}},
                {{"toneBass", step(0.5, kKillDb, 0.0)}, {"level", fadeIn(0.0, 0.5)}}),
         false, false, 0);
     add(preset("eqBlend", "Three-Band Blend", "Blends",
-               "Highs first, then mids, then a bass swap: the incoming track takes over band by band, so the two "
-               "never fight in the same range.",
+               "Highs first, then mids, then a bass swap: the incoming track takes over band by band.",
                16,
                {{"toneTreble", ramp(0.33, 0.66, 0.0, kKillDb)},
                 {"toneMid", ramp(0.66, 0.9, 0.0, kKillDb)},
@@ -110,87 +109,82 @@ std::vector<Preset> buildPresets()
                 {"toneBass", step(0.66, kKillDb, 0.0)}}),
         false, false, 0);
     add(preset("vocalSafeBlend", "Vocal-Safe Blend", "Blends",
-               "A blend that keeps two vocals apart: the incoming mids (where voices sit) stay down until the "
-               "outgoing ones drop, with a bass swap at the same moment.",
+               "Keeps two vocals apart: the incoming mids stay down until the outgoing ones drop, with a bass swap at "
+               "the same moment.",
                16,
                {{"toneMid", step(0.5, 0.0, kKillDb)}, {"toneBass", step(0.5, 0.0, kKillDb)}, {"level", fadeOut(0.0, 1.0)}},
                {{"toneMid", step(0.5, kKillDb, 0.0)}, {"toneBass", step(0.5, kKillDb, 0.0)}, {"level", fadeIn(0.0, 1.0)}}),
         true, false, 0);
     add(preset("doubleDrop", "Double Drop", "Blends",
-               "Both tracks at full volume, drops together, the incoming bass held off so the low end stays clean; "
-               "the outgoing track drops out at the end.",
+               "Both tracks at full volume with their drops together, the incoming bass held off; the outgoing track "
+               "drops out at the end.",
                8, {{"level", fadeOut(0.9, 1.0)}}, {{"toneBass", step(0.999, kKillDb, 0.0)}}),
         false, false, 1);
     auto& tempoRamp = add(preset("tempoRampBlend", "Tempo Ramp Blend", "Blends",
-                                 "The project tempo glides from the outgoing track's to the incoming track's across the "
-                                 "blend, with a bass swap in the middle: for joining tracks at different tempos without a jump.",
+                                 "The project tempo ramps from the outgoing track's to the incoming track's across the blend, with a "
+                                 "bass swap in the middle.",
                                  16, {{"toneBass", step(0.5, 0.0, kKillDb)}, {"level", fadeOut(0.5, 1.0)}},
                                  {{"toneBass", step(0.5, kKillDb, 0.0)}, {"level", fadeIn(0.0, 0.5)}}),
                           false, false, 0); // the auto mixer ramps only a modest gap (under 16%)
     tempoRamp.extra = Extra::tempoRamp;
     add(preset("linearFade", "Linear Fade", "Blends",
-               "A plain fade in dB, the outgoing track out as the incoming one comes in: the radio segue.", 8,
+               "A linear fade in dB, one track out as the other comes in.", 8,
                {{"level", ramp(0.0, 1.0, 0.0, kSilentDb)}}, {{"level", ramp(0.0, 1.0, kSilentDb, 0.0)}}),
         false, true, -1);
 
     // ── Filters ────────────────────────────────────────────────────────────────
     add(preset("lowPassOut", "Low-Pass Filter Out", "Filters",
-               "The outgoing track's highs close down until only its thump is left, as the incoming track rises "
-               "in. Bright and busy to dark and minimal.",
+               "A low-pass closes on the outgoing track as the incoming track fades in.",
                8, {{"filter", ramp(0.0, 0.85, 0.0, -1.0)}, {"level", fadeOut(0.85, 1.0)}},
                {{"toneBass", step(0.5, kKillDb, 0.0)}, {"level", fadeIn(0.25, 0.75)}}),
         true, false, -1);
     add(preset("highPassOut", "High-Pass Filter Out", "Filters",
-               "The outgoing track thins out from the bottom up as the incoming one's bass arrives: a lift into "
-               "the next track.",
+               "A high-pass thins the outgoing track from the bottom up as the incoming one's bass arrives.",
                8, {{"filter", ramp(0.0, 0.85, 0.0, 1.0)}, {"level", fadeOut(0.85, 1.0)}},
                {{"toneBass", step(0.5, kKillDb, 0.0)}, {"level", fadeIn(0.0, 0.5)}}),
         true, false, 1);
     add(preset("filterSwap", "Filter Swap", "Filters",
-               "Mirror sweeps: the outgoing track closes with a low-pass while the incoming one opens out of a "
-               "high-pass. Two busy tracks cross without clashing.",
+               "The outgoing track closes with a low-pass while the incoming one opens out of a high-pass.",
                8, {{"filter", ramp(0.0, 1.0, 0.0, -1.0)}, {"level", fadeOut(0.8, 1.0)}},
                {{"filter", ramp(0.0, 1.0, 1.0, 0.0)}, {"level", fadeIn(0.0, 0.3)}}),
         true, false, 0);
     add(preset("lowPassIn", "Muffled Intro", "Filters",
-               "The incoming track starts behind a closed low-pass and opens up as the outgoing one fades, as if a "
-               "door opened onto it.",
+               "The incoming track starts behind a closed low-pass that opens as the outgoing one fades.",
                8, {{"toneBass", step(0.5, 0.0, kKillDb)}, {"level", fadeOut(0.5, 1.0)}},
                {{"filter", ramp(0.0, 1.0, -1.0, 0.0)}, {"level", fadeIn(0.0, 0.25)}}),
         false, false, 1);
     add(preset("highPassIn", "Thin Intro", "Filters",
-               "The incoming track starts as hats and air behind a high-pass and fills in its body while the "
-               "outgoing one hands over its bass.",
+               "The incoming track starts behind a high-pass that opens while the outgoing one hands over its bass.",
                8, {{"toneBass", step(0.6, 0.0, kKillDb)}, {"level", fadeOut(0.6, 1.0)}},
                {{"filter", ramp(0.0, 0.9, 1.0, 0.0)}, {"level", fadeIn(0.0, 0.25)}}),
         false, false, 1);
 
     // ── FX ─────────────────────────────────────────────────────────────────────
     auto& echo = add(preset("echoOut", "Echo Out", "FX",
-                            "The outgoing track is thrown into the echo and cut on the beat; its repeats ring out as the "
-                            "incoming track drops. Covers any key or tempo change.",
+                            "The outgoing track is sent into the echo and cut on the beat; the repeats carry on as the incoming "
+                            "track drops. Works across any key or tempo change.",
                             2, {{"delaySend", ramp(0.55, 0.7, 0.0, 1.0)}, {"level", step(0.75, 0.0, kSilentDb)}},
                             {{"level", step(0.75, kSilentDb, 0.0)}}),
                      true, true, 0);
     echo.usesEcho = true;
     auto& wash = add(preset("reverbWash", "Reverb Wash", "FX",
-                            "The outgoing track lifts into a swelling reverb and a rising high-pass, then cuts, leaving a "
-                            "wash for the incoming track to land in.",
+                            "The outgoing track goes into reverb behind a rising high-pass, then cuts; the tail carries into the "
+                            "incoming track.",
                             4, {{"reverbSend", ramp(0.4, 0.8, 0.0, 1.0)}, {"filter", ramp(0.4, 0.8, 0.0, 0.6)},
                                 {"level", step(0.8, 0.0, kSilentDb)}},
                             {{"level", step(0.8, kSilentDb, 0.0)}}),
                      true, true, -1);
     wash.usesReverb = true;
     auto& crush = add(preset("crushOut", "Bitcrush Out", "FX",
-                             "The outgoing track degrades into crunchy low-resolution grit, then cuts to the incoming one.",
+                             "The outgoing track is bitcrushed, then cuts to the incoming one.",
                              2, {{"bitCrusherMix", ramp(0.4, 0.75, 0.0, 1.0)}, {"bitCrusherRate", ramp(0.4, 0.9, 1.0, 0.05)},
                                  {"level", step(0.9, 0.0, kSilentDb)}},
                              {{"level", step(0.9, kSilentDb, 0.0)}}),
                       true, true, 1);
     juce::ignoreUnused(crush);
     auto& throwDrop = add(preset("echoDrop", "Echo Into the Drop", "FX",
-                                 "The outgoing track builds behind a rising high-pass and an echo throw, then stops dead as "
-                                 "the incoming track hits on its drop.",
+                                 "The outgoing track builds behind a rising high-pass and an echo, then stops as the incoming "
+                                 "track's drop hits.",
                                  4, {{"filter", ramp(0.4, 0.95, 0.0, 0.7)}, {"delaySend", ramp(0.85, 0.95, 0.0, 1.0)},
                                      {"level", step(0.999, 0.0, kSilentDb)}},
                                  {{"level", step(0.999, kSilentDb, 0.0)}}),
@@ -199,27 +193,27 @@ std::vector<Preset> buildPresets()
 
     // ── Cuts and turntable moves ───────────────────────────────────────────────
     add(preset("quickCut", "Quick Cut", "Cuts",
-               "A clean swap on the downbeat. Instant, punchy, and fine for any key or tempo jump.", 1,
+               "A hard cut on the downbeat. Works across any key or tempo change.", 1,
                {{"level", step(0.5, 0.0, kSilentDb)}}, {{"level", step(0.5, kSilentDb, 0.0)}}),
         true, true, 1);
     add(preset("bassCut", "Bass Kill Cut", "Cuts",
-               "Both tracks play over the window with the incoming bass killed, then the outgoing track cuts and the "
-               "incoming bass slams in together.",
+               "Both tracks play with the incoming bass killed, then the outgoing track cuts as the incoming bass "
+               "comes in.",
                4, {{"level", step(0.999, 0.0, kSilentDb)}}, {{"toneBass", step(0.999, kKillDb, 0.0)}, {"level", fadeIn(0.0, 0.5)}}),
         false, false, 1);
     auto& brake = add(preset("brake", "Vinyl Brake", "Cuts",
-                             "The outgoing record grinds to a stop at its end and the incoming track drops in after it.", 1,
+                             "The outgoing track brakes to a stop, then the incoming track drops in.", 1,
                              {}, {{"level", step(0.999, kSilentDb, 0.0)}}),
                       true, true, 0);
     brake.extra = Extra::brake;
     auto& spin = add(preset("backspin", "Backspin", "Cuts",
-                            "A hand-pulled spinback on the outgoing record, then the incoming track on the next downbeat.", 1,
+                            "A spinback on the outgoing track, then the incoming track on the next downbeat.", 1,
                             {}, {{"level", step(0.999, kSilentDb, 0.0)}}),
                      true, true, 1);
     spin.extra = Extra::backspin;
     auto& roll = add(preset("loopRoll", "Loop Roll", "Cuts",
-                            "The outgoing track's last bar stutters in shrinking loops (quarters, eighths, sixteenths) "
-                            "under a rising filter, then the incoming track drops.",
+                            "The outgoing track's last bar loops in shrinking lengths (1/4, 1/8, 1/16) under a rising filter, "
+                            "then the incoming track drops.",
                             1, {{"filter", ramp(0.0, 0.98, 0.0, 0.5)}}, {{"level", step(0.999, kSilentDb, 0.0)}}),
                      true, true, 1);
     roll.extra = Extra::loopRoll;
@@ -807,45 +801,45 @@ std::vector<HalfKind> buildHalfKinds()
         h.swapAt = 0.66;
     }
     {
-        auto& h = add("Low-Pass Out", "Its highs close down until only the thump is left, then it fades.", true,
+        auto& h = add("Low-Pass Out", "A low-pass closes, then it fades.", true,
                       half("lowPassOut", 0.0, 1.0, "edge", "slow"));
         h.filter = "lowPass";
     }
     {
-        auto& h = add("High-Pass Out", "Thins out from the bottom up, then fades: a lift.", true, half("highPassOut", 0.0, 1.0, "edge", "slow"));
+        auto& h = add("High-Pass Out", "A high-pass rises, then it fades.", true, half("highPassOut", 0.0, 1.0, "edge", "slow"));
         h.filter = "highPass";
     }
     {
-        auto& h = add("Echo Out", "Thrown into the echo and cut on the beat; the repeats ring on.", true, half("echoOut", 0.55, 0.75, "cut"));
+        auto& h = add("Echo Out", "Sent into the echo and cut on the beat.", true, half("echoOut", 0.55, 0.75, "cut"));
         h.effect = "echo";
     }
     {
-        auto& h = add("Reverb Wash", "Swells into reverb behind a rising high-pass, then cuts.", true, half("reverbOut", 0.4, 0.8, "cut"));
+        auto& h = add("Reverb Wash", "Into reverb behind a rising high-pass, then cuts.", true, half("reverbOut", 0.4, 0.8, "cut"));
         h.effect = "reverb";
         h.filter = "highPass";
         h.filterDepth = 0.6;
     }
     {
-        auto& h = add("Bitcrush Out", "Degrades into low-resolution grit, then cuts.", true, half("crushOut", 0.4, 0.9, "cut"));
+        auto& h = add("Bitcrush Out", "Bitcrushed, then cuts.", true, half("crushOut", 0.4, 0.9, "cut"));
         h.effect = "crush";
     }
     add("Cut", "Stops dead on the downbeat.", true, half("cutOut", 0.5, 0.5, "cut"));
     {
-        auto& h = add("Vinyl Brake", "The record grinds to a stop at the clip's end.", true, half("brakeOut", 1.0, 1.0, "none"));
+        auto& h = add("Vinyl Brake", "Brakes to a stop at the clip's end.", true, half("brakeOut", 1.0, 1.0, "none"));
         h.extra = Extra::brake;
     }
     {
-        auto& h = add("Backspin", "A hand-pulled spinback at the clip's end.", true, half("backspinOut", 1.0, 1.0, "none"));
+        auto& h = add("Backspin", "A spinback at the clip's end.", true, half("backspinOut", 1.0, 1.0, "none"));
         h.extra = Extra::backspin;
     }
     {
-        auto& h = add("Echoed Wheel Up", "Thrown into the echo, then a hard, fast spin back over the last beat.", true,
+        auto& h = add("Echoed Wheel Up", "Sent into the echo, then a fast spinback over the last beat.", true,
                       half("wheelUpOut", 0.6, 0.85, "none"));
         h.extra = Extra::wheelUp;
         h.effect = "echo";
     }
     {
-        auto& h = add("Loop Roll", "The last bar stutters in shrinking loops under a rising filter.", true,
+        auto& h = add("Loop Roll", "The last bar loops in shrinking lengths under a rising filter.", true,
                       half("loopRollOut", 0.0, 0.98, "none", "linear"));
         h.extra = Extra::loopRoll;
         h.filter = "highPass";
@@ -869,7 +863,7 @@ std::vector<HalfKind> buildHalfKinds()
         h.filter = "lowPass";
     }
     {
-        auto& h = add("Thin Intro", "Starts as hats and air behind a high-pass and fills in its body.", false,
+        auto& h = add("Thin Intro", "Starts behind a high-pass that opens.", false,
                       half("highPassIn", 0.0, 0.9, "edge", "slow"));
         h.filter = "highPass";
     }

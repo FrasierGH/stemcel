@@ -274,7 +274,7 @@ void TempoReport::refresh()
     const auto* clip = m.findClip(clipId);
     juce::String text;
     if (analyser.isRunning(itemId))
-        text = "Following the beats through the whole track...";
+        text = "Analysing beats...";
     else if (!drift.valid())
         text = "No tempo measured yet.";
     else

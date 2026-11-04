@@ -38,7 +38,7 @@ void StartupScreen::refresh(bool engineReady, const juce::String& engineMessage)
     ready = engineReady;
     newButton.setEnabled(ready);
     openButton.setEnabled(ready);
-    statusLabel.setText(engineReady ? juce::String("Start a new project or open an existing one.") : engineMessage,
+    statusLabel.setText(engineReady ? juce::String() : engineMessage,
                         juce::dontSendNotification);
 
     recentButtons.clear();

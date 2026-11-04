@@ -419,8 +419,7 @@ TransitionEditor::TransitionEditor(ProjectMirror& projectMirror, TimelineActions
     addAndMakeVisible(heading);
     sub.setFont(uiFont(11.0f));
     sub.setColour(juce::Label::textColourId, colours::textDim);
-    sub.setText("Changes apply as you make them (Undo steps back). The window is where the two clips overlap: move or trim them to "
-                "lengthen it. + on an option draws its curve by hand on the graph.",
+    sub.setText("The window is where the two clips overlap: move or trim them to change it.",
                 juce::dontSendNotification);
     addAndMakeVisible(sub);
     hint.setFont(uiFont(11.0f));

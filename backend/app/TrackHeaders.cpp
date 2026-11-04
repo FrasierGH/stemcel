@@ -533,7 +533,7 @@ TrackHeaders::TrackHeaders(ProjectMirror& projectMirror, TimelineViewState& view
                            TimelineActions& timelineActions)
     : mirror(projectMirror), view(viewState), live(liveState), actions(timelineActions)
 {
-    addTrackButton.setTooltip("Add a new track");
+    addTrackButton.setTooltip("Add a track, then drag audio onto it from the library");
     addTrackButton.onClick = [this]
     {
         view.selectedTrackId = actions.addTrack();
@@ -648,9 +648,6 @@ void TrackHeaders::paintHeader(juce::Graphics& g)
         g.setColour(colours::zinc400);
         g.setFont(uiFont(11.0f, true));
         g.drawText("TEMPO", text.removeFromTop(16), juce::Justification::centredLeft);
-        g.setColour(colours::textDim);
-        g.setFont(uiFont(11.0f));
-        g.drawText("BPM map", text.removeFromTop(14), juce::Justification::centredLeft);
     }
 }
 

@@ -914,13 +914,6 @@ void TimelineView::paint(juce::Graphics& g)
     paintRuler(g, getLocalBounds().withHeight(VS::kRulerHeight));
     if (view.tempoLaneVisible) paintTempoLane(g);
 
-    if (model().tracks.empty())
-    {
-        g.setColour(colours::textFaint);
-        g.setFont(uiFont(14.0f));
-        g.drawText("Add a track, then drag audio here from the library", tracksArea, juce::Justification::centred);
-    }
-
     // Playhead.
     const auto px = static_cast<float>(playheadX);
     g.setColour(colours::red500);

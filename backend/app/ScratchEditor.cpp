@@ -105,13 +105,7 @@ class ScratchEditor::Notation final : public juce::Component
     {
         g.fillAll(colours::zinc950);
         const auto& p = editor.pattern;
-        if (!p.isObject())
-        {
-            g.setColour(colours::textFaint);
-            g.setFont(uiFont(12.0f));
-            g.drawText("Record a take to see its notation here", getLocalBounds(), juce::Justification::centred);
-            return;
-        }
+        if (!p.isObject()) return;
         const double duration = juce::jmax(1.0, static_cast<double>(p.getProperty("durationUs", 1)));
         auto area = getLocalBounds().toFloat().reduced(0.0f, 4.0f);
         const auto platterArea = area.removeFromTop(area.getHeight() * 0.7f);
@@ -285,6 +279,7 @@ ScratchEditor::ScratchEditor(EngineClient& client, ProjectMirror& projectMirror,
     armButton.onClick = [this] { control(armed ? "recordDisarm" : "recordArm"); };
     recordButton.setColour(juce::TextButton::buttonColourId, colours::red600);
     recordButton.onClick = [this] { control(status == "recording" ? "recordStop" : "recordStart"); };
+    recordButton.setTooltip("Record a take to see its notation");
     crossfader.setSliderStyle(juce::Slider::LinearHorizontal);
     crossfader.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
     crossfader.setRange(0.0, 1.0, 0.001);
