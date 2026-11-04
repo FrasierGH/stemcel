@@ -46,6 +46,12 @@ class TimelineView final : public juce::Component,
                            private juce::Timer
 {
   public:
+    bool keyPressed(const juce::KeyPress&) override;
+    bool keyStateChanged(bool isKeyDown) override;
+    // For tests: a move drag of this clip under way, as a press on it would start.
+    void beginMoveDragForTest(const juce::String& clipId);
+    bool isBeatSyncedForTest() const { return beatSynced; }
+    void endDragForTest() { drag = DragKind::none; beatSynced = false; beatSyncHeld = false; }
     // Space while dragging a clip: a tap moves it the least that puts its beats on the beats of
     // the clip it overlaps (else the grid); held past 0.35 s, a menu of placements opens at the
     // pointer. False when no clip is being dragged (Space then plays as usual).
@@ -209,9 +215,19 @@ class TimelineView final : public juce::Component,
     double dragPreviewEndMs = 0.0;
     juce::String dragPreviewTrackId;
     bool beatSyncHeld = false;  // Space is down during a drag (key repeats are ignored)
+    bool beatSyncMenuShown = false;
+    juce::uint32 beatSyncPressedAt = 0;
     bool beatSynced = false;    // the preview sits where Space put it until the pointer moves on
     int beatSyncMouseX = 0;
+    juce::String beatSyncLabel; // what the last tap did, shown on the dragged clip
     void showBeatSyncMenu();
+    // The tempo lane's bottom edge, dragged to make it taller (Ruler + lane height).
+    bool tempoResizing = false;
+    int tempoResizeStartHeight = 0;
+    bool overTempoLaneEdge(int y) const;
+    // Right-click on a transition's fades over the clips: the curve of the level segment
+    // there, and the transition editor.
+    bool showTransitionCurveMenu(juce::Point<float> p);
     bool dragDuplicates = false; // Alt/Option held as a clip move began: drop a copy, leave the clip
     double panStartScrollX = 0.0, panStartScrollY = 0.0;
     std::optional<std::pair<double, double>> rangePreview;

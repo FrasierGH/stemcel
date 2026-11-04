@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <utility>
 
 namespace stemcel::native::automix
 {
@@ -141,8 +142,8 @@ std::optional<double> windowEnergyDb(WaveformStore& waveforms, const LibraryItem
     const auto peaks = waveforms.get(item.audioPath());
     if (peaks == nullptr || peaks->bucketsPerLane() == 0 || peaks->peaksPerSecond <= 0) return std::nullopt;
     const int buckets = peaks->bucketsPerLane();
-    const int first = juce::jlimit(0, buckets, static_cast<int>(fromMs / 1000.0 * peaks->peaksPerSecond));
-    const int last = juce::jlimit(0, buckets, static_cast<int>(toMs / 1000.0 * peaks->peaksPerSecond));
+    const int first = juce::jlimit(0, buckets, static_cast<int>(fromMs / 1000.0 * peaks->bucketsPerSecond()));
+    const int last = juce::jlimit(0, buckets, static_cast<int>(toMs / 1000.0 * peaks->bucketsPerSecond()));
     if (last - first < 4) return std::nullopt;
     double sum = 0.0;
     for (int i = first; i < last; ++i)
@@ -243,8 +244,14 @@ std::vector<juce::String> harmonicOrder(const ProjectModel& model, WaveformStore
 }
 
 juce::String build(EngineClient& engine, ProjectMirror& mirror, TimelineActions& actions, WaveformStore& waveforms,
-                   std::vector<juce::String> itemIds, bool reorder, const juce::String& style, bool matchKeys, double targetSec)
+                   std::vector<juce::String> itemIds, bool reorder, const juce::String& style, bool matchKeys,
+                   const std::map<juce::String, double>& targets, bool tempoFollows)
 {
+    const auto targetOf = [&targets](const juce::String& id)
+    {
+        const auto it = targets.find(id);
+        return it != targets.end() ? it->second : 0.0;
+    };
     itemIds.erase(std::remove_if(itemIds.begin(), itemIds.end(),
                                  [&](const juce::String& id) { return mirror.model().findLibraryItem(id) == nullptr; }),
                   itemIds.end());
@@ -263,6 +270,20 @@ juce::String build(EngineClient& engine, ProjectMirror& mirror, TimelineActions&
         mirror.refreshNow();
         actions.renameTrack(decks[0], "Mix A");
         actions.renameTrack(decks[1], "Mix B");
+        // The tempo following the tracks: from the mix's start, the first track's tempo.
+        if (tempoFollows)
+            if (const auto* first = mirror.model().findLibraryItem(itemIds.front()); first != nullptr && first->bpm > 0.0)
+            {
+                auto points = mirror.model().tempoMap;
+                const auto before = mirror.model().tempoCurve();
+                if (points.empty()) points.push_back({0.0, mirror.model().bpm});
+                points.erase(std::remove_if(points.begin(), points.end(), [&](const TempoPoint& p) { return p.timeMs >= at - 1.0; }),
+                             points.end());
+                if (at > 1.0) points.push_back({at - 1.0, before.bpmAt(at - 1.0)});
+                points.push_back({at, first->bpm});
+                actions.setTempoMap(points);
+                mirror.refreshNow();
+            }
 
         juce::String previousClip, previousPreset;
         for (size_t i = 0; i < itemIds.size(); ++i)
@@ -274,10 +295,12 @@ juce::String build(EngineClient& engine, ProjectMirror& mirror, TimelineActions&
             juce::String presetId;
             int keyShift = 0;
             double windowStart = at, windowEnd = at;
+            double targetSec = 0.0; // how long the outgoing track plays
             if (previousClip.isNotEmpty())
                 if (const auto* prev = mirror.model().findClip(previousClip))
                 {
                     before = mirror.model().findLibraryItem(prev->libraryItemId);
+                    targetSec = targetOf(itemIds[i - 1]);
                     // Into key with the track before, when a small shift does it (larger ones colour
                     // the sound); worked out first, so the preset is chosen for the keys heard.
                     const int outShift = static_cast<int>(std::lround(prev->semitones));
@@ -328,6 +351,19 @@ juce::String build(EngineClient& engine, ProjectMirror& mirror, TimelineActions&
                     windowEnd = c.msAtBeat(startBeat + lengthBeats);
                     // The outgoing track mixes out at the end of the join.
                     if (windowEnd < prev->endMs()) actions.trimClip(prev->id, prev->offsetMs, windowEnd);
+                    // The tempo following the tracks: it ramps to the incoming one's over the join.
+                    if (tempoFollows && item->bpm > 0.0)
+                    {
+                        const double inBpm = item->bpm; // before the refresh, which rebuilds the model
+                        mirror.refreshNow();
+                        if (const auto* out = mirror.model().findClip(previousClip))
+                            mix::rampTempoTo(engine, actions, mirror.model(), *out, inBpm, windowStart, windowEnd);
+                        mirror.refreshNow();
+                        // A refresh rebuilds the model: fetch the incoming item again.
+                        item = mirror.model().findLibraryItem(itemIds[i]);
+                        before = nullptr;
+                        if (item == nullptr) continue;
+                    }
                 }
             const auto clipId = actions.addClip(deck, *item, windowStart);
             mirror.refreshNow();
@@ -403,11 +439,21 @@ juce::String build(EngineClient& engine, ProjectMirror& mirror, TimelineActions&
 
 namespace
 {
+// How long a track can be asked to play before the next comes in (0: all of it).
+const juce::StringArray kPlayTimeNames{"Full length", "About 1:00", "About 1:30", "About 2:00", "About 2:30", "About 3:00",
+                                       "About 3:30", "About 4:00", "About 5:00"};
+const double kPlayTimes[] = {0.0, 60.0, 90.0, 120.0, 150.0, 180.0, 210.0, 240.0, 300.0};
+
+class OptionsDialog;
+OptionsDialog* openDialog = nullptr;
+
 class OptionsDialog final : public juce::Component
 {
   public:
-    OptionsDialog(int count, std::function<void(Options)> onRun) : run(std::move(onRun))
+    OptionsDialog(const ProjectModel& model, std::vector<juce::String> ids, bool harmonic, std::function<void(Options)> onRun)
+        : itemIds(std::move(ids)), run(std::move(onRun))
     {
+        openDialog = this;
         const auto label = [this](juce::Label& l, const juce::String& text)
         {
             l.setText(text, juce::dontSendNotification);
@@ -417,32 +463,68 @@ class OptionsDialog final : public juce::Component
         };
         label(orderLabel, "Order");
         label(styleLabel, "Style");
-        label(targetLabel, "Each track plays");
+        label(allLabel, "Each track plays");
         order.addItemList({"Harmonic (each into the closest key)", "As listed"}, 1);
-        order.setSelectedItemIndex(0, juce::dontSendNotification);
+        order.setSelectedItemIndex(harmonic ? 0 : 1, juce::dontSendNotification);
         style.addItemList(styles(), 1);
         style.setSelectedItemIndex(0, juce::dontSendNotification);
-        target.addItemList({"Full length", "About 2:00", "About 2:30", "About 3:00", "About 4:00"}, 1);
-        target.setSelectedItemIndex(0, juce::dontSendNotification);
-        target.setTooltip("How long each track plays before the next comes in: the join goes to the breakdown or outro "
-                          "nearest that (tracks with analysed sections), else to the nearest phrase");
-        matchKeys.setTooltip("Shift a clashing track up to 2 semitones into key with the one before");
-        for (auto* c : std::initializer_list<juce::Component*>{&order, &style, &target, &matchKeys, &go, &cancel}) addAndMakeVisible(c);
-        go.setButtonText("Mix " + juce::String(count) + " Tracks");
-        go.onClick = [this]
+        all.addItemList(kPlayTimeNames, 1);
+        all.setSelectedItemIndex(0, juce::dontSendNotification);
+        all.setTooltip("Sets every track below at once");
+        all.onChange = [this]
         {
-            static const double seconds[] = {0.0, 120.0, 150.0, 180.0, 240.0};
-            Options o{order.getSelectedItemIndex() == 0, style.getText(), matchKeys.getToggleState(),
-                      seconds[juce::jlimit(0, 4, target.getSelectedItemIndex())]};
-            auto fn = run;
-            if (auto* w = findParentComponentOfClass<juce::DialogWindow>()) w->exitModalState(1);
-            if (fn) fn(o);
+            for (auto& r : rows) r->time.setSelectedItemIndex(all.getSelectedItemIndex(), juce::dontSendNotification);
         };
+        for (const auto& id : itemIds)
+        {
+            auto row = std::make_unique<Row>();
+            const auto* item = model.findLibraryItem(id);
+            row->name.setText(item != nullptr ? item->displayName() : id, juce::dontSendNotification);
+            row->name.setFont(uiFont(12.0f));
+            row->name.setColour(juce::Label::textColourId, colours::textDim);
+            row->time.addItemList(kPlayTimeNames, 1);
+            row->time.setSelectedItemIndex(0, juce::dontSendNotification);
+            row->time.setTooltip("How long this track plays before the next comes in: the join goes to the breakdown or "
+                                 "outro nearest that (with its sections analysed), else to the nearest phrase");
+            addAndMakeVisible(row->name);
+            addAndMakeVisible(row->time);
+            rows.push_back(std::move(row));
+        }
+        matchKeys.setTooltip("Shift a clashing track up to 2 semitones into key with the one before");
+        tempoFollows.setTooltip("Each track plays at its own tempo and the project tempo ramps from one to the next over "
+                                "each join (a tempo map), instead of every track being warped to the first one's tempo");
+        tempoFollows.setToggleState(false, juce::dontSendNotification);
+        for (auto* c : std::initializer_list<juce::Component*>{&order, &style, &all, &matchKeys, &tempoFollows, &go, &cancel})
+            addAndMakeVisible(c);
+        go.setButtonText("Mix " + juce::String(static_cast<int>(itemIds.size())) + " Tracks");
+        go.onClick = [this] { runNow(); };
         cancel.onClick = [this]
         {
             if (auto* w = findParentComponentOfClass<juce::DialogWindow>()) w->exitModalState(0);
         };
-        setSize(440, 210);
+        setSize(520, 250 + juce::jmin(10, static_cast<int>(rows.size())) * 28);
+    }
+
+    ~OptionsDialog() override
+    {
+        if (openDialog == this) openDialog = nullptr;
+    }
+
+    void runNow()
+    {
+        // Once: the window closes asynchronously, and a second click (or test poll) must not mix again.
+        if (std::exchange(ran, true)) return;
+        if (openDialog == this) openDialog = nullptr;
+        Options o;
+        o.reorder = order.getSelectedItemIndex() == 0;
+        o.style = style.getText();
+        o.matchKeys = matchKeys.getToggleState();
+        o.tempoFollows = tempoFollows.getToggleState();
+        for (size_t i = 0; i < rows.size(); ++i)
+            o.targets[itemIds[i]] = kPlayTimes[juce::jlimit(0, kPlayTimeNames.size() - 1, rows[i]->time.getSelectedItemIndex())];
+        auto fn = run;
+        if (auto* w = findParentComponentOfClass<juce::DialogWindow>()) w->exitModalState(1);
+        if (fn) fn(o);
     }
 
     void resized() override
@@ -451,14 +533,24 @@ class OptionsDialog final : public juce::Component
         const auto row = [&](juce::Label& l, juce::Component& c)
         {
             auto r = area.removeFromTop(28);
-            l.setBounds(r.removeFromLeft(130));
+            l.setBounds(r.removeFromLeft(140));
             c.setBounds(r.reduced(0, 2));
-            area.removeFromTop(6);
+            area.removeFromTop(4);
         };
         row(orderLabel, order);
         row(styleLabel, style);
-        row(targetLabel, target);
-        matchKeys.setBounds(area.removeFromTop(26).withTrimmedLeft(130));
+        row(allLabel, all);
+        // A row per track (scrolling is not needed for a mix of a dozen; the window grows).
+        for (auto& r : rows)
+        {
+            auto line = area.removeFromTop(26);
+            r->name.setBounds(line.removeFromLeft(line.getWidth() - 160).withTrimmedLeft(16));
+            r->time.setBounds(line.reduced(0, 2));
+            area.removeFromTop(2);
+        }
+        area.removeFromTop(6);
+        matchKeys.setBounds(area.removeFromTop(24));
+        tempoFollows.setBounds(area.removeFromTop(24));
         auto buttons = area.removeFromBottom(28);
         cancel.setBounds(buttons.removeFromRight(90));
         buttons.removeFromRight(8);
@@ -466,24 +558,40 @@ class OptionsDialog final : public juce::Component
     }
 
   private:
+    struct Row
+    {
+        juce::Label name;
+        juce::ComboBox time;
+    };
+    std::vector<juce::String> itemIds;
     std::function<void(Options)> run;
-    juce::Label orderLabel, styleLabel, targetLabel;
-    juce::ComboBox order, style, target;
+    juce::Label orderLabel, styleLabel, allLabel;
+    juce::ComboBox order, style, all;
+    std::vector<std::unique_ptr<Row>> rows;
     juce::ToggleButton matchKeys{"Match keys"};
+    juce::ToggleButton tempoFollows{"Tempo follows each track (no warping to the first track's BPM)"};
     juce::TextButton go, cancel{"Cancel"};
+    bool ran = false;
 };
 } // namespace
 
-void showDialog(int trackCount, std::function<void(Options)> run)
+void showDialog(const ProjectModel& model, std::vector<juce::String> itemIds, bool harmonic, std::function<void(Options)> run)
 {
     juce::DialogWindow::LaunchOptions options;
-    options.content.setOwned(new OptionsDialog(trackCount, std::move(run)));
+    options.content.setOwned(new OptionsDialog(model, std::move(itemIds), harmonic, std::move(run)));
     options.dialogTitle = "Auto Mix";
     options.dialogBackgroundColour = colours::background;
     options.escapeKeyTriggersCloseButton = true;
     options.useNativeTitleBar = true;
     options.resizable = false;
     options.launchAsync();
+}
+
+bool runOpenDialogForTest()
+{
+    if (openDialog == nullptr) return false;
+    openDialog->runNow();
+    return true;
 }
 
 int autoTransition(EngineClient& engine, ProjectMirror& mirror, TimelineActions& actions, WaveformStore& waveforms,

@@ -378,7 +378,13 @@ namespace
 void rampTempo(EngineClient& engine, TimelineActions& actions, const ProjectModel& model, const ClipModel& out, const ClipModel& in,
                double start, double end)
 {
-    const double target = sourceBpmOf(model, in);
+    rampTempoTo(engine, actions, model, out, sourceBpmOf(model, in), start, end);
+}
+} // namespace
+
+void rampTempoTo(EngineClient& engine, TimelineActions& actions, const ProjectModel& model, const ClipModel& out, double target,
+                 double start, double end)
+{
     if (target <= 0.0) return;
     auto points = model.tempoMap;
     points.erase(std::remove_if(points.begin(), points.end(),
@@ -402,6 +408,8 @@ void rampTempo(EngineClient& engine, TimelineActions& actions, const ProjectMode
     }
 }
 
+namespace
+{
 void undoTempoRamp(TimelineActions& actions, const ProjectModel& model, const ClipModel* out, double start, double end)
 {
     if (model.tempoMap.empty()) return;

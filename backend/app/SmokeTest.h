@@ -161,6 +161,8 @@ class SmokeTest final : private juce::Timer
     bool beatSyncMenuOk = false;
     int quickMashupKeyed = 0;
     int autoTargetTracksBefore = 0;
+    std::vector<TempoPoint> tempoMapBefore;
+    bool spaceDragOk = false;
     juce::String autoTargetLine;
     size_t quickMashupFollowers = 0;
     juce::String quickMashupLeadClip, quickMashupVocalClip;

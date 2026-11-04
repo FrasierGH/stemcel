@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+
 #include <cstdint>
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_core/juce_core.h>
@@ -18,6 +20,16 @@ struct PeaksResult
     double sampleRate = 0.0;
     int peaksPerSecond = kDefaultPeaksPerSecond;
     int laneCount = 1;
+
+    // How many peaks there are per second of audio: each is a whole number of samples
+    // (int(sampleRate / peaksPerSecond)), so 44.1 kHz at 500 a second has 501.14. Reading
+    // them at `peaksPerSecond` drew the waveform later and later into a file.
+    double bucketsPerSecond() const
+    {
+        if (sampleRate <= 0.0 || peaksPerSecond <= 0) return static_cast<double>(peaksPerSecond);
+        const int samplesPerPeak = std::max(1, static_cast<int>(sampleRate / peaksPerSecond));
+        return sampleRate / static_cast<double>(samplesPerPeak);
+    }
 
     int bucketsPerLane() const
     {

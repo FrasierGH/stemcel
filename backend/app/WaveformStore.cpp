@@ -63,7 +63,7 @@ void drawPeaks(juce::Graphics& g, const waveform::PeaksResult& peaks, juce::Rect
     const size_t base = static_cast<size_t>(lane) * static_cast<size_t>(buckets) * 2U;
     if (buckets <= 0 || area.getWidth() < 1.0f || sourceLengthMs <= 0.0) return;
 
-    const double bucketsPerMs = static_cast<double>(peaks.peaksPerSecond) / 1000.0;
+    const double bucketsPerMs = peaks.bucketsPerSecond() / 1000.0;
     const float midY = area.getCentreY();
     const float halfH = area.getHeight() * 0.5f;
     const int width = static_cast<int>(area.getWidth());

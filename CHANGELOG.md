@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Auto Mix**: a play time for each track (Full length, or about 1:00 to 5:00, with a control to set them all), and **Tempo follows each track** (off by default): each track plays at its own tempo, the project tempo ramping from one to the next over each join, instead of every track being warped to the first one's. Dropping several tracks opens the same dialog.
+- **Transitions**: their fades over the clips show the real level curves, with points; right-click one for its curve (linear, S-curve, fast or slow start, hold, stairs) or Edit Transition.
+- **Tempo lane**: drag its bottom edge to make it taller.
+
+### Fixed
+
+- Waveforms were drawn slightly later than the audio, more so further into a track (about 0.28 s at two minutes for a 44.1 kHz file).
+- With several clips selected, the clip menu now has **Key Wheel** and **Quick Mashup**.
+- Space while dragging a clip is taken by the timeline itself, shows what it did on the clip, and a hold opens the placements menu from the key's release rather than the keyboard's state.
+
 ## 0.3.0
 
 ### Added

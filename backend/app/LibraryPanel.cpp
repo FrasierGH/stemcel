@@ -728,7 +728,11 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
         dragStarted = true;
         // Onto a track to place it (the timeline takes one item per drop).
         if (auto* container = juce::DragAndDropContainer::findParentDragContainerFor(this))
-            container->startDragging("libraryItem:" + hit->itemId, &canvas,
+            // Several selected: all of them, in on-screen order (ids joined by commas).
+            container->startDragging("libraryItem:" + (selection.count(hit->itemId) != 0 && selection.size() > 1
+                                                           ? juce::StringArray([&] { juce::StringArray a; for (const auto& id : selectedInOrder()) a.add(id); return a; }()).joinIntoString(",")
+                                                           : hit->itemId),
+                                     &canvas,
                                      juce::ScaledImage(canvas.createComponentSnapshot(hit->bounds.withHeight(juce::jmin(hit->bounds.getHeight(), 40)))));
     }
 
@@ -921,8 +925,7 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
             const auto ids = selectedInOrder();
             menu.addItem("Auto Mix " + juce::String(static_cast<int>(ids.size())) + " Tracks...", [this, ids]
                          {
-                             automix::showDialog(static_cast<int>(ids.size()), [this, ids](automix::Options o)
-                                                 { ctx.autoMix(ids, o.reorder, o.style, o.matchKeys, o.targetSec); });
+                             automix::showDialog(ctx.mirror.model(), ids, true, [this, ids](automix::Options o) { ctx.autoMix(ids, o); });
                          });
             if (ctx.mashup != nullptr) menu.addItem("Quick Mashup...", [this, ids] { ctx.mashup(ids); });
         }

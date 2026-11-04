@@ -13,6 +13,7 @@
 #include <juce_core/juce_core.h>
 
 #include <functional>
+#include <map>
 #include <optional>
 #include <vector>
 
@@ -78,19 +79,27 @@ std::vector<juce::String> harmonicOrder(const ProjectModel& model, WaveformStore
 // the breakdown or outro nearest that (from its sections), else the phrase nearest it, and
 // the incoming track's first drop lands as the join ends. 0 plays each track to its end.
 // The incoming track is placed so its downbeats sit on the bar lines.
+// `targets` is that per track (by item id; absent or 0 for its full length).
+// `tempoFollows`: the project tempo follows the tracks (each plays at its own tempo, the tempo
+// map ramping from one to the next over each join) instead of every track being warped to the
+// project tempo.
 juce::String build(EngineClient& engine, ProjectMirror& mirror, TimelineActions& actions, WaveformStore& waveforms,
                    std::vector<juce::String> itemIds, bool reorder, const juce::String& style, bool matchKeys = false,
-                   double targetSec = 0.0);
+                   const std::map<juce::String, double>& targets = {}, bool tempoFollows = false);
 
-// The Auto Mix dialog: order, style, matching keys and the target play time per track.
+// The Auto Mix dialog: order, style, matching keys, how long each track plays, and whether
+// the project tempo follows the tracks.
 struct Options
 {
     bool reorder = true;
     juce::String style = "Auto";
     bool matchKeys = false;
-    double targetSec = 0.0;
+    std::map<juce::String, double> targets;
+    bool tempoFollows = false;
 };
-void showDialog(int trackCount, std::function<void(Options)> run);
+void showDialog(const ProjectModel& model, std::vector<juce::String> itemIds, bool harmonic, std::function<void(Options)> run);
+// For tests: runs the open Auto Mix dialog as its Mix button would. False when none is open.
+bool runOpenDialogForTest();
 
 // Gives every overlapping pair among `clipIds` (all clips when empty) the preset that suits it.
 // Returns how many joins it set.

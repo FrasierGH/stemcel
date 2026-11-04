@@ -85,8 +85,7 @@ Workspace::Workspace(EngineClient& engineClient, AppController& appController, A
                                                                { ScratchEditor::show(engine, mirror, waveforms, {}, itemId, notify); },
                                                                [this](const juce::String& itemId)
                                                                { ClipEditor::showLibraryItem(engine, mirror, actions, waveforms, itemId); },
-                                                               [this](std::vector<juce::String> ids, bool reorder, const juce::String& style, bool matchKeys, double targetSec)
-                                                               { runAutoMix(std::move(ids), reorder, style, matchKeys, targetSec); },
+                                                               [this](std::vector<juce::String> ids, automix::Options o) { runAutoMix(std::move(ids), o); },
                                                                quickMashup,
                                                                [this](const juce::String& itemId) { sectionAnalyser.analyse(itemId, true); },
                                                                [this](const juce::String& itemId)
@@ -205,10 +204,11 @@ void Workspace::showLibraryTab(int index)
     if (libraryPanel != nullptr) libraryPanel->showTab(index);
 }
 
-void Workspace::runAutoMix(std::vector<juce::String> ids, bool reorder, const juce::String& style, bool matchKeys, double targetSec)
+void Workspace::runAutoMix(std::vector<juce::String> ids, const automix::Options& o)
 {
     const double before = mirror.model().contentEndMs();
-    const auto said = automix::build(engine, mirror, actions, waveforms, std::move(ids), reorder, style, matchKeys, targetSec);
+    const auto said = automix::build(engine, mirror, actions, waveforms, std::move(ids), o.reorder, o.style, o.matchKeys, o.targets,
+                                     o.tempoFollows);
     if (toast) toast(said, false);
     mirror.refreshNow();
     // Show the new mix, from its first deck down.
@@ -232,8 +232,8 @@ void Workspace::importAndPlace(std::vector<ImportRequest> requests, const juce::
                                      .withMessage(juce::String(static_cast<int>(pending->size()))
                                                   + " tracks dropped. Mix them after the arrangement, on two decks, "
                                                     "with transitions chosen from their tempo, key and energy?")
-                                     .withButton("Auto Mix (Harmonic Order)")
-                                     .withButton("Auto Mix (As Dropped)")
+                                     .withButton("Auto Mix (Harmonic Order)...")
+                                     .withButton("Auto Mix (As Dropped)...")
                                      .withButton("Just Place Them")
                                      .withAssociatedComponent(this),
                                  [safe = juce::Component::SafePointer<Workspace>(this), pending, trackId, positionMs](int result)
@@ -281,7 +281,11 @@ void Workspace::mixWhenAnalysed(std::vector<juce::String> ids, bool harmonic, ju
                                     });
         return;
     }
-    runAutoMix(std::move(ids), harmonic, "Auto", false);
+    automix::showDialog(mirror.model(), ids, harmonic,
+                        [safe = juce::Component::SafePointer<Workspace>(this), ids](automix::Options o)
+                        {
+                            if (safe != nullptr) safe->runAutoMix(ids, o);
+                        });
 }
 
 void Workspace::placeImported(std::vector<ImportRequest> requests, const juce::String& trackId, double positionMs)
