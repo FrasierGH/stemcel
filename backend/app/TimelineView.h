@@ -114,6 +114,12 @@ class TimelineView final : public juce::Component,
     std::function<void(const juce::String& clipId)> onOpenScratch;
     // Quick Mashup of these library items (the source tracks of the selected clips).
     std::function<void(std::vector<juce::String> itemIds)> onQuickMashup;
+    // Several library items dropped on the timeline (track empty: below the tracks), and placing
+    // them one after another there (a new track when none is given).
+    std::function<void(const juce::StringArray& itemIds, const juce::String& trackId, double atMs)> onLibraryItemsDropped;
+    void placeLibraryItems(const juce::StringArray& ids, juce::String trackId, double at);
+    // For tests: the mouse let go where it was pressed (the end of a drag that never moved).
+    void releaseMouseForTest();
     std::function<void(const juce::String& clipId, const juce::StringArray& channels)> onSplitChannels;
 
     // Zoom keeping `anchorMs` under the same x (or the playhead/centre when unset).

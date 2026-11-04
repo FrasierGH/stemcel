@@ -28,7 +28,10 @@
 - With several clips selected, the clip menu now has **Key Wheel** and **Quick Mashup**.
 - Space while dragging a clip is taken by the timeline itself, shows what it did on the clip, and a hold opens the placements menu from the key's release rather than the keyboard's state.
 - Dragging several selected library items onto the timeline: pressing one of them no longer selected it alone before the drag began, so only one came along.
-- After a Space tap during a clip drag, the clip no longer jumps back when the mouse moves.
+- After a Space tap during a clip drag, the clip no longer jumps back when the mouse moves, or when the button is let go without the mouse having moved.
+- Tooltips never appeared anywhere in the app; they do now.
+- Dropping several library items on the timeline offers Auto Mix, as dropping several files does.
+- A box can be dragged from anywhere in the library's empty space, not only beside the items.
 - Less explanatory text around the interface:
   - The start screen line, the empty-panel hints (now tooltips on the Library and Files tabs, Add Track and the scratch record button) and the tempo lane's subtitle are gone.
   - Wordy option names, column titles and transition descriptions are shorter.

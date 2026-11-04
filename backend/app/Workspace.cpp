@@ -78,6 +78,8 @@ Workspace::Workspace(EngineClient& engineClient, AppController& appController, A
                           [this](std::vector<MashupBuilder::Request> requests, int leader) { mashup->start(std::move(requests), leader); });
     };
     timeline.onQuickMashup = quickMashup;
+    timeline.onLibraryItemsDropped = [this](const juce::StringArray& itemIds, const juce::String& trackId, double atMs)
+    { libraryItemsDropped(itemIds, trackId, atMs); };
     auto panel = std::make_unique<LibraryPanel>(LibraryContext{engine, mirror, actions, view, live, prefs, importer,
                                                                sharedRekordbox(), audition, notify,
                                                                [this](const juce::String& itemId) { stems.openDialog(itemId, {}); },
@@ -226,23 +228,44 @@ void Workspace::importAndPlace(std::vector<ImportRequest> requests, const juce::
     }
     // Several tracks at once: mix them, or just put them down (Escape) as one alone would be.
     auto pending = std::make_shared<std::vector<ImportRequest>>(std::move(requests));
+    askToMix(static_cast<int>(pending->size()),
+             [safe = juce::Component::SafePointer<Workspace>(this), pending, trackId, positionMs](int result)
+             {
+                 if (safe == nullptr) return;
+                 if (result == 0) safe->placeImported(std::move(*pending), trackId, positionMs);
+                 else safe->importAndMix(std::move(*pending), result == 1);
+             });
+}
+
+void Workspace::libraryItemsDropped(const juce::StringArray& itemIds, const juce::String& trackId, double atMs)
+{
+    askToMix(itemIds.size(),
+             [safe = juce::Component::SafePointer<Workspace>(this), itemIds, trackId, atMs](int result)
+             {
+                 if (safe == nullptr) return;
+                 if (result == 0)
+                 {
+                     safe->timeline.placeLibraryItems(itemIds, trackId, atMs);
+                     return;
+                 }
+                 // Already in the library: straight to the mix once each has its tempo.
+                 safe->mixWhenAnalysed(std::vector<juce::String>(itemIds.begin(), itemIds.end()), result == 1,
+                                       juce::Time::getMillisecondCounter() + 30000);
+             });
+}
+
+void Workspace::askToMix(int count, std::function<void(int result)> then)
+{
+    // 1 and 2 are the mixes; the last button and Escape are 0.
     juce::AlertWindow::showAsync(juce::MessageBoxOptions()
                                      .withIconType(juce::MessageBoxIconType::QuestionIcon)
                                      .withTitle("Auto Mix")
-                                     .withMessage(juce::String(static_cast<int>(pending->size()))
-                                                  + " tracks dropped. Mix them after the arrangement, on two decks, "
-                                                    "with transitions chosen from their tempo, key and energy?")
+                                     .withMessage(juce::String(count) + " tracks dropped. Auto mix them after the arrangement?")
                                      .withButton("Auto Mix (Harmonic Order)...")
                                      .withButton("Auto Mix (As Dropped)...")
                                      .withButton("Just Place Them")
                                      .withAssociatedComponent(this),
-                                 [safe = juce::Component::SafePointer<Workspace>(this), pending, trackId, positionMs](int result)
-                                 {
-                                     if (safe == nullptr) return;
-                                     // 1 and 2 are the mixes; the last button and Escape are 0.
-                                     if (result == 0) safe->placeImported(std::move(*pending), trackId, positionMs);
-                                     else safe->importAndMix(std::move(*pending), result == 1);
-                                 });
+                                 std::move(then));
 }
 
 void Workspace::importAndMix(std::vector<ImportRequest> requests, bool harmonic)

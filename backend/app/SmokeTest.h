@@ -165,6 +165,11 @@ class SmokeTest final : private juce::Timer
     bool spaceDragOk = false;
     juce::String dragDescription, dragDescriptionReported;
     bool dragSingleAfter = false;
+    bool dragPromptSeen = false;
+    std::vector<juce::String> tapCandidates;
+    juce::String tapClipId, tapLine;
+    int tapPhase = 0, tapIndex = -1, tapWaits = 0;
+    double tapHome = 0.0, tapSynced = 0.0;
     int dragBoxCount = 0;
     juce::String spaceDragLine;
     juce::String autoTargetLine;

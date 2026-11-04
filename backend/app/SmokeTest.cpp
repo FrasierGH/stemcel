@@ -2088,19 +2088,29 @@ void SmokeTest::addTempoJourney()
                              dragBoxCount = panel->boxSelectForTest(dragItemId, second);
                          }
                          dragDescription = description;
+                         dragPromptSeen = false;
                          dropOnTimeline(description, true);
                      },
                      {},
                      [this, clipTotal](const juce::var&)
                      {
+                         // Several items dropped: the Auto Mix prompt, answered "Just Place Them".
+                         if (auto* alert = dynamic_cast<juce::AlertWindow*>(juce::ModalComponentManager::getInstance()->getModalComponent(0)))
+                         {
+                             dragPromptSeen = true;
+                             alert->exitModalState(0);
+                             return false;
+                         }
+                         mirror.refreshNow();
                          if (clipTotal() != dragClipsBefore + 2 || static_cast<int>(model().tracks.size()) != dragTracksBefore + 1) return false;
                          const auto& clips = model().tracks.back().clips;
                          const bool inTurn = clips.size() == 2 && std::abs(clips[1].offsetMs - clips[0].endMs()) < 1.0;
                          const bool both = dragDescription.contains(",");
-                         const bool ok = inTurn && both && dragSingleAfter && dragBoxCount >= 2;
+                         const bool ok = inTurn && both && dragSingleAfter && dragBoxCount >= 2 && dragPromptSeen;
                          const auto line = "drag several library items: carried " + dragDescription.fromFirstOccurrenceOf(":", false, false)
                                            + ", in turn " + (inTurn ? "yes" : "no") + ", one alone after a click "
-                                           + (dragSingleAfter ? "yes" : "no") + ", a box selected " + juce::String(dragBoxCount);
+                                           + (dragSingleAfter ? "yes" : "no") + ", a box selected " + juce::String(dragBoxCount)
+                                           + ", asked to mix " + (dragPromptSeen ? "yes" : "no");
                          if (line != dragDescriptionReported) report.add(dragDescriptionReported = line); // once
                          return ok;
                      }});
@@ -3238,6 +3248,81 @@ void SmokeTest::addTempoJourney()
                          report.add(spaceDragLine);
                          return spaceDragOk;
                      }});
+    // A Space tap with the pointer held still, then the button let go: the clip stays where the
+    // lock put it (it used to go back, the pointer not having moved). Polled: each move reaches
+    // the model once the message loop has run.
+    steps.push_back({"space tap, pointer still",
+                     [this]
+                     {
+                         mirror.refreshNow();
+                         tapCandidates.clear();
+                         for (const auto& t : model().tracks)
+                             for (const auto& c : t.clips)
+                                 if (!c.locked) tapCandidates.push_back(c.id);
+                         tapPhase = 0;
+                         tapIndex = -1;
+                         tapLine = "no clip with beats to lock to";
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
+                         auto* timeline = window != nullptr ? findDescendant<TimelineView>(window) : nullptr;
+                         if (timeline == nullptr) return false;
+                         mirror.refreshNow();
+                         const auto restore = [this]
+                         {
+                             if (const auto* c = model().findClip(tapClipId)) actions.moveClip(tapClipId, tapHome, c->trackId);
+                         };
+                         if (tapPhase == 0)
+                         {
+                             // The next clip, moved 37 ms off the beat.
+                             if (++tapIndex >= static_cast<int>(tapCandidates.size()))
+                             {
+                                 report.add("space tap, pointer still: " + tapLine);
+                                 return false;
+                             }
+                             tapClipId = tapCandidates[static_cast<size_t>(tapIndex)];
+                             const auto* c = model().findClip(tapClipId);
+                             if (c == nullptr) return false;
+                             tapHome = c->offsetMs;
+                             actions.moveClip(tapClipId, tapHome + 37.0, c->trackId);
+                             tapPhase = 1;
+                             return false;
+                         }
+                         const auto* c = model().findClip(tapClipId);
+                         if (c == nullptr) return false;
+                         if (tapPhase == 1)
+                         {
+                             if (std::abs(c->offsetMs - (tapHome + 37.0)) > 0.5) return false; // not there yet
+                             timeline->beginMoveDragForTest(tapClipId);
+                             timeline->keyPressed(juce::KeyPress(juce::KeyPress::spaceKey));
+                             timeline->setSpaceHeldForTest(false);
+                             tapSynced = timeline->dragPreviewStartForTest();
+                             if (std::abs(tapSynced - (tapHome + 37.0)) <= 1.0)
+                             {
+                                 // No beats to lock to: put it back and try the next clip.
+                                 timeline->endDragForTest();
+                                 restore();
+                                 tapPhase = 0;
+                                 return false;
+                             }
+                             timeline->releaseMouseForTest();
+                             tapPhase = 2;
+                             tapWaits = 0;
+                             return false;
+                         }
+                         // Phase 2: where the release left it.
+                         if (std::abs(c->offsetMs - tapSynced) >= 1.0 && ++tapWaits < 20) return false;
+                         const bool kept = std::abs(c->offsetMs - tapSynced) < 1.0;
+                         report.add("space tap, pointer still: locked " + juce::String(tapSynced - tapHome, 1) + " ms from home, landed "
+                                    + juce::String(c->offsetMs - tapHome, 1) + (kept ? " (kept)" : " (went back)"));
+                         timeline->endDragForTest();
+                         restore();
+                         return kept;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 20000.0;
     // Two files dropped at once: the prompt, answered "as dropped", mixes them on two decks.
     steps.push_back({"auto mix on drop",
                      [this]

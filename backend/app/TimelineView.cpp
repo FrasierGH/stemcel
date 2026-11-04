@@ -1696,6 +1696,15 @@ void TimelineView::beginMoveDragForTest(const juce::String& clipId)
     beatMenu.reset();
 }
 
+void TimelineView::releaseMouseForTest()
+{
+    const auto pos = getMouseXYRelative().toFloat();
+    const auto now = juce::Time::getCurrentTime();
+    mouseUp(juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(), pos, {}, juce::MouseInputSource::defaultPressure,
+                             juce::MouseInputSource::defaultOrientation, juce::MouseInputSource::defaultRotation,
+                             juce::MouseInputSource::defaultTiltX, juce::MouseInputSource::defaultTiltY, this, this, now, pos, now, 1, false));
+}
+
 void TimelineView::endDragForTest()
 {
     drag = DragKind::none;
@@ -1982,7 +1991,7 @@ void TimelineView::mouseUp(const juce::MouseEvent& e)
         beatMenu->mouseReleased = true;
         return;
     }
-    beatLock = false;
+    const bool wasLocked = std::exchange(beatLock, false);
     beatSyncLabel.clear();
     if (std::exchange(tempoResizing, false))
     {
@@ -2025,7 +2034,8 @@ void TimelineView::mouseUp(const juce::MouseEvent& e)
         setMouseCursor(juce::MouseCursor::NormalCursor);
         break;
     case DragKind::move:
-        if (moved) commitMoveDrag(dragPreviewStartMs);
+        // Locked to the beat, the clip moved even if the pointer never did.
+        if (moved || wasLocked) commitMoveDrag(dragPreviewStartMs);
         break;
     case DragKind::trimStart:
     case DragKind::trimEnd:
@@ -2308,15 +2318,24 @@ void TimelineView::itemDropped(const SourceDetails& details)
         repaint();
         return;
     }
-    // One library item, or several (comma-separated): placed one after another on the track.
+    // One library item, or several (comma-separated: Workspace offers to mix them).
     const auto ids = juce::StringArray::fromTokens(details.description.toString().fromFirstOccurrenceOf("libraryItem:", false, false), ",", {});
     if (ids.isEmpty() || model().findLibraryItem(ids[0]) == nullptr) return;
     juce::String trackId;
-    if (const int index = trackRowIndexAtY(details.localPosition.y); index >= 0)
-        trackId = rows[static_cast<size_t>(index)].trackId;
-    else
-        trackId = actions.addTrack();
-    double at = actions.snap(view.xToMs(details.localPosition.x));
+    if (const int index = trackRowIndexAtY(details.localPosition.y); index >= 0) trackId = rows[static_cast<size_t>(index)].trackId;
+    const double at = actions.snap(view.xToMs(details.localPosition.x));
+    if (ids.size() > 1 && onLibraryItemsDropped)
+    {
+        onLibraryItemsDropped(ids, trackId, at);
+        return;
+    }
+    placeLibraryItems(ids, trackId, at);
+}
+
+void TimelineView::placeLibraryItems(const juce::StringArray& ids, juce::String trackId, double at)
+{
+    // Placed one after another on the track (a new one when none is given).
+    if (trackId.isEmpty()) trackId = actions.addTrack();
     std::set<juce::String> placed;
     actions.engineClient().inUndoGroup(ids.size() > 1 ? "Add clips" : "Add clip", [&]
     {

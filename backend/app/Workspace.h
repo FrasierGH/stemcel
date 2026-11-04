@@ -81,6 +81,9 @@ class Workspace final : public juce::Component, public juce::DragAndDropContaine
     void importAndPlace(std::vector<ImportRequest> requests, const juce::String& trackId, double positionMs);
     // Imports the tracks, waits for their tempo analysis (30 s at most), then auto mixes them
     // after the arrangement: harmonically ordered, or in the order given.
+    // The Auto Mix prompt for several tracks dropped at once: 1 harmonic, 2 as dropped, 0 just place.
+    void askToMix(int count, std::function<void(int result)> then);
+    void libraryItemsDropped(const juce::StringArray& itemIds, const juce::String& trackId, double atMs);
     void importAndMix(std::vector<ImportRequest> requests, bool harmonic);
     // The library's Auto Mix: builds the mix and shows it.
     void runAutoMix(std::vector<juce::String> itemIds, const automix::Options& options);

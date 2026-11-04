@@ -501,7 +501,7 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
         }
         else
             orphanHeader = {};
-        canvas.setSize(width, y + rowHeight + 8);
+        canvas.setSize(width, juce::jmax(y + rowHeight + 8, viewport.getHeight()));
         canvas.repaint();
     }
 
