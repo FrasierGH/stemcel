@@ -84,8 +84,9 @@ TransportBar::TransportBar(ProjectMirror& projectMirror, TimelineViewState& view
     addAndMakeVisible(skipBack);
     addAndMakeVisible(skipForward);
 
-    position.setFont(juce::Font(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 16.0f, juce::Font::plain)));
-    position.setColour(juce::Label::textColourId, colours::zinc100);
+    // The clock and the tempo read like a display: in a well, the terminal's in lit phosphor.
+    position.setFont(juce::Font(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(), 17.0f, juce::Font::plain)));
+    position.setColour(juce::Label::textColourId, currentTheme() == ThemeId::terminal ? colours::sky400 : colours::zinc100);
     position.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(position);
 
@@ -93,9 +94,10 @@ TransportBar::TransportBar(ProjectMirror& projectMirror, TimelineViewState& view
     bpmLabel.setColour(juce::Label::textColourId, colours::textFaint);
     addAndMakeVisible(bpmLabel);
     bpmValue.setFont(uiFont(14.0f, true));
-    bpmValue.setColour(juce::Label::textColourId, colours::zinc100);
-    bpmValue.setColour(juce::Label::backgroundColourId, colours::zinc900);
-    bpmValue.setColour(juce::Label::outlineColourId, colours::zinc700);
+    bpmValue.setColour(juce::Label::textColourId, currentTheme() == ThemeId::terminal ? colours::sky400 : colours::zinc100);
+    bpmValue.setColour(juce::Label::backgroundColourId, juce::Colours::transparentBlack);
+    bpmValue.setColour(juce::Label::outlineColourId, juce::Colours::transparentBlack);
+    bpmValue.setJustificationType(juce::Justification::centred);
     bpmValue.setTooltip("Project tempo: click to type, drag up or down or scroll to change it (Shift for fine steps)");
     bpmValue.current = [this]
     {
@@ -294,9 +296,40 @@ void TransportBar::mouseDown(const juce::MouseEvent& e)
 
 void TransportBar::paint(juce::Graphics& g)
 {
-    g.fillAll(colours::zinc900);
+    if (currentTheme() == ThemeId::fusionDark)
+    {
+        // A Qt tool bar: a soft gradient, a light line along the top and the outline below.
+        g.setGradientFill(juce::ColourGradient::vertical(colours::zinc900.brighter(0.06f), 0.0f, colours::zinc900.darker(0.04f),
+                                                         static_cast<float>(getHeight())));
+        g.fillAll();
+        g.setColour(juce::Colours::white.withAlpha(0.05f));
+        g.drawHorizontalLine(0, 0.0f, static_cast<float>(getWidth()));
+    }
+    else
+    {
+        g.fillAll(colours::zinc900);
+    }
     g.setColour(colours::border);
     g.drawHorizontalLine(getHeight() - 1, 0.0f, static_cast<float>(getWidth()));
+
+    // Hairlines between the groups: transport, display, grid and view toggles, zoom, master.
+    g.setColour(colours::rule);
+    const auto ruleAt = [&](int x) { g.drawVerticalLine(x, 9.0f, static_cast<float>(getHeight() - 9)); };
+    ruleAt((stopButton.getRight() + position.getX()) / 2 - 2);
+    ruleAt((bpmValue.getRight() + snapBox.getX()) / 2);
+    ruleAt(mixerButton.getRight() + 8);
+    ruleAt(zoomOut.getX() - 8);
+    ruleAt((zoomFit.getRight() + masterLabel.getX()) / 2);
+
+    // The display: the clock and the tempo in one well, the terminal's unlit 8s behind them.
+    const auto display = position.getBounds().getUnion(bpmValue.getBounds()).toFloat().expanded(4.0f, 0.0f);
+    drawWell(g, display);
+    drawGhostDigits(g, position.getText(), position.getFont(), position.getBorderSize().subtractedFrom(position.getBounds()),
+                    position.getJustificationType());
+    drawGhostDigits(g, bpmValue.getText(), bpmValue.getFont(), bpmValue.getBorderSize().subtractedFrom(bpmValue.getBounds()),
+                    bpmValue.getJustificationType());
+    g.setColour(colours::rule);
+    g.drawVerticalLine(bpmLabel.getX() - 6, display.getY() + 5.0f, display.getBottom() - 5.0f);
 
     // The master meter: L and R bars from -60 to 0 dBFS in segments (green, then amber
     // above -12, red above -3), each with its peak hold, a dB scale beneath, and a clip light.
@@ -307,8 +340,7 @@ void TransportBar::paint(juce::Graphics& g)
     area.removeFromRight(3);
     auto labels = area.removeFromLeft(10);
     auto scale = area.removeFromBottom(9);
-    g.setColour(colours::zinc950);
-    g.fillRect(area);
+    drawWell(g, area.toFloat().expanded(1.0f));
     auto toX = [&area](float dbValue) { return area.getX() + (juce::jlimit(kFloorDb, 0.0f, dbValue) - kFloorDb) / -kFloorDb * area.getWidth(); };
     g.setFont(uiFont(8.0f, true));
     for (int ch = 0; ch < 2; ++ch)
@@ -319,11 +351,13 @@ void TransportBar::paint(juce::Graphics& g)
         g.setColour(colours::textFaint);
         g.drawText(ch == 0 ? "L" : "R", labels.withHeight(lane.toNearestInt().getHeight()).withY(lane.toNearestInt().getY()), juce::Justification::centred);
         const float level = toX(static_cast<float>(db::linearToDb(peak)));
-        // Segments two pixels wide with a gap, coloured by where they sit.
-        for (float x = lane.getX(); x < level; x += 3.0f)
+        // Segments two pixels wide with a gap, coloured by where they sit; the unlit ones
+        // faintly, like LEDs that are off.
+        for (float x = lane.getX(); x < lane.getRight(); x += 3.0f)
         {
             const float at = kFloorDb + (x - area.getX()) / area.getWidth() * -kFloorDb;
-            g.setColour(at > -3.0f ? colours::red500 : at > -12.0f ? colours::amber400 : colours::emerald500);
+            const auto colour = at > -3.0f ? colours::red500 : at > -12.0f ? colours::amber400 : colours::emerald500;
+            g.setColour(x < level ? colour : colour.withAlpha(0.12f));
             g.fillRect(x, lane.getY(), 2.0f, lane.getHeight());
         }
         if (held > 0.0f)
@@ -353,11 +387,12 @@ void TransportBar::resized()
     skipForward.setBounds(area.removeFromLeft(30));
     area.removeFromLeft(4);
     stopButton.setBounds(area.removeFromLeft(52));
-    area.removeFromLeft(12);
+    area.removeFromLeft(16);
     position.setBounds(area.removeFromLeft(220));
     area.removeFromLeft(12);
     bpmLabel.setBounds(area.removeFromLeft(30));
-    bpmValue.setBounds(area.removeFromLeft(64));
+    bpmValue.setBounds(area.removeFromLeft(60));
+    area.removeFromLeft(4);
     area.removeFromLeft(10);
     snapBox.setBounds(area.removeFromLeft(120));
     area.removeFromLeft(8);

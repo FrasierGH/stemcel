@@ -3215,6 +3215,10 @@ void SmokeTest::addTempoJourney()
                          {
                              target = timeline->beatMenuOptionStartForTest(option);
                              timeline->hoverBeatMenuForTest(option);
+                             // The menu with the ghost of that placement, for eyes.
+                             const auto image = timeline->createComponentSnapshot(timeline->getLocalBounds());
+                             juce::FileOutputStream out(workDir.getChildFile("beat-menu.png"));
+                             if (out.openedOk()) juce::PNGImageFormat().writeImageToStream(image, out);
                          }
                          timeline->setSpaceHeldForTest(false);
                          mirror.refreshNow();

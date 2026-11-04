@@ -649,7 +649,7 @@ void TimelineView::paintClip(juce::Graphics& g, const ClipModel& clip, juce::Rec
     g.setColour(selected ? colours::zinc100 : palette.border.withAlpha(alpha));
     g.drawRoundedRectangle(r.reduced(0.5f), 3.0f, selected ? 2.0f : 1.0f);
 
-    paintClipHeader(g, clip, header, palette.border, alpha);
+    paintClipHeader(g, clip, header, palette, alpha);
 }
 
 // The source's arrangement sections, as a labelled strip along the top of the clip's body.
@@ -750,7 +750,7 @@ bool TimelineView::ownsBeatRepeat(const ClipModel& clip) const
 }
 
 void TimelineView::paintClipHeader(juce::Graphics& g, const ClipModel& clip, juce::Rectangle<float> header,
-                                   juce::Colour border, float alpha)
+                                   const PaletteEntry& palette, float alpha)
 {
     if (header.getWidth() < 20.0f) return;
     juce::String name = clip.name.trim();
@@ -770,12 +770,12 @@ void TimelineView::paintClipHeader(juce::Graphics& g, const ClipModel& clip, juc
     const float maxTextW = juce::jmax(0.0f, header.getWidth() - kHeaderPadX * 2.0f - badgesW);
     const float textW = juce::jmin(maxTextW, juce::GlyphArrangement::getStringWidth(font, name));
     const float stripW = juce::jmin(header.getWidth(), std::ceil(textW) + kHeaderPadX * 2.0f + badgesW);
-    g.setColour(border.withAlpha(0.95f * alpha));
+    g.setColour(palette.header.withAlpha(0.95f * alpha));
     g.fillRoundedRectangle(header.withWidth(stripW), 3.0f);
 
     if (maxTextW > 6.0f)
     {
-        g.setColour(juce::Colours::white.withAlpha(alpha));
+        g.setColour(palette.headerText.withAlpha(alpha));
         g.setFont(font);
         g.drawText(name, header.withX(header.getX() + kHeaderPadX).withWidth(maxTextW), juce::Justification::centredLeft, true);
     }

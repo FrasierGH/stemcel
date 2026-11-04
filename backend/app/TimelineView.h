@@ -4,6 +4,7 @@
 #include "LiveState.h"
 #include "BeatSync.h"
 #include "ProjectModel.h"
+#include "Theme.h"
 #include "TimelineActions.h"
 #include "WaveformStore.h"
 
@@ -197,7 +198,7 @@ class TimelineView final : public juce::Component,
     void showLaneMenu(const juce::String& trackId, double atMs);
     juce::PopupMenu beatRepeatMenu(const juce::String& trackId, double atMs, const ClipModel* clip);
     juce::PopupMenu stutterMenu(const juce::String& trackId, double atMs);
-    void paintClipHeader(juce::Graphics& g, const ClipModel& clip, juce::Rectangle<float> header, juce::Colour border,
+    void paintClipHeader(juce::Graphics& g, const ClipModel& clip, juce::Rectangle<float> header, const PaletteEntry& palette,
                          float alpha);
     std::vector<int> clipHeaderBadges(const ClipModel& clip) const;
     bool isWarpPending(const ClipModel& clip) const;

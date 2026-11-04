@@ -541,8 +541,15 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
     void paintTile(juce::Graphics& g, const Hit& hit, const LibraryItemModel& item, bool selected)
     {
         auto r = hit.bounds;
-        g.setColour(selected ? colours::sky600.withAlpha(0.3f) : colours::zinc950.withAlpha(0.6f));
-        g.fillRect(r.reduced(1));
+        // A card; selected, tinted with the accent and outlined in it.
+        const auto cardArea = r.reduced(1).toFloat();
+        const bool fusionCard = currentTheme() == ThemeId::fusionDark;
+        g.setColour(selected ? colours::card.interpolatedWith(colours::accent, fusionCard ? 0.28f : 0.14f) : colours::card);
+        if (fusionCard) g.fillRoundedRectangle(cardArea, 3.0f);
+        else g.fillRect(cardArea);
+        g.setColour(selected ? colours::accent : colours::rule);
+        if (fusionCard) g.drawRoundedRectangle(cardArea.reduced(0.5f), 3.0f, 1.0f);
+        else g.drawRect(cardArea, 1.0f);
         if (showImages())
         {
             const auto art = r.removeFromLeft(tiles::kTileHeight);
@@ -1371,6 +1378,7 @@ LibraryPanel::LibraryPanel(LibraryContext context) : ctx(std::move(context))
     {
         auto* tab = tabs.add(new juce::TextButton(names[index]));
         tab->setConnectedEdges(juce::Button::ConnectedOnLeft | juce::Button::ConnectedOnRight);
+        tab->getProperties().set("tab", true); // drawn as a tab (Theme.cpp)
         tab->onClick = [this, index] { showTab(index); };
         addAndMakeVisible(tab);
     }
@@ -1408,7 +1416,7 @@ void LibraryPanel::showTab(int index)
     for (int i = 0; i < kTabCount; ++i)
     {
         views[static_cast<size_t>(i)]->setVisible(i == activeTab);
-        tabs[i]->setColour(juce::TextButton::buttonColourId, i == activeTab ? colours::sky600 : colours::zinc800);
+        tabs[i]->setToggleState(i == activeTab, juce::dontSendNotification);
     }
     importButton.setVisible(activeTab <= 2);
     ctx.prefs.set("ui", "nativeLibraryTab", index);
@@ -1457,6 +1465,12 @@ void LibraryPanel::importWithDialog()
 void LibraryPanel::paint(juce::Graphics& g)
 {
     g.fillAll(colours::background);
+    // The tabs stand on a line that runs under them to the panel's edge.
+    if (!tabs.isEmpty())
+    {
+        g.setColour(currentTheme() == ThemeId::fusionDark ? colours::rule : colours::zinc700);
+        g.drawHorizontalLine(tabs[0]->getBottom() - 1, 1.0f, static_cast<float>(getWidth() - 1));
+    }
     g.setColour(dragOver ? colours::accent : colours::border);
     g.drawRect(getLocalBounds(), dragOver ? 2 : 1);
 }
@@ -1464,8 +1478,13 @@ void LibraryPanel::paint(juce::Graphics& g)
 void LibraryPanel::resized()
 {
     auto area = getLocalBounds().reduced(1);
-    auto header = area.removeFromTop(30).reduced(4, 3);
-    for (auto* tab : tabs) tab->setBounds(header.removeFromLeft(juce::jmax(64, tab->getBestWidthForHeight(24) + 8)));
+    auto header = area.removeFromTop(30).reduced(4, 0).withTrimmedTop(4);
+    for (auto* tab : tabs)
+    {
+        tab->setBounds(header.removeFromLeft(juce::jmax(64, tab->getBestWidthForHeight(24) + 8)));
+        header.removeFromLeft(1);
+    }
+    header = header.withTrimmedBottom(3);
     importButton.setBounds(header.removeFromRight(90));
     header.removeFromRight(8);
     status.setBounds(header.reduced(8, 0));
