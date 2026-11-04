@@ -163,6 +163,10 @@ class SmokeTest final : private juce::Timer
     int autoTargetTracksBefore = 0;
     std::vector<TempoPoint> tempoMapBefore;
     bool spaceDragOk = false;
+    juce::String dragDescription, dragDescriptionReported;
+    bool dragSingleAfter = false;
+    int dragBoxCount = 0;
+    juce::String spaceDragLine;
     juce::String autoTargetLine;
     size_t quickMashupFollowers = 0;
     juce::String quickMashupLeadClip, quickMashupVocalClip;

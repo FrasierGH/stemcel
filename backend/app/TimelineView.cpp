@@ -350,6 +350,15 @@ void TimelineView::persistView()
 void TimelineView::timerCallback()
 {
     ++tick;
+    // Space during a clip drag: its release (key-up events don't always reach the timeline,
+    // so the key is read) and the hold that opens the placements.
+    if (spaceHeld)
+    {
+        if (!spaceIsDown())
+            spaceReleased();
+        else if (!beatMenu.has_value() && drag == DragKind::move && juce::Time::getMillisecondCounter() - spacePressedAt >= 350)
+            openBeatMenu();
+    }
     // The pending-warp spinner turns while any clip on screen waits on its tempo analysis.
     if (tick % 2 == 0 && std::exchange(warpSpinnerVisible, false)) repaint();
 
@@ -857,9 +866,9 @@ void TimelineView::paint(juce::Graphics& g)
                     const auto* track = model().findTrack(trackId);
                     const auto bounds = clipBounds(ghost, rows[i]);
                     paintClip(g, ghost, bounds, false, track != nullptr && track->colorIndex >= 0 ? track->colorIndex : static_cast<int>(i), 0.85f);
-                    if (drag == DragKind::move && beatSynced && beatSyncLabel.isNotEmpty())
+                    if (drag == DragKind::move && beatLock && beatSyncLabel.isNotEmpty() && !beatMenu.has_value())
                     {
-                        const auto label = juce::Rectangle<float>(bounds.getX() + 4.0f, bounds.getBottom() - 22.0f, 360.0f, 18.0f);
+                        const auto label = juce::Rectangle<float>(bounds.getX() + 4.0f, bounds.getBottom() - 22.0f, 420.0f, 18.0f);
                         g.setColour(colours::zinc950.withAlpha(0.85f));
                         g.fillRoundedRectangle(label, 3.0f);
                         g.setColour(colours::zinc100);
@@ -1308,6 +1317,13 @@ bool TimelineView::tempoLaneDoubleClick(const juce::MouseEvent& e)
 // ── mouse ───────────────────────────────────────────────────────────────────
 void TimelineView::mouseDown(const juce::MouseEvent& e)
 {
+    if (beatMenu.has_value())
+    {
+        // Only letting Space go away from it closes the menu; a click on an option places.
+        const int row = beatMenuRowAt(e.getPosition());
+        if (row >= 0 && beatMenu->options[static_cast<size_t>(row)].startMs >= 0.0) placeFromBeatMenu(row);
+        return;
+    }
     grabKeyboardFocus();
     drag = DragKind::none;
     dragDuplicates = false;
@@ -1478,6 +1494,12 @@ void TimelineView::mouseDown(const juce::MouseEvent& e)
 
 void TimelineView::mouseDrag(const juce::MouseEvent& e)
 {
+    if (beatMenu.has_value())
+    {
+        // The clip waits where it was while the pointer picks a placement.
+        hoverBeatMenu(e.getPosition());
+        return;
+    }
     if (tempoResizing)
     {
         view.tempoLaneHeight = juce::jlimit(VS::kTempoLaneHeight, VS::kMaxTempoLaneHeight,
@@ -1594,13 +1616,17 @@ void TimelineView::mouseDrag(const juce::MouseEvent& e)
     case DragKind::move:
     {
         if (e.getDistanceFromDragStart() <= kDragThresholdPx) return;
-        // A beat-synced preview holds until the pointer really moves.
-        if (beatSynced && std::abs(e.x - beatSyncMouseX) < 6) return;
-        beatSynced = false;
-        dragPreviewStartMs = snapped(dragOriginStartMs + (ms - dragAnchorMs));
-        dragPreviewEndMs = dragPreviewStartMs + (dragOriginEndMs - dragOriginStartMs);
         if (const int index = trackRowIndexAtY(juce::jlimit(view.headerHeight(), getHeight() - 1, e.y)); index >= 0)
             dragPreviewTrackId = rows[static_cast<size_t>(index)].trackId;
+        const double raw = snapped(dragOriginStartMs + (ms - dragAnchorMs));
+        const auto* lockClip = beatLock ? model().findClip(dragClipId) : nullptr;
+        if (lockClip != nullptr)
+            applyBeatLock(*lockClip, raw); // locked: on the beat wherever it goes
+        else
+        {
+            dragPreviewStartMs = raw;
+            dragPreviewEndMs = dragPreviewStartMs + (dragOriginEndMs - dragOriginStartMs);
+        }
         repaint();
         break;
     }
@@ -1658,8 +1684,8 @@ bool TimelineView::keyPressed(const juce::KeyPress& key)
 
 bool TimelineView::keyStateChanged(bool isKeyDown)
 {
-    // Space let go: a hold ends (and a tap stays a tap).
-    if (!isKeyDown && beatSyncHeld && !juce::KeyPress::isKeyCurrentlyDown(juce::KeyPress::spaceKey)) beatSyncHeld = false;
+    // Space let go: a tap ends, or the menu's choice is made.
+    if (!isKeyDown && spaceHeld && !spaceIsDown()) spaceReleased();
     return false;
 }
 
@@ -1673,111 +1699,297 @@ void TimelineView::beginMoveDragForTest(const juce::String& clipId)
     dragOriginStartMs = dragPreviewStartMs = clip->offsetMs;
     dragOriginEndMs = dragPreviewEndMs = clip->endMs();
     dragPreviewTrackId = clip->trackId;
-    beatSynced = beatSyncHeld = false;
+    beatLock = spaceHeld = false;
+    beatMenu.reset();
+}
+
+void TimelineView::endDragForTest()
+{
+    drag = DragKind::none;
+    beatLock = spaceHeld = spaceHeldForTest = false;
+    beatMenu.reset();
+    beatSyncLabel.clear();
+    repaint();
+}
+
+void TimelineView::setSpaceHeldForTest(bool held)
+{
+    spaceHeldForTest = held;
+    if (!held && spaceHeld) spaceReleased();
+}
+
+double TimelineView::beatMenuOptionStartForTest(int index) const
+{
+    if (!beatMenu.has_value() || index < 0 || index >= static_cast<int>(beatMenu->options.size())) return -1.0;
+    return beatMenu->options[static_cast<size_t>(index)].startMs;
+}
+
+void TimelineView::hoverBeatMenuForTest(int index)
+{
+    if (!beatMenu.has_value()) return;
+    beatMenu->hovered = index >= 0 && index < static_cast<int>(beatMenu->options.size()) ? index : -1;
+    repaint();
+}
+
+bool TimelineView::spaceIsDown() const
+{
+    return spaceHeldForTest || juce::KeyPress::isKeyCurrentlyDown(juce::KeyPress::spaceKey);
+}
+
+void TimelineView::applyBeatLock(const ClipModel& clip, double rawStartMs)
+{
+    const double synced = beatsync::nearestBeat(model(), clip, rawStartMs, dragPreviewTrackId);
+    dragPreviewStartMs = synced;
+    dragPreviewEndMs = synced + (dragOriginEndMs - dragOriginStartMs);
+    const auto* partner = beatsync::partnerFor(model(), clip, synced, dragPreviewTrackId);
+    const auto* partnerItem = partner != nullptr ? model().findLibraryItem(partner->libraryItemId) : nullptr;
+    const double moved = synced - rawStartMs;
+    beatSyncLabel = "Beat locked to " + (partnerItem != nullptr ? partnerItem->displayName() : juce::String("the grid")) + " ("
+                    + (moved >= 0 ? "+" : "") + juce::String(juce::roundToInt(moved))
+                    + " ms) - tap Space to unlock, hold it for placements";
 }
 
 bool TimelineView::beatSyncKey()
 {
+    if (beatMenu.has_value()) return true; // held: the menu is up
     if (drag != DragKind::move) return false;
-    const auto now = juce::Time::getMillisecondCounter();
-    if (beatSyncHeld)
-    {
-        // The key repeating while held: past the hold time the menu opens (in case the timer's
-        // check came too early).
-        if (!beatSyncMenuShown && now - beatSyncPressedAt >= 300) showBeatSyncMenu();
-        return true;
-    }
+    if (spaceHeld) return true;            // the key repeating while held
     const auto* clip = model().findClip(dragClipId);
     if (clip == nullptr) return true;
-    beatSyncHeld = true;
-    beatSyncMenuShown = false;
-    beatSyncPressedAt = now;
-    const double before = dragPreviewStartMs;
-    dragPreviewStartMs = beatsync::nearestBeat(model(), *clip, dragPreviewStartMs, dragPreviewTrackId);
-    dragPreviewEndMs = dragPreviewStartMs + (dragOriginEndMs - dragOriginStartMs);
-    beatSynced = true;
-    beatSyncMouseX = getMouseXYRelative().x;
-    const auto* partner = beatsync::partnerFor(model(), *clip, dragPreviewStartMs, dragPreviewTrackId);
-    const auto* partnerItem = partner != nullptr ? model().findLibraryItem(partner->libraryItemId) : nullptr;
-    const double moved = dragPreviewStartMs - before;
-    beatSyncLabel = "Beat synced to " + (partnerItem != nullptr ? partnerItem->displayName() : juce::String("the grid")) + " ("
-                    + (moved >= 0 ? "+" : "") + juce::String(juce::roundToInt(moved)) + " ms) - hold Space for more";
-    log::info("beatsync", "tap clip=" + dragClipId + " moved=" + juce::String(moved, 1) + "ms");
+    spaceHeld = true;
+    spacePressedAt = juce::Time::getMillisecondCounter();
+    // Already locked: a short tap lets go (decided when Space comes up, as a hold opens the menu).
+    unlockOnTap = beatLock;
+    if (!beatLock)
+    {
+        const double before = dragPreviewStartMs;
+        beatLock = true;
+        applyBeatLock(*clip, dragPreviewStartMs);
+        log::info("beatsync", "lock clip=" + dragClipId + " moved=" + juce::String(dragPreviewStartMs - before, 1) + "ms");
+    }
     repaint();
-    juce::Timer::callAfterDelay(350,
-                                [safe = juce::Component::SafePointer<TimelineView>(this)]
-                                {
-                                    // Still held (no release came): the placements.
-                                    if (safe != nullptr && safe->beatSyncHeld && !safe->beatSyncMenuShown && safe->drag == DragKind::move)
-                                        safe->showBeatSyncMenu();
-                                });
     return true;
 }
 
-void TimelineView::showBeatSyncMenu()
+void TimelineView::spaceReleased()
+{
+    spaceHeld = false;
+    if (beatMenu.has_value())
+    {
+        // Over an option: placed there. Anywhere else: the menu closes, the drag carries on.
+        const int index = beatMenu->hovered;
+        if (index >= 0 && index < static_cast<int>(beatMenu->options.size()) && beatMenu->options[static_cast<size_t>(index)].startMs >= 0.0)
+            placeFromBeatMenu(index);
+        else
+            closeBeatMenu();
+        return;
+    }
+    if (std::exchange(unlockOnTap, false) && juce::Time::getMillisecondCounter() - spacePressedAt < 350)
+    {
+        beatLock = false;
+        beatSyncLabel.clear();
+        log::info("beatsync", "unlock clip=" + dragClipId);
+        repaint();
+    }
+}
+
+namespace
+{
+constexpr int kBeatMenuWidth = 360;
+constexpr int kBeatMenuHeader = 28;
+constexpr int kBeatMenuRow = 26;
+constexpr int kBeatMenuFooter = 24;
+} // namespace
+
+void TimelineView::openBeatMenu()
 {
     const auto* clip = model().findClip(dragClipId);
     if (clip == nullptr) return;
-    beatSyncMenuShown = true;
-    log::info("beatsync", "menu clip=" + dragClipId);
-    const auto options = beatsync::placements(model(), *clip, dragPreviewStartMs, dragPreviewTrackId);
-    const double beatMs = 60000.0 / juce::jmax(1.0, model().bpm);
-    juce::PopupMenu menu;
-    menu.addSectionHeader("Place the clip");
-    for (size_t i = 0; i < options.size(); ++i)
+    BeatMenu menu;
+    menu.options = beatsync::placements(model(), *clip, dragPreviewStartMs, dragPreviewTrackId);
+    if (menu.options.empty()) return;
+    unlockOnTap = false;
+    const int height = kBeatMenuHeader + static_cast<int>(menu.options.size()) * kBeatMenuRow + kBeatMenuFooter;
+    // Beside the pointer, so letting go of Space straight away (pointer off it) changes nothing.
+    const auto at = getMouseXYRelative() + juce::Point<int>(14, 10);
+    menu.bounds = juce::Rectangle<int>(at.x, at.y, kBeatMenuWidth, height).constrainedWithin(getLocalBounds().reduced(6));
+    beatMenu = std::move(menu);
+    hoverBeatMenu(getMouseXYRelative());
+    log::info("beatsync", "menu clip=" + dragClipId + " options=" + juce::String(static_cast<int>(beatMenu->options.size())));
+    repaint();
+}
+
+juce::Rectangle<int> TimelineView::beatMenuRow(int index) const
+{
+    if (!beatMenu.has_value()) return {};
+    return {beatMenu->bounds.getX() + 4, beatMenu->bounds.getY() + kBeatMenuHeader + index * kBeatMenuRow,
+            beatMenu->bounds.getWidth() - 8, kBeatMenuRow};
+}
+
+int TimelineView::beatMenuRowAt(juce::Point<int> p) const
+{
+    if (!beatMenu.has_value()) return -1;
+    for (int i = 0; i < static_cast<int>(beatMenu->options.size()); ++i)
+        if (beatMenuRow(i).contains(p)) return i;
+    return -1;
+}
+
+void TimelineView::hoverBeatMenu(juce::Point<int> p)
+{
+    if (!beatMenu.has_value()) return;
+    const int row = beatMenuRowAt(p);
+    if (row == beatMenu->hovered) return;
+    beatMenu->hovered = row;
+    repaint();
+}
+
+void TimelineView::placeFromBeatMenu(int index)
+{
+    if (!beatMenu.has_value() || index < 0 || index >= static_cast<int>(beatMenu->options.size())) return;
+    const auto option = beatMenu->options[static_cast<size_t>(index)];
+    beatMenu.reset();
+    log::info("beatsync", "placed clip=" + dragClipId + " at=" + juce::String(option.startMs, 1) + " (" + option.label + ")");
+    drag = DragKind::none;
+    beatLock = false;
+    beatSyncLabel.clear();
+    commitMoveDrag(option.startMs);
+    repaint();
+}
+
+void TimelineView::closeBeatMenu()
+{
+    if (!beatMenu.has_value()) return;
+    const bool released = beatMenu->mouseReleased;
+    beatMenu.reset();
+    log::info("beatsync", "menu closed clip=" + dragClipId);
+    if (released)
     {
-        const auto& o = options[i];
-        if (o.startMs < 0.0)
+        // The button came up while it was open: the drag ends where the clip was waiting.
+        drag = DragKind::none;
+        beatLock = false;
+        beatSyncLabel.clear();
+        commitMoveDrag(dragPreviewStartMs);
+    }
+    repaint();
+}
+
+void TimelineView::commitMoveDrag(double startMs)
+{
+    const auto* clip = model().findClip(dragClipId);
+    if (clip == nullptr) return;
+    if (std::abs(startMs - dragOriginStartMs) <= 0.01 && dragPreviewTrackId == clip->trackId) return;
+    if (dragDuplicates)
+    {
+        const auto copy = actions.duplicateClipTo(dragClipId, dragPreviewTrackId, startMs);
+        if (copy.isNotEmpty())
         {
-            menu.addItem(static_cast<int>(i) + 1, o.label, false);
-            continue;
+            view.selectedClipIds = {copy};
+            view.selectedTrackId = dragPreviewTrackId;
+            view.changed();
         }
+        return;
+    }
+    const auto clipId = dragClipId, trackId = dragPreviewTrackId;
+    const auto origin = dragOriginStartMs, originEnd = dragOriginEndMs;
+    actions.engineClient().inUndoGroup("Move clip",
+                                       [&]
+                                       {
+                                           actions.moveClip(clipId, startMs, trackId);
+                                           mirror.refreshNow();
+                                           retimeTransitions(clipId, origin, originEnd);
+                                       });
+}
+
+void TimelineView::paintOverChildren(juce::Graphics& g)
+{
+    if (!beatMenu.has_value()) return;
+    const auto& menu = *beatMenu;
+    auto& lf = getLookAndFeel();
+    const auto accent = lf.findColour(juce::PopupMenu::highlightedBackgroundColourId);
+
+    // The hovered placement: a ghost of the clip where it would go.
+    if (menu.hovered >= 0 && menu.options[static_cast<size_t>(menu.hovered)].startMs >= 0.0)
+        if (const auto* c = model().findClip(dragClipId))
+            for (size_t i = 0; i < rows.size(); ++i)
+            {
+                if (rows[i].trackId != dragPreviewTrackId) continue;
+                auto ghost = *c;
+                ghost.offsetMs = menu.options[static_cast<size_t>(menu.hovered)].startMs;
+                ghost.effectiveDurationMs = dragOriginEndMs - dragOriginStartMs;
+                const auto ratio = c->effectiveWarpActive && c->effectiveTempoRatio > 0 ? c->effectiveTempoRatio : 1.0;
+                ghost.durationMs = ghost.effectiveDurationMs * ratio;
+                const auto* track = model().findTrack(dragPreviewTrackId);
+                const auto bounds = clipBounds(ghost, rows[i]);
+                juce::Graphics::ScopedSaveState saved(g);
+                g.reduceClipRegion(0, view.headerHeight(), getWidth(), getHeight() - view.headerHeight());
+                paintClip(g, ghost, bounds, false, track != nullptr && track->colorIndex >= 0 ? track->colorIndex : static_cast<int>(i), 0.45f);
+                juce::Path outline;
+                outline.addRoundedRectangle(bounds.reduced(0.5f), 4.0f);
+                juce::Path dashed;
+                const float dashes[] = {5.0f, 4.0f};
+                juce::PathStrokeType(1.5f).createDashedStroke(dashed, outline, dashes, 2);
+                g.setColour(accent.brighter(0.3f));
+                g.fillPath(dashed);
+                g.setColour(accent.withAlpha(0.7f));
+                g.drawVerticalLine(juce::roundToInt(bounds.getX()), static_cast<float>(view.headerHeight()), bounds.getBottom());
+            }
+
+    // The menu.
+    const auto box = menu.bounds.toFloat();
+    g.setColour(juce::Colours::black.withAlpha(0.35f));
+    g.fillRoundedRectangle(box.translated(0.0f, 3.0f).expanded(1.0f), 7.0f);
+    g.setColour(lf.findColour(juce::PopupMenu::backgroundColourId));
+    g.fillRoundedRectangle(box, 6.0f);
+    g.setColour(accent.withAlpha(0.55f));
+    g.drawRoundedRectangle(box.reduced(0.5f), 6.0f, 1.0f);
+    const auto text = lf.findColour(juce::PopupMenu::textColourId);
+    g.setColour(lf.findColour(juce::PopupMenu::headerTextColourId));
+    g.setFont(uiFont(11.5f, true));
+    g.drawText("PLACE THE CLIP", menu.bounds.getX() + 12, menu.bounds.getY(), menu.bounds.getWidth() - 24, kBeatMenuHeader,
+               juce::Justification::centredLeft);
+
+    const double beatMs = 60000.0 / juce::jmax(1.0, model().bpm);
+    for (int i = 0; i < static_cast<int>(menu.options.size()); ++i)
+    {
+        const auto& o = menu.options[static_cast<size_t>(i)];
+        const auto row = beatMenuRow(i);
+        const bool enabled = o.startMs >= 0.0;
+        const bool hot = enabled && i == menu.hovered;
+        if (hot)
+        {
+            g.setColour(accent);
+            g.fillRoundedRectangle(row.toFloat().reduced(0.0f, 1.0f), 4.0f);
+        }
+        const auto colour = hot ? lf.findColour(juce::PopupMenu::highlightedTextColourId) : text.withAlpha(enabled ? 1.0f : 0.4f);
+        g.setColour(colour);
+        g.setFont(uiFont(13.0f));
+        g.drawText(o.label, row.reduced(10, 0), juce::Justification::centredLeft, true);
+        if (!enabled) continue;
         const double move = o.startMs - dragPreviewStartMs;
         const auto by = std::abs(move) < 1.0 ? juce::String("here")
                         : std::abs(move) < beatMs * 0.75
                             ? juce::String(move > 0 ? "+" : "") + juce::String(juce::roundToInt(move)) + " ms"
                             : juce::String(move > 0 ? "+" : "") + juce::String(move / beatMs, 1) + " beats";
-        menu.addItem(static_cast<int>(i) + 1, o.label + "   (" + by + ")");
+        g.setColour(colour.withAlpha(hot ? 0.85f : 0.55f));
+        g.setFont(uiFont(12.0f));
+        g.drawText(by, row.reduced(10, 0), juce::Justification::centredRight, false);
     }
-    const auto origin = dragOriginStartMs, originEnd = dragOriginEndMs;
-    const auto clipId = dragClipId, trackId = dragPreviewTrackId;
-    const bool duplicate = dragDuplicates;
-    // The menu takes the pointer: the drag ends here, placed by the choice (Esc: not moved).
-    drag = DragKind::none;
-    beatSynced = false;
-    beatSyncLabel.clear();
-    menu.showMenuAsync(juce::PopupMenu::Options().withMousePosition(),
-                       [safe = juce::Component::SafePointer<TimelineView>(this), options, origin, originEnd, clipId, trackId, duplicate](int result)
-                       {
-                           if (safe == nullptr) return;
-                           auto& self = *safe;
-                           if (result <= 0 || result > static_cast<int>(options.size()) || options[static_cast<size_t>(result - 1)].startMs < 0.0)
-                           {
-                               self.repaint();
-                               return;
-                           }
-                           const double start = options[static_cast<size_t>(result - 1)].startMs;
-                           if (duplicate)
-                           {
-                               const auto copy = self.actions.duplicateClipTo(clipId, trackId, start);
-                               if (copy.isNotEmpty()) self.view.selectedClipIds = {copy};
-                               self.view.changed();
-                           }
-                           else
-                               self.actions.engineClient().inUndoGroup("Move clip",
-                                                                       [&]
-                                                                       {
-                                                                           self.actions.moveClip(clipId, start, trackId);
-                                                                           self.mirror.refreshNow();
-                                                                           self.retimeTransitions(clipId, origin, originEnd);
-                                                                       });
-                           self.repaint();
-                       });
+    g.setColour(text.withAlpha(0.5f));
+    g.setFont(uiFont(11.0f));
+    g.drawText("Let go of Space on a choice to place it, or away to cancel", menu.bounds.getX() + 12,
+               menu.bounds.getBottom() - kBeatMenuFooter, menu.bounds.getWidth() - 24, kBeatMenuFooter,
+               juce::Justification::centredLeft, true);
 }
 
 void TimelineView::mouseUp(const juce::MouseEvent& e)
 {
-    beatSynced = false;
+    if (beatMenu.has_value())
+    {
+        // The button up while choosing: the menu stays until Space is let go.
+        beatMenu->mouseReleased = true;
+        return;
+    }
+    beatLock = false;
     beatSyncLabel.clear();
     if (std::exchange(tempoResizing, false))
     {
@@ -1820,32 +2032,7 @@ void TimelineView::mouseUp(const juce::MouseEvent& e)
         setMouseCursor(juce::MouseCursor::NormalCursor);
         break;
     case DragKind::move:
-        if (dragDuplicates)
-        {
-            if (moved)
-            {
-                const auto copy = actions.duplicateClipTo(dragClipId, dragPreviewTrackId, dragPreviewStartMs);
-                if (copy.isNotEmpty())
-                {
-                    view.selectedClipIds = {copy};
-                    view.selectedTrackId = dragPreviewTrackId;
-                    view.changed();
-                }
-            }
-            break;
-        }
-        if (moved
-            && (std::abs(dragPreviewStartMs - dragOriginStartMs) > 0.01
-                || dragPreviewTrackId != (model().findClip(dragClipId) != nullptr
-                                              ? model().findClip(dragClipId)->trackId
-                                              : dragPreviewTrackId)))
-            actions.engineClient().inUndoGroup("Move clip",
-                                               [&]
-                                               {
-                                                   actions.moveClip(dragClipId, dragPreviewStartMs, dragPreviewTrackId);
-                                                   mirror.refreshNow();
-                                                   retimeTransitions(dragClipId, dragOriginStartMs, dragOriginEndMs);
-                                               });
+        if (moved) commitMoveDrag(dragPreviewStartMs);
         break;
     case DragKind::trimStart:
     case DragKind::trimEnd:
@@ -1878,6 +2065,11 @@ void TimelineView::mouseUp(const juce::MouseEvent& e)
 
 void TimelineView::mouseMove(const juce::MouseEvent& e)
 {
+    if (beatMenu.has_value())
+    {
+        hoverBeatMenu(e.getPosition());
+        return;
+    }
     if (overTempoLaneEdge(e.y))
     {
         setMouseCursor(juce::MouseCursor::UpDownResizeCursor);

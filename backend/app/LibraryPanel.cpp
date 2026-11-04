@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <map>
+#include <optional>
 #include <set>
 #include <utility>
 
@@ -313,7 +314,9 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
         void paint(juce::Graphics& g) override { owner.paintCanvas(g); }
         void mouseDown(const juce::MouseEvent& e) override { owner.canvasDown(e); }
         void mouseDrag(const juce::MouseEvent& e) override { owner.canvasDrag(e); }
+        void mouseUp(const juce::MouseEvent& e) override { owner.canvasUp(e); }
         void mouseDoubleClick(const juce::MouseEvent& e) override { owner.canvasDoubleClick(e); }
+        void paintOverChildren(juce::Graphics& g) override { owner.paintMarquee(g); }
 
       private:
         LibraryItemsView& owner;
@@ -661,10 +664,20 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
     {
         grabKeyboardFocus();
         dragStarted = false;
+        pendingSingle.clear();
+        marquee.reset();
         const auto* hit = hitAt(e.getPosition());
         if (hit == nullptr)
         {
-            selection.clear();
+            // Empty space: a box dragged from here selects what it touches (with Shift or
+            // Cmd/Ctrl, added to what is selected).
+            if (!e.mods.isShiftDown() && !e.mods.isCommandDown()) selection.clear();
+            if (!e.mods.isPopupMenu())
+            {
+                marqueeBase = selection;
+                marqueeFrom = e.getPosition();
+                marquee = juce::Rectangle<int>(marqueeFrom, marqueeFrom);
+            }
             canvas.repaint();
             return;
         }
@@ -691,7 +704,14 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
             if (!selection.erase(hit->itemId)) selection.insert(hit->itemId);
             anchor = hit->itemId;
         }
-        else if (selection.count(hit->itemId) == 0 || !e.mods.isPopupMenu())
+        else if (selection.count(hit->itemId) != 0 && (e.mods.isPopupMenu() || selection.size() > 1))
+        {
+            // Pressing one of several selected keeps them all, so they can be dragged together;
+            // let go without dragging and it alone is selected.
+            if (!e.mods.isPopupMenu()) pendingSingle = hit->itemId;
+            anchor = hit->itemId;
+        }
+        else
         {
             selection = {hit->itemId};
             anchor = hit->itemId;
@@ -722,18 +742,151 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
 
     void canvasDrag(const juce::MouseEvent& e)
     {
+        if (marquee.has_value())
+        {
+            selectInBox(juce::Rectangle<int>(marqueeFrom, e.getPosition()));
+            const auto inViewport = e.getEventRelativeTo(&viewport).getPosition();
+            viewport.autoScroll(inViewport.x, inViewport.y, 24, 12);
+            return;
+        }
         if (dragStarted || e.getDistanceFromDragStart() < 5 || e.mods.isPopupMenu()) return;
         const auto* hit = hitAt(e.getMouseDownPosition());
         if (hit == nullptr || hit->kind == Hit::Kind::toggle) return;
         dragStarted = true;
-        // Onto a track to place it (the timeline takes one item per drop).
+        pendingSingle.clear();
+        // Onto a track to place it; several selected go together.
         if (auto* container = juce::DragAndDropContainer::findParentDragContainerFor(this))
-            // Several selected: all of them, in on-screen order (ids joined by commas).
-            container->startDragging("libraryItem:" + (selection.count(hit->itemId) != 0 && selection.size() > 1
-                                                           ? juce::StringArray([&] { juce::StringArray a; for (const auto& id : selectedInOrder()) a.add(id); return a; }()).joinIntoString(",")
-                                                           : hit->itemId),
-                                     &canvas,
-                                     juce::ScaledImage(canvas.createComponentSnapshot(hit->bounds.withHeight(juce::jmin(hit->bounds.getHeight(), 40)))));
+            container->startDragging(dragDescriptionFor(hit->itemId), &canvas, dragImageFor(hit->itemId));
+    }
+
+    void canvasUp(const juce::MouseEvent&)
+    {
+        if (marquee.has_value())
+        {
+            marquee.reset();
+            canvas.repaint();
+        }
+        // A press on one of several selected that didn't become a drag: it alone is selected.
+        if (pendingSingle.isNotEmpty() && !dragStarted)
+        {
+            selection = {pendingSingle};
+            canvas.repaint();
+        }
+        pendingSingle.clear();
+    }
+
+    // Everything the box touches is selected, on top of what was selected when it began.
+    void selectInBox(juce::Rectangle<int> box)
+    {
+        // A box dragged straight down (or across) still touches what it passes over.
+        box = box.withSize(juce::jmax(1, box.getWidth()), juce::jmax(1, box.getHeight()));
+        marquee = box;
+        selection = marqueeBase;
+        juce::String last;
+        for (const auto& h : hits)
+            if (h.kind != Hit::Kind::toggle && h.bounds.intersects(box))
+            {
+                selection.insert(h.itemId);
+                last = h.itemId;
+            }
+        if (last.isNotEmpty()) anchor = last;
+        canvas.repaint();
+    }
+
+    void paintMarquee(juce::Graphics& g)
+    {
+        if (!marquee.has_value() || marquee->isEmpty()) return;
+        const auto box = marquee->toFloat();
+        g.setColour(colours::accent.withAlpha(0.14f));
+        g.fillRect(box);
+        g.setColour(colours::accent.withAlpha(0.8f));
+        g.drawRect(box, 1.0f);
+    }
+
+    // What a drag from this item carries: it, or every selected item (in on-screen order,
+    // ids joined by commas) when it is one of several selected.
+    juce::String dragDescriptionFor(const juce::String& itemId) const
+    {
+        if (selection.count(itemId) == 0 || selection.size() < 2) return "libraryItem:" + itemId;
+        juce::StringArray carried;
+        for (const auto& id : selectedInOrder()) carried.add(id);
+        return "libraryItem:" + carried.joinIntoString(",");
+    }
+
+    // The item's tile, or with several dragged, the first few stacked with a count.
+    juce::ScaledImage dragImageFor(const juce::String& itemId)
+    {
+        const auto boundsOf = [this](const juce::String& id) -> juce::Rectangle<int>
+        {
+            for (const auto& h : hits)
+                if (h.itemId == id && h.kind != Hit::Kind::toggle) return h.bounds.withHeight(juce::jmin(h.bounds.getHeight(), 40));
+            return {};
+        };
+        const auto first = boundsOf(itemId);
+        if (selection.count(itemId) == 0 || selection.size() < 2 || first.isEmpty())
+            return juce::ScaledImage(canvas.createComponentSnapshot(first));
+        const auto count = static_cast<int>(selection.size());
+        const auto tile = canvas.createComponentSnapshot(first);
+        constexpr int kStep = 6;
+        const int layers = juce::jmin(3, count);
+        juce::Image image(juce::Image::ARGB, tile.getWidth() + kStep * (layers - 1) + 14, tile.getHeight() + kStep * (layers - 1) + 10, true);
+        juce::Graphics g(image);
+        for (int i = layers - 1; i >= 0; --i)
+        {
+            g.setOpacity(i == 0 ? 1.0f : 0.55f);
+            g.drawImageAt(tile, kStep * i, kStep * i);
+        }
+        g.setOpacity(1.0f);
+        const auto badge = juce::Rectangle<float>(static_cast<float>(image.getWidth() - 26), 0.0f, 26.0f, 18.0f);
+        g.setColour(colours::accent);
+        g.fillRoundedRectangle(badge, 9.0f);
+        g.setColour(colours::zinc950);
+        g.setFont(uiFont(11.0f, true));
+        g.drawText(juce::String(count), badge, juce::Justification::centred);
+        return juce::ScaledImage(image);
+    }
+
+  public:
+    // For tests: a press on the item (as the mouse would, with these keys), the button let go,
+    // and what dragging from that item would carry.
+    void pressForTest(const juce::String& itemId, juce::ModifierKeys mods)
+    {
+        for (const auto& h : hits)
+            if (h.itemId == itemId && h.kind != Hit::Kind::toggle)
+            {
+                canvasDown(eventAt(h.bounds.getCentre(), mods));
+                return;
+            }
+    }
+    void releaseForTest() { canvasUp(eventAt({}, {})); }
+    juce::String dragDescriptionForTest(const juce::String& itemId) const { return dragDescriptionFor(itemId); }
+    // A box from above the first item to below the last, as dragged in the panel.
+    int boxSelectForTest(const juce::String& firstId, const juce::String& lastId)
+    {
+        juce::Rectangle<int> a, b;
+        for (const auto& h : hits)
+        {
+            if (h.itemId == firstId && h.kind != Hit::Kind::toggle) a = h.bounds;
+            if (h.itemId == lastId && h.kind != Hit::Kind::toggle) b = h.bounds;
+        }
+        if (a.isEmpty() || b.isEmpty()) return 0;
+        marqueeBase.clear();
+        marqueeFrom = a.getCentre();
+        marquee = juce::Rectangle<int>(marqueeFrom, marqueeFrom);
+        selectInBox(juce::Rectangle<int>(a.getCentre(), b.getCentre()));
+        canvasUp(eventAt({}, {}));
+        return static_cast<int>(selection.size());
+    }
+
+  private:
+    juce::MouseEvent eventAt(juce::Point<int> p, juce::ModifierKeys mods)
+    {
+        const auto pos = p.toFloat();
+        const auto now = juce::Time::getCurrentTime();
+        return juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(), pos, mods, juce::MouseInputSource::defaultPressure,
+                                juce::MouseInputSource::defaultOrientation, juce::MouseInputSource::defaultRotation,
+                                juce::MouseInputSource::defaultTiltX, juce::MouseInputSource::defaultTiltY, &canvas, &canvas, now, pos,
+                                now, 1, false);
     }
 
     void canvasDoubleClick(const juce::MouseEvent& e)
@@ -1187,6 +1340,10 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
     juce::Rectangle<int> orphanHeader;
     std::set<juce::String> selection;
     juce::String anchor; // where a shift-click span starts
+    juce::String pendingSingle; // pressed while one of several selected: selected alone on release unless dragged
+    std::optional<juce::Rectangle<int>> marquee; // the box being dragged out to select
+    juce::Point<int> marqueeFrom;
+    std::set<juce::String> marqueeBase;          // selected when the box began
     std::map<juce::String, int> uses;
     std::map<juce::String, juce::var> metadataCache;
     std::map<juce::String, juce::Image> coverCache;
@@ -1256,6 +1413,28 @@ void LibraryPanel::showTab(int index)
     importButton.setVisible(activeTab <= 2);
     ctx.prefs.set("ui", "nativeLibraryTab", index);
     ctx.prefs.save();
+}
+
+void LibraryPanel::pressItemForTest(const juce::String& itemId, juce::ModifierKeys mods)
+{
+    showTab(0);
+    library->pressForTest(itemId, mods);
+}
+
+void LibraryPanel::releaseForTest()
+{
+    library->releaseForTest();
+}
+
+juce::String LibraryPanel::dragDescriptionForTest(const juce::String& itemId) const
+{
+    return library->dragDescriptionForTest(itemId);
+}
+
+int LibraryPanel::boxSelectForTest(const juce::String& firstId, const juce::String& lastId)
+{
+    showTab(0);
+    return library->boxSelectForTest(firstId, lastId);
 }
 
 void LibraryPanel::setActivity(const juce::String& text)

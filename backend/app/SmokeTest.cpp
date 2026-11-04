@@ -2069,7 +2069,26 @@ void SmokeTest::addTempoJourney()
                          juce::String second;
                          for (const auto& item : model().library)
                              if (item.id != dragItemId && item.kind == "source" && second.isEmpty()) second = item.id;
-                         dropOnTimeline("libraryItem:" + dragItemId + "," + second, true);
+                         // Selected in the library as the mouse would: one, Cmd/Ctrl-click another,
+                         // then a press on the first to drag them (which must keep both).
+                         auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
+                         auto* panel = window != nullptr ? findDescendant<LibraryPanel>(window) : nullptr;
+                         juce::String description = "libraryItem:" + dragItemId;
+                         if (panel != nullptr)
+                         {
+                             panel->pressItemForTest(dragItemId, {});
+                             panel->releaseForTest();
+                             panel->pressItemForTest(second, juce::ModifierKeys(juce::ModifierKeys::commandModifier));
+                             panel->releaseForTest();
+                             panel->pressItemForTest(dragItemId, {});
+                             description = panel->dragDescriptionForTest(dragItemId);
+                             panel->releaseForTest();
+                             // Let go without a drag: the pressed one alone stays selected.
+                             dragSingleAfter = panel->dragDescriptionForTest(dragItemId) == "libraryItem:" + dragItemId;
+                             dragBoxCount = panel->boxSelectForTest(dragItemId, second);
+                         }
+                         dragDescription = description;
+                         dropOnTimeline(description, true);
                      },
                      {},
                      [this, clipTotal](const juce::var&)
@@ -2077,8 +2096,13 @@ void SmokeTest::addTempoJourney()
                          if (clipTotal() != dragClipsBefore + 2 || static_cast<int>(model().tracks.size()) != dragTracksBefore + 1) return false;
                          const auto& clips = model().tracks.back().clips;
                          const bool inTurn = clips.size() == 2 && std::abs(clips[1].offsetMs - clips[0].endMs()) < 1.0;
-                         if (inTurn) report.add("drag several library items: two clips, one after the other, on a new track");
-                         return inTurn;
+                         const bool both = dragDescription.contains(",");
+                         const bool ok = inTurn && both && dragSingleAfter && dragBoxCount >= 2;
+                         const auto line = "drag several library items: carried " + dragDescription.fromFirstOccurrenceOf(":", false, false)
+                                           + ", in turn " + (inTurn ? "yes" : "no") + ", one alone after a click "
+                                           + (dragSingleAfter ? "yes" : "no") + ", a box selected " + juce::String(dragBoxCount);
+                         if (line != dragDescriptionReported) report.add(dragDescriptionReported = line); // once
+                         return ok;
                      }});
     steps.back().poll = true;
     steps.push_back({"drag file to timeline",
@@ -3160,13 +3184,54 @@ void SmokeTest::addTempoJourney()
                              window->getPeer()->handleKeyPress(juce::KeyPress(juce::KeyPress::spaceKey));
                          else
                              timeline->keyPressed(juce::KeyPress(juce::KeyPress::spaceKey));
-                         spaceDragOk = timeline->isBeatSyncedForTest() && workspace->liveState().playing == wasPlaying;
+                         const bool locked = timeline->isBeatSyncedForTest() && workspace->liveState().playing == wasPlaying;
+                         // The tap let go: the clip stays locked to the beat.
+                         timeline->setSpaceHeldForTest(false);
+                         const bool stillLocked = timeline->isBeatSyncedForTest();
+
+                         // Held: the menu opens and stays; letting go away from it closes it and
+                         // the drag carries on.
+                         timeline->setSpaceHeldForTest(true);
+                         timeline->keyPressed(juce::KeyPress(juce::KeyPress::spaceKey));
+                         timeline->openBeatMenuForTest();
+                         const bool menuOpened = timeline->beatMenuOpenForTest() && timeline->beatMenuOptionCountForTest() > 0;
+                         timeline->hoverBeatMenuForTest(-1);
+                         timeline->setSpaceHeldForTest(false);
+                         const bool cancelled = !timeline->beatMenuOpenForTest() && timeline->isBeatSyncedForTest();
+
+                         // Held again, over an option: letting go places the clip there.
+                         const auto* before = model().findClip(clipId);
+                         const double startBefore = before != nullptr ? before->offsetMs : 0.0;
+                         timeline->setSpaceHeldForTest(true);
+                         timeline->keyPressed(juce::KeyPress(juce::KeyPress::spaceKey));
+                         timeline->openBeatMenuForTest();
+                         int option = -1;
+                         for (int i = 0; i < timeline->beatMenuOptionCountForTest() && option < 0; ++i)
+                             if (timeline->beatMenuOptionStartForTest(i) >= 0.0
+                                 && std::abs(timeline->beatMenuOptionStartForTest(i) - startBefore) > 1.0)
+                                 option = i;
+                         double target = -1.0;
+                         if (option >= 0)
+                         {
+                             target = timeline->beatMenuOptionStartForTest(option);
+                             timeline->hoverBeatMenuForTest(option);
+                         }
+                         timeline->setSpaceHeldForTest(false);
+                         mirror.refreshNow();
+                         const auto* after = model().findClip(clipId);
+                         const bool placed = option < 0 || (after != nullptr && std::abs(after->offsetMs - target) < 1.0);
                          timeline->endDragForTest();
+                         if (option >= 0 && after != nullptr) actions.moveClip(clipId, startBefore, after->trackId); // as it was
+                         mirror.refreshNow();
+                         spaceDragLine = juce::String("space during a drag: locked ") + (locked ? "yes" : "no") + ", stays locked "
+                                         + (stillLocked ? "yes" : "no") + ", menu " + (menuOpened ? "yes" : "no") + ", cancel "
+                                         + (cancelled ? "yes" : "no") + ", placed " + (option < 0 ? "n/a" : placed ? "yes" : "no");
+                         spaceDragOk = locked && stillLocked && menuOpened && cancelled && placed;
                      },
                      {},
                      [this](const juce::var&)
                      {
-                         if (spaceDragOk) report.add("space during a drag: the timeline beat-synced the clip; playback untouched");
+                         report.add(spaceDragLine);
                          return spaceDragOk;
                      }});
     // Two files dropped at once: the prompt, answered "as dropped", mixes them on two decks.
