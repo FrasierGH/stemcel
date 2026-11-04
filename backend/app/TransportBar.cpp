@@ -91,7 +91,7 @@ TransportBar::TransportBar(ProjectMirror& projectMirror, TimelineViewState& view
     addAndMakeVisible(position);
 
     bpmLabel.setFont(uiFont(11.0f));
-    bpmLabel.setColour(juce::Label::textColourId, colours::textFaint);
+    bpmLabel.setColour(juce::Label::textColourId, colours::textDim);
     addAndMakeVisible(bpmLabel);
     bpmValue.setFont(uiFont(14.0f, true));
     bpmValue.setColour(juce::Label::textColourId, currentTheme() == ThemeId::terminal ? colours::sky400 : colours::zinc100);
@@ -160,8 +160,8 @@ TransportBar::TransportBar(ProjectMirror& projectMirror, TimelineViewState& view
     mixerButton.setTooltip("Show the mixer (F9)");
     mixerButton.onClick = [this] { if (onToggleMixer) onToggleMixer(); };
     addAndMakeVisible(mixerButton);
-    masterLabel.setFont(uiFont(9.0f, true));
-    masterLabel.setColour(juce::Label::textColourId, colours::textFaint);
+    masterLabel.setFont(uiFont(11.0f, true));
+    masterLabel.setColour(juce::Label::textColourId, colours::textDim);
     masterLabel.setJustificationType(juce::Justification::centredRight);
     addAndMakeVisible(masterLabel);
     master.setRange(0.0, 1.0);
@@ -339,10 +339,10 @@ void TransportBar::paint(juce::Graphics& g)
     g.fillRect(clip.reduced(1, 2));
     area.removeFromRight(3);
     auto labels = area.removeFromLeft(10);
-    auto scale = area.removeFromBottom(9);
+    auto scale = area.removeFromBottom(10);
     drawWell(g, area.toFloat().expanded(1.0f));
     auto toX = [&area](float dbValue) { return area.getX() + (juce::jlimit(kFloorDb, 0.0f, dbValue) - kFloorDb) / -kFloorDb * area.getWidth(); };
-    g.setFont(uiFont(8.0f, true));
+    g.setFont(uiFont(9.5f, true));
     for (int ch = 0; ch < 2; ++ch)
     {
         const float peak = ch == 0 ? live.masterPeakL : live.masterPeakR;
@@ -367,12 +367,12 @@ void TransportBar::paint(juce::Graphics& g)
         }
     }
     g.setColour(colours::textFaint);
-    g.setFont(uiFont(7.5f));
+    g.setFont(uiFont(9.0f));
     for (const int mark : {-48, -24, -12, -6, 0})
     {
         const float x = toX(static_cast<float>(mark));
         g.drawVerticalLine(juce::roundToInt(x), static_cast<float>(scale.getY()), static_cast<float>(scale.getY() + 2));
-        g.drawText(juce::String(mark), juce::Rectangle<float>(x - 10.0f, static_cast<float>(scale.getY() + 1), 20.0f, 8.0f),
+        g.drawText(juce::String(mark), juce::Rectangle<float>(x - 12.0f, static_cast<float>(scale.getY() + 1), 24.0f, 9.0f),
                    juce::Justification::centred);
     }
 }

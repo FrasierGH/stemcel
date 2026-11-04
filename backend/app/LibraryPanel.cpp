@@ -204,9 +204,9 @@ bool isMinor(const juce::String& key)
 // A small rounded pill; returns its width.
 int pill(juce::Graphics& g, int right, int centreY, const juce::String& text, juce::Colour fill, juce::Colour border, juce::Colour ink)
 {
-    const auto font = uiFont(9.5f);
-    const int w = static_cast<int>(juce::GlyphArrangement::getStringWidth(font, text)) + 8;
-    const juce::Rectangle<float> r(static_cast<float>(right - w), static_cast<float>(centreY - 7), static_cast<float>(w), 14.0f);
+    const auto font = uiFont(11.5f);
+    const int w = static_cast<int>(juce::GlyphArrangement::getStringWidth(font, text)) + 10;
+    const juce::Rectangle<float> r(static_cast<float>(right - w), static_cast<float>(centreY - 8), static_cast<float>(w), 16.0f);
     g.setColour(fill);
     g.fillRoundedRectangle(r, 3.0f);
     g.setColour(border);
@@ -221,14 +221,15 @@ int keyPill(juce::Graphics& g, int right, int centreY, const juce::String& key)
 {
     const auto hue = keyHue(key);
     const bool minor = isMinor(key);
-    return pill(g, right, centreY, key, minor ? hue.darker(1.8f).withAlpha(0.7f) : hue.darker(0.6f).withAlpha(0.4f),
-                minor ? hue.darker(1.2f).withAlpha(0.7f) : hue.withAlpha(0.6f), minor ? hue.brighter(0.3f) : hue.brighter(1.2f));
+    return pill(g, right, centreY, key, minor ? hue.darker(1.6f).withAlpha(0.9f) : hue.darker(0.9f).withAlpha(0.75f),
+                hue.withAlpha(minor ? 0.65f : 0.8f), hue.interpolatedWith(juce::Colours::white, minor ? 0.55f : 0.7f));
 }
 
 int usePill(juce::Graphics& g, int right, int centreY, int uses)
 {
     return pill(g, right, centreY, juce::String(uses), uses > 0 ? colours::sky600.withAlpha(0.35f) : colours::zinc800,
-                uses > 0 ? colours::sky500.withAlpha(0.6f) : colours::zinc700, uses > 0 ? colours::sky400.brighter(0.6f) : colours::zinc400);
+                uses > 0 ? colours::sky500.withAlpha(0.7f) : colours::zinc600, uses > 0 ? colours::sky400.interpolatedWith(juce::Colours::white, 0.5f)
+                                                                                 : colours::zinc300);
 }
 } // namespace tiles
 
@@ -518,8 +519,8 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
         }
         if (!orphanHeader.isEmpty())
         {
-            g.setColour(colours::zinc500);
-            g.setFont(uiFont(10.0f));
+            g.setColour(colours::zinc400);
+            g.setFont(uiFont(11.0f));
             g.drawText("SAVED CLIPS (SOURCE MISSING)", orphanHeader.reduced(8, 0), juce::Justification::centredLeft, true);
         }
         for (const auto& hit : hits)
@@ -570,11 +571,11 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
             }
             // LibraryTypeBadge: what kind of audio this is.
             const auto badge = stem ? "STEM" : scratch ? "SCRATCH" : sample ? "SAMPLE" : "SOURCE";
-            const juce::Rectangle<float> b(static_cast<float>(art.getX() + 3), static_cast<float>(art.getBottom() - 15), 50.0f, 12.0f);
-            g.setColour(colours::zinc950.withAlpha(0.8f));
-            g.fillRoundedRectangle(b.withWidth(juce::GlyphArrangement::getStringWidth(uiFont(8.0f, true), badge) + 6.0f), 2.0f);
-            g.setColour(colours::zinc300);
-            g.setFont(uiFont(8.0f, true));
+            const juce::Rectangle<float> b(static_cast<float>(art.getX() + 3), static_cast<float>(art.getBottom() - 17), 60.0f, 14.0f);
+            g.setColour(colours::zinc950.withAlpha(0.85f));
+            g.fillRoundedRectangle(b.withWidth(juce::GlyphArrangement::getStringWidth(uiFont(10.0f, true), badge) + 6.0f), 2.0f);
+            g.setColour(colours::zinc200);
+            g.setFont(uiFont(10.0f, true));
             g.drawText(badge, b.translated(3.0f, 0.0f), juce::Justification::centredLeft, false);
             g.setColour(colours::zinc800);
             g.drawVerticalLine(art.getRight(), static_cast<float>(art.getY()), static_cast<float>(art.getBottom()));
@@ -589,11 +590,11 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
             g.setFont(uiFont(11.0f));
             g.drawText(artist, text.removeFromTop(14), juce::Justification::centredLeft, true);
         }
-        g.setColour(colours::zinc500);
-        g.setFont(uiFont(10.0f));
-        g.drawText(formatDuration(item.durationMs), text.removeFromTop(13), juce::Justification::centredLeft, true);
+        g.setColour(colours::zinc400);
+        g.setFont(uiFont(11.0f));
+        g.drawText(formatDuration(item.durationMs), text.removeFromTop(14), juce::Justification::centredLeft, true);
         // Pills, right to left: use count, BPM, key (or Simple for a one-shot).
-        const int cy = r.getBottom() - 12;
+        const int cy = r.getBottom() - 13;
         int right = r.getRight() - 6;
         right -= tiles::usePill(g, right, cy, uses[item.id]) + 4;
         const auto type = item.raw.getProperty("audioType", {}).toString();
@@ -627,7 +628,7 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
         else arrow.addTriangle(ax - 2.0f, ay - 4.0f, ax - 2.0f, ay + 4.0f, ax + 3.0f, ay);
         g.setColour(colours::zinc400);
         g.fillPath(arrow);
-        g.setFont(uiFont(10.5f));
+        g.setFont(uiFont(11.5f));
         g.drawText(juce::String(count) + (count == 1 ? " saved clip" : " saved clips"), r.withTrimmedLeft(22), juce::Justification::centredLeft, false);
     }
 
@@ -652,12 +653,12 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
         if (item.key.isNotEmpty()) right -= tiles::keyPill(g, right, cy, item.key) + 4;
         const int textWidth = juce::jmax(20, right - (r.getX() + 16) - 2);
         g.setColour(colours::zinc100);
-        g.setFont(uiFont(11.0f, true));
-        g.drawText(displayTitle(item), r.getX() + 16, r.getY() + 5, textWidth, 14, juce::Justification::centredLeft, true);
-        g.setColour(colours::zinc500);
-        g.setFont(uiFont(10.0f));
+        g.setFont(uiFont(12.0f, true));
+        g.drawText(displayTitle(item), r.getX() + 16, r.getY() + 4, textWidth, 16, juce::Justification::centredLeft, true);
+        g.setColour(colours::zinc400);
+        g.setFont(uiFont(11.0f));
         const double duration = static_cast<double>(item.raw.getProperty("sourceDurationMs", item.durationMs));
-        g.drawText(formatDuration(duration), r.getX() + 16, r.getY() + 21, textWidth, 13, juce::Justification::centredLeft, true);
+        g.drawText(formatDuration(duration), r.getX() + 16, r.getY() + 20, textWidth, 14, juce::Justification::centredLeft, true);
     }
 
     const Hit* hitAt(juce::Point<int> p) const

@@ -43,7 +43,7 @@ class TransitionsPanel::Column final : public juce::Component, private juce::Lis
             g.setColour(colours::zinc900);
             g.fillRect(0, 0, width, height);
             g.setColour(colour);
-            g.setFont(uiFont(10.0f, true));
+            g.setFont(uiFont(11.0f, true));
             g.drawText(row.heading, 8, height / 2 - 2, width - 16, height / 2, juce::Justification::centredLeft);
             return;
         }
@@ -58,7 +58,7 @@ class TransitionsPanel::Column final : public juce::Component, private juce::Lis
         g.setFont(uiFont(12.0f, true));
         g.drawText(row.name, 10, 2, width - 14, height / 2, juce::Justification::centredLeft, true);
         g.setColour(colours::textDim);
-        g.setFont(uiFont(10.5f));
+        g.setFont(uiFont(11.5f));
         g.drawText(row.description, 10, height / 2, width - 14, height / 2 - 2, juce::Justification::centredLeft, true);
     }
 

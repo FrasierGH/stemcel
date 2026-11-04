@@ -378,7 +378,7 @@ void TempoReport::paint(juce::Graphics& g)
     if (durationMs <= 0.0) return;
 
     // Minutes along the bottom.
-    g.setFont(uiFont(10.0f));
+    g.setFont(uiFont(11.0f));
     const double step = durationMs > 600000.0 ? 120000.0 : durationMs > 120000.0 ? 30000.0 : 10000.0;
     for (double ms = 0.0; ms <= durationMs; ms += step)
     {

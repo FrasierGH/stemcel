@@ -109,7 +109,7 @@ void drawBadge(juce::Graphics& g, Badge b, juce::Rectangle<float> r, float alpha
     if (st.text != nullptr)
     {
         g.setColour(juce::Colour(st.textColour).withAlpha(alpha));
-        g.setFont(uiFont(9.0f, true));
+        g.setFont(uiFont(10.0f, true));
         g.drawText(st.text, r, juce::Justification::centred, false);
         return;
     }
@@ -659,13 +659,13 @@ void TimelineView::paintClipSections(juce::Graphics& g, const ClipModel& clip, j
     if (item == nullptr || body.getHeight() < 30.0f) return;
     const auto list = sections::of(*item);
     if (list.empty()) return;
-    const auto strip = body.withHeight(13.0f);
+    const auto strip = body.withHeight(15.0f);
     const double ratio = clip.effectiveTempoRatio > 0.0 ? clip.effectiveTempoRatio : 1.0;
     auto toX = [&](double sourceSec)
     { return static_cast<float>(view.msToX(clip.offsetMs + (sourceSec * 1000.0 - clip.inMs) / ratio)); };
     g.saveState();
     g.reduceClipRegion(strip.toNearestInt());
-    g.setFont(uiFont(9.0f, true));
+    g.setFont(uiFont(10.5f, true));
     for (const auto& s : list)
     {
         const float x0 = juce::jmax(strip.getX(), toX(s.startSec));
@@ -996,7 +996,7 @@ void TimelineView::paintMixTransitions(juce::Graphics& g)
         g.setColour(violet.withAlpha(0.95f));
         g.fillRoundedRectangle(shape->pill, 4.0f);
         g.setColour(colours::zinc100);
-        g.setFont(uiFont(10.0f, true));
+        g.setFont(uiFont(11.0f, true));
         g.drawText(juce::String(juce::CharPointer_UTF8("\xe2\x87\x84 ")) + mix::labelOf(t), shape->pill.reduced(5.0f, 0.0f).toNearestInt(),
                    juce::Justification::centred, true);
     }
@@ -1215,7 +1215,7 @@ void TimelineView::paintTempoLane(juce::Graphics& g)
     const auto points = shownTempoMap();
     const auto range = tempoRange(points);
     // Guide lines every 10 BPM, labelled at the left.
-    g.setFont(uiFont(9.0f));
+    g.setFont(uiFont(10.0f));
     for (double bpm = range.first; bpm <= range.second + 0.01; bpm += 10.0)
     {
         const float y = tempoToY(bpm, range);

@@ -47,7 +47,7 @@ class MixerPanel::Strip final : public juce::Component
             readout.setText(db::format(db::linearToDb(gain)), juce::dontSendNotification);
         };
         addAndMakeVisible(fader);
-        readout.setFont(uiFont(10.0f));
+        readout.setFont(uiFont(11.0f));
         readout.setJustificationType(juce::Justification::centred);
         readout.setColour(juce::Label::textColourId, colours::textDim);
         addAndMakeVisible(readout);
@@ -136,7 +136,7 @@ class MixerPanel::Strip final : public juce::Component
         g.fillRect(getLocalBounds().withTrimmedTop(3).withHeight(25));
 
         // Insert slots, in one well.
-        g.setFont(uiFont(10.0f));
+        g.setFont(uiFont(11.0f));
         drawWell(g, insertRow(0).getUnion(insertRow(kInsertRows - 1)).toFloat().expanded(1.0f));
         for (int i = 0; i < kInsertRows; ++i)
         {

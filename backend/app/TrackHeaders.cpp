@@ -53,8 +53,8 @@ TrackHeaderRow::TrackHeaderRow(TimelineActions& timelineActions, TimelineViewSta
     automationButton.onClick = [this] { actions.toggleAutomation(trackId); };
     for (auto* l : {&gainCaption, &panCaption})
     {
-        l->setFont(uiFont(10.0f));
-        l->setColour(juce::Label::textColourId, colours::textFaint);
+        l->setFont(uiFont(11.0f));
+        l->setColour(juce::Label::textColourId, colours::textDim);
         l->setJustificationType(juce::Justification::centredLeft);
         l->setInterceptsMouseClicks(false, false);
         addAndMakeVisible(l);
@@ -648,8 +648,8 @@ void TrackHeaders::paintHeader(juce::Graphics& g)
         g.setColour(colours::zinc400);
         g.setFont(uiFont(11.0f, true));
         g.drawText("TEMPO", text.removeFromTop(16), juce::Justification::centredLeft);
-        g.setColour(colours::textFaint);
-        g.setFont(uiFont(10.0f));
+        g.setColour(colours::textDim);
+        g.setFont(uiFont(11.0f));
         g.drawText("BPM map", text.removeFromTop(14), juce::Justification::centredLeft);
     }
 }

@@ -340,9 +340,10 @@ juce::Font uiFont(float height, bool bold)
     if (fusion())
         return juce::Font(juce::FontOptions(systemInterfaceFamily(), height, bold ? juce::Font::bold : juce::Font::plain));
     // A monospace face runs wider than the sans the layouts were drawn for: a touch smaller
-    // keeps every label in its box.
-    constexpr float kMonoScale = 0.9f;
-    return juce::Font(juce::FontOptions(interfaceTypeface(bold)).withHeight(height * kMonoScale));
+    // keeps every label in its box. Small text is left at its size (shrunk, it stops being
+    // readable on a 1080p screen), easing in from 11 to 13.
+    const float scale = juce::jmap(juce::jlimit(11.0f, 13.0f, height), 11.0f, 13.0f, 1.0f, 0.9f);
+    return juce::Font(juce::FontOptions(interfaceTypeface(bold)).withHeight(height * scale));
 }
 
 StemcelLookAndFeel::StemcelLookAndFeel()

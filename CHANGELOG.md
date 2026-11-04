@@ -29,6 +29,7 @@
 - Space while dragging a clip is taken by the timeline itself, shows what it did on the clip, and a hold opens the placements menu from the key's release rather than the keyboard's state.
 - Dragging several selected library items onto the timeline: pressing one of them no longer selected it alone before the drag began, so only one came along.
 - After a Space tap during a clip drag, the clip no longer jumps back when the mouse moves.
+- Small text is easier to read on a 1080p screen: the library's key, BPM and use-count pills, durations and type badges, the track headers' Gain and Pan, the meter scales, clip badges and section names, and other small labels are larger, and the key pills have more contrast. The Terminal theme no longer shrinks its small text.
 
 ## 0.3.0
 
