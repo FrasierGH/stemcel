@@ -354,8 +354,8 @@ juce::String build(EngineClient& engine, ProjectMirror& mirror, TimelineActions&
                     // The tempo following the tracks: it ramps to the incoming one's over the join.
                     if (tempoFollows && item->bpm > 0.0)
                     {
+                        const double inBpm = item->bpm; // before the refresh, which rebuilds the model
                         mirror.refreshNow();
-                        const double inBpm = item->bpm;
                         if (const auto* out = mirror.model().findClip(previousClip))
                             mix::rampTempoTo(engine, actions, mirror.model(), *out, inBpm, windowStart, windowEnd);
                         mirror.refreshNow();
