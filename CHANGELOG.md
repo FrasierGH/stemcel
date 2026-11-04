@@ -20,6 +20,7 @@
   - The library has proper tabs and cards.
   - Lit buttons glow rather than flood with colour in Terminal.
   - Terminal has its own sliders, dials, tick boxes, scroll bars and inverse-video menus, where it used JUCE's stock ones.
+  - Fusion's widgets are drawn to Qt's own Fusion rules, with the exact shades for this palette: lighter gradient buttons with an inner light rim, toggled buttons drawn sunken, 7 px slider grooves with button-shaded handles, Qt's tabs, check boxes, scroll bars, progress bars, line-edit frames and menu frames.
 
 ### Fixed
 

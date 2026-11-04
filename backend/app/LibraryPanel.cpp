@@ -1419,6 +1419,7 @@ void LibraryPanel::showTab(int index)
         tabs[i]->setToggleState(i == activeTab, juce::dontSendNotification);
     }
     importButton.setVisible(activeTab <= 2);
+    repaint(); // the line under the tabs opens under the front one
     ctx.prefs.set("ui", "nativeLibraryTab", index);
     ctx.prefs.save();
 }
@@ -1468,8 +1469,20 @@ void LibraryPanel::paint(juce::Graphics& g)
     // The tabs stand on a line that runs under them to the panel's edge.
     if (!tabs.isEmpty())
     {
-        g.setColour(currentTheme() == ThemeId::fusionDark ? colours::rule : colours::zinc700);
-        g.drawHorizontalLine(tabs[0]->getBottom() - 1, 1.0f, static_cast<float>(getWidth() - 1));
+        const float y = static_cast<float>(tabs[0]->getBottom() - 1);
+        if (currentTheme() == ThemeId::fusionDark && activeTab >= 0 && activeTab < tabs.size())
+        {
+            // Fusion: the line stops under the front tab, which opens into the pane.
+            const auto front = tabs[activeTab]->getBounds();
+            g.setColour(colours::rule);
+            g.drawHorizontalLine(juce::roundToInt(y), 1.0f, static_cast<float>(front.getX() + 1));
+            g.drawHorizontalLine(juce::roundToInt(y), static_cast<float>(front.getRight() - 1), static_cast<float>(getWidth() - 1));
+        }
+        else
+        {
+            g.setColour(colours::zinc700);
+            g.drawHorizontalLine(juce::roundToInt(y), 1.0f, static_cast<float>(getWidth() - 1));
+        }
     }
     g.setColour(dragOver ? colours::accent : colours::border);
     g.drawRect(getLocalBounds(), dragOver ? 2 : 1);

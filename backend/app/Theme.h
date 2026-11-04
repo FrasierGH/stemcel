@@ -145,6 +145,9 @@ class StemcelLookAndFeel final : public juce::LookAndFeel_V4
     void drawProgressBar(juce::Graphics&, juce::ProgressBar&, int width, int height, double progress,
                          const juce::String& textToShow) override;
     void drawPopupMenuBackground(juce::Graphics&, int width, int height) override;
+    void drawPopupMenuItem(juce::Graphics&, const juce::Rectangle<int>& area, bool isSeparator, bool isActive, bool isHighlighted,
+                           bool isTicked, bool hasSubMenu, const juce::String& text, const juce::String& shortcutKeyText,
+                           const juce::Drawable* icon, const juce::Colour* textColour) override;
 
     // The widget colours for the current theme (applyTheme first). The constructor calls it.
     void applyColours();
