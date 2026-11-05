@@ -44,7 +44,8 @@ MixdownSnapshot snapshotProjectForMixdown(const ProjectState& project,
                                           double brakeCurve,
                                           double backspinSeconds,
                                           double backspinSpeed,
-                                          double backspinCurve)
+                                          double backspinCurve,
+                                          const juce::String& onlyTrackId)
 {
     MixdownSnapshot snapshot;
     const int explicitRate = project.getTargetSampleRate();
@@ -97,7 +98,11 @@ MixdownSnapshot snapshotProjectForMixdown(const ProjectState& project,
         if (!trackTree.hasType(kTrack)) continue;
         MixdownSnapshot::TrackSnapshot track;
         track.id = trackTree.getProperty(kId).toString();
-        const float rawEffectiveGain = project.getEffectiveTrackGain(track.id);
+        if (onlyTrackId.isNotEmpty() && track.id != onlyTrackId) continue;
+        // A stem plays at its own level even when muted, or when another track is soloed.
+        const float rawEffectiveGain = onlyTrackId.isNotEmpty()
+                                           ? static_cast<float>(static_cast<double>(trackTree.getProperty(kGain, 1.0)))
+                                           : project.getEffectiveTrackGain(track.id);
         track.gain = juce::jlimit(kMinTrackGain, kMaxTrackGain, rawEffectiveGain);
 
         // Snapshot live per-track parameters so offline render stays in parity with playback.

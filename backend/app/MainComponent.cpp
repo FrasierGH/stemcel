@@ -157,7 +157,9 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& ids)
                   CommandIds::exportMixdown, CommandIds::projectProperties, CommandIds::recordAudio,
                   CommandIds::importFromProject, CommandIds::cutClips, CommandIds::copyClips, CommandIds::pasteClips,
                   CommandIds::toggleMixer, CommandIds::selectAllClips, CommandIds::joinClips, CommandIds::toggleAutomation,
-                  CommandIds::toggleLoop, CommandIds::toggleMetronome, CommandIds::toggleSnap, CommandIds::openClipEditor});
+                  CommandIds::toggleLoop, CommandIds::toggleMetronome, CommandIds::toggleSnap, CommandIds::openClipEditor,
+                  CommandIds::zoomToSelection, CommandIds::nudgeLeft, CommandIds::nudgeRight, CommandIds::rippleDelete,
+                  CommandIds::insertTime, CommandIds::duplicateTrack});
 }
 
 void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandInfo& info)
@@ -317,6 +319,37 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
         info.addDefaultKeypress('a', cmd);
         info.setActive(open);
         break;
+    case CommandIds::zoomToSelection:
+        info.setInfo("Zoom to Selection\tZ", "Fit the selected range, or the selected clips, in view", "View", 0);
+        info.setActive(open && workspace != nullptr && (workspace->hasClipSelection() || workspace->hasRangeSelection()));
+        break;
+    case CommandIds::nudgeLeft:
+        info.setInfo("Nudge Left\tShift+Left", "Move the selected clips a grid step earlier (with Alt, 10 ms)", "Edit", 0);
+        info.setActive(open && workspace != nullptr && workspace->hasClipSelection());
+        break;
+    case CommandIds::nudgeRight:
+        info.setInfo("Nudge Right\tShift+Right", "Move the selected clips a grid step later (with Alt, 10 ms)", "Edit", 0);
+        info.setActive(open && workspace != nullptr && workspace->hasClipSelection());
+        break;
+    case CommandIds::rippleDelete:
+        info.setInfo("Ripple Delete\tShift+Del",
+                     "Delete the selected clips and close the gap on their tracks; with no clips selected, delete the "
+                     "selected time from every track",
+                     "Edit", 0);
+        info.setActive(open && workspace != nullptr && (workspace->hasClipSelection() || workspace->hasRangeSelection()));
+        break;
+    case CommandIds::insertTime:
+        info.setInfo("Insert Time", "Open a gap the length of the selected range at its start (else a bar at the playhead), "
+                                    "moving everything after it later",
+                     "Edit", 0);
+        info.addDefaultKeypress('i', cmd | juce::ModifierKeys::shiftModifier);
+        info.setActive(open);
+        break;
+    case CommandIds::duplicateTrack:
+        info.setInfo("Duplicate Track", "Copy the selected track with its clips, plugins and automation", "Track", 0);
+        info.addDefaultKeypress('d', cmd | juce::ModifierKeys::shiftModifier);
+        info.setActive(open);
+        break;
     case CommandIds::joinClips:
         info.setInfo("Join Clips", "Join selected clips split from one another", "Edit", 0);
         info.addDefaultKeypress('j', cmd);
@@ -396,6 +429,12 @@ bool MainComponent::perform(const InvocationInfo& info)
     case CommandIds::toggleMixer: if (workspace != nullptr) workspace->toggleMixer(); return true;
     case CommandIds::selectAllClips: if (workspace != nullptr) workspace->selectAllClips(); return true;
     case CommandIds::joinClips: if (workspace != nullptr) workspace->joinSelection(); return true;
+    case CommandIds::zoomToSelection: if (workspace != nullptr) workspace->zoomToSelection(); return true;
+    case CommandIds::nudgeLeft: if (workspace != nullptr) workspace->nudgeSelection(-1); return true;
+    case CommandIds::nudgeRight: if (workspace != nullptr) workspace->nudgeSelection(1); return true;
+    case CommandIds::rippleDelete: if (workspace != nullptr) workspace->rippleDelete(); return true;
+    case CommandIds::insertTime: if (workspace != nullptr) workspace->insertTime(); return true;
+    case CommandIds::duplicateTrack: if (workspace != nullptr) workspace->duplicateSelectedTrack(); return true;
     case CommandIds::toggleAutomation: if (workspace != nullptr) workspace->toggleAutomationOnSelectedTrack(); return true;
     case CommandIds::toggleLoop: if (workspace != nullptr) workspace->toggleLoop(); return true;
     case CommandIds::toggleMetronome: if (workspace != nullptr) workspace->toggleMetronome(); return true;
@@ -471,6 +510,10 @@ juce::PopupMenu MainComponent::getMenuForIndex(int topLevelMenuIndex, const juce
         menu.addCommandItem(&commandManager, CommandIds::joinClips);
         menu.addCommandItem(&commandManager, CommandIds::duplicateClip);
         menu.addCommandItem(&commandManager, CommandIds::deleteClip);
+        menu.addCommandItem(&commandManager, CommandIds::rippleDelete);
+        menu.addCommandItem(&commandManager, CommandIds::insertTime);
+        menu.addCommandItem(&commandManager, CommandIds::nudgeLeft);
+        menu.addCommandItem(&commandManager, CommandIds::nudgeRight);
         menu.addCommandItem(&commandManager, CommandIds::toggleLock);
         menu.addCommandItem(&commandManager, CommandIds::openClipEditor);
         menu.addSeparator();
@@ -481,6 +524,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int topLevelMenuIndex, const juce
         menu.addCommandItem(&commandManager, CommandIds::zoomIn);
         menu.addCommandItem(&commandManager, CommandIds::zoomOut);
         menu.addCommandItem(&commandManager, CommandIds::zoomFit);
+        menu.addCommandItem(&commandManager, CommandIds::zoomToSelection);
         menu.addSeparator();
         menu.addCommandItem(&commandManager, CommandIds::toggleSnap);
         menu.addCommandItem(&commandManager, CommandIds::toggleLoop);
@@ -495,6 +539,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int topLevelMenuIndex, const juce
     else if (topLevelMenuIndex == 3)
     {
         menu.addCommandItem(&commandManager, CommandIds::addTrack);
+        menu.addCommandItem(&commandManager, CommandIds::duplicateTrack);
         menu.addCommandItem(&commandManager, CommandIds::recordAudio);
         menu.addCommandItem(&commandManager, CommandIds::toggleAutomation);
     }

@@ -56,6 +56,12 @@ enum : juce::CommandID
     toggleMetronome,
     toggleSnap,
     openClipEditor,
+    zoomToSelection,
+    nudgeLeft,
+    nudgeRight,
+    rippleDelete,
+    insertTime,
+    duplicateTrack,
 };
 } // namespace CommandIds
 

@@ -190,6 +190,26 @@ ProjectState::ClipEdgeFade ProjectState::getClipEdgeFade(const juce::String& cli
             fade.fadeOutCurve = curve;
         }
     }
+    // The clip's own fades, on the edges no transition is fading.
+    const auto [userIn, userOut] = getClipFades(clipId);
+    double start = 0.0, end = 0.0;
+    if ((userIn > 0.0 || userOut > 0.0) && clipTimelineSpanMs(clipId, start, end) && end > start)
+    {
+        if (userIn > 0.0 && !fade.hasFadeIn)
+        {
+            fade.hasFadeIn = true;
+            fade.fadeInStartMs = start;
+            fade.fadeInEndMs = juce::jmin(end, start + userIn);
+            fade.fadeInCurve = EdgeFadeCurve::equalPower;
+        }
+        if (userOut > 0.0 && !fade.hasFadeOut)
+        {
+            fade.hasFadeOut = true;
+            fade.fadeOutStartMs = juce::jmax(start, end - userOut);
+            fade.fadeOutEndMs = end;
+            fade.fadeOutCurve = EdgeFadeCurve::equalPower;
+        }
+    }
     return fade;
 }
 

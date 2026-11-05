@@ -336,6 +336,10 @@ juce::var ProjectState::tracksAsJson() const
             }
             if (clip.hasProperty(kClipGainDb))
                 clipObj->setProperty("gainDb", static_cast<double>(clip.getProperty(kClipGainDb, 0.0)));
+            if (clip.hasProperty(kClipFadeInMs))
+                clipObj->setProperty("userFadeInMs", static_cast<double>(clip.getProperty(kClipFadeInMs, 0.0)));
+            if (clip.hasProperty(kClipFadeOutMs))
+                clipObj->setProperty("userFadeOutMs", static_cast<double>(clip.getProperty(kClipFadeOutMs, 0.0)));
             if (clip.hasProperty(kSourceTempo)) clipObj->setProperty("sourceTempo", clip.getProperty(kSourceTempo));
             // Resolve through the library item so missing sources surface as unresolved.
             const juce::String resolvedFilePath = getLibraryItemFilePath(libraryItemId);

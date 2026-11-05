@@ -88,6 +88,9 @@ class TimelineView final : public juce::Component,
     void mouseDrag(const juce::MouseEvent&) override;
     void mouseUp(const juce::MouseEvent&) override;
     void mouseMove(const juce::MouseEvent&) override;
+    void mouseExit(const juce::MouseEvent&) override;
+    // For tests: where a clip's fade handle sits (fadeIn true: its fade in), in timeline pixels.
+    juce::Point<int> fadeHandleForTest(const juce::String& clipId, bool fadeIn) const;
     void mouseDoubleClick(const juce::MouseEvent&) override;
     void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
     void mouseMagnify(const juce::MouseEvent&, float scaleFactor) override;
@@ -166,7 +169,9 @@ class TimelineView final : public juce::Component,
         transitionMove,  // a transition's label, dragged: the window moves
         transitionStart, // a transition's left edge
         transitionEnd,   // its right edge
-        boxSelect        // dragged from empty space: a box selecting the clips it touches
+        boxSelect,       // dragged from empty space: a box selecting the clips it touches
+        fadeIn,          // a clip's fade-in handle (top left of its body)
+        fadeOut          // its fade-out handle (top right)
     };
 
     struct ClipHit
@@ -249,6 +254,13 @@ class TimelineView final : public juce::Component,
         int trackIndex = 0;
     };
     std::vector<GroupClip> dragGroup;
+    // A fade being dragged: the clip's fade lengths as they would be.
+    double fadeDragIn = 0.0, fadeDragOut = 0.0;
+    juce::String hoverClipId; // fade handles show on the clip under the pointer
+    // The clip's fades over its body (shaded above the curve), and their handles.
+    void paintFades(juce::Graphics& g, const ClipModel& clip, juce::Rectangle<float> bounds, double inMs, double outMs,
+                    bool handles) const;
+    juce::Rectangle<float> fadeHandle(const ClipModel& clip, juce::Rectangle<float> bounds, double ms, bool fadeIn) const;
     std::vector<juce::String> trackOrder() const;
     // How many tracks the group moves (the dragged clip's track change, kept on the tracks).
     int groupRowShift() const;

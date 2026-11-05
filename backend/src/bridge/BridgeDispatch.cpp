@@ -179,6 +179,10 @@ bool dispatchClip(const DispatchContext& ctx)
     {
         stemcel::handleClipSetGain(payload, engine, projectState, bridge);
     }
+    else if (type == "CLIP_SET_FADES")
+    {
+        stemcel::handleClipSetFades(payload, engine, projectState, bridge);
+    }
     else if (type == "CLIP_SET_ENVELOPE")
     {
         stemcel::log::debug("bridge", "recv CLIP_SET_ENVELOPE clipId=" +
@@ -490,6 +494,11 @@ bool dispatchTrack(const DispatchContext& ctx)
     {
         stemcel::log::info("bridge", "recv TRACK_ADD trackId=" + payload.getProperty("trackId", "").toString());
         stemcel::handleTrackAdd(payload, projectState, bridge);
+    }
+    else if (type == "TRACK_DUPLICATE")
+    {
+        stemcel::log::info("bridge", "recv TRACK_DUPLICATE trackId=" + payload.getProperty("trackId", "").toString());
+        stemcel::handleTrackDuplicate(payload, engine, projectState, bridge, ctx.peakPool, ctx.decodedCache, ctx.session);
     }
     else if (type == "TRACK_REMOVE")
     {

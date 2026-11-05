@@ -35,6 +35,9 @@ class TrackHeaderRow final : public juce::Component
     void paintMeter(juce::Graphics&);
 
     juce::String trackId;
+    // Dragged by its header (not a control): the pointer's y in the column, then let go.
+    std::function<void(int columnY)> onReorderDrag;
+    std::function<void(int columnY)> onReorderDrop;
 
   private:
     void showMenu();
@@ -58,6 +61,8 @@ class TrackHeaderRow final : public juce::Component
     int displayIndex = 0;
     int trackCount = 0;
     bool resizing = false;
+    bool reordering = false;
+    bool reorderArmed = false;
     int resizeStartHeight = 0;
     int resizingLane = -1; // the lane whose bottom edge is being dragged
     // The lane whose bottom edge is at `y`, or -1.
@@ -95,8 +100,15 @@ class TrackHeaders final : public juce::Component, private juce::ChangeListener,
     void paint(juce::Graphics&) override;
     void resized() override;
     void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
+    void paintOverChildren(juce::Graphics&) override;
+    // For tests: drags a track's header to land at `slot` (0 = above the first track).
+    void reorderForTest(const juce::String& trackId, int slot);
 
   private:
+    // The gap a dragged header would land in (0 = above the first track), and the move.
+    int reorderSlotAt(int columnY) const;
+    void reorderTo(const juce::String& trackId, int slot);
+    int reorderSlot = -1;
     void changeListenerCallback(juce::ChangeBroadcaster*) override;
     void timerCallback() override;
     void rebuild();

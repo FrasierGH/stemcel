@@ -35,6 +35,7 @@
 #include "Tracklist.h"
 #include "WaveformStore.h"
 #include "Workspace.h"
+#include "TimeEdit.h"
 #include "Autosave.h"
 #include "Log.h"
 
@@ -731,6 +732,37 @@ void SmokeTest::addSteps()
                          if (reader == nullptr || expectedMixSeconds <= 1.0) return false;
                          const double seconds = static_cast<double>(reader->lengthInSamples) / reader->sampleRate;
                          return seconds >= expectedMixSeconds - 0.01 && seconds < expectedMixSeconds + 0.5;
+                     }});
+
+    // A stem: one track rendered alone, even with another soloed.
+    steps.push_back({"export a stem",
+                     [this]
+                     {
+                         mirror.refreshNow();
+                         featTrack.clear();
+                         for (const auto& t : model().tracks)
+                             if (!t.clips.empty() && featTrack.isEmpty()) featTrack = t.id;
+                         engine.send("MIXDOWN_START", object({{"outputPath", workDir.getChildFile("stem.wav").getFullPathName()},
+                                                              {"format", "wav"},
+                                                              {"sampleRate", 44100},
+                                                              {"bitDepth", 24},
+                                                              {"onlyTrackId", featTrack},
+                                                              {"lengthMode", "trim-to-last-clip"}}));
+                     },
+                     "MIXDOWN_DONE",
+                     [this](const juce::var&)
+                     {
+                         juce::AudioFormatManager formats;
+                         formats.registerBasicFormats();
+                         std::unique_ptr<juce::AudioFormatReader> reader(formats.createReaderFor(workDir.getChildFile("stem.wav")));
+                         if (reader == nullptr) return false;
+                         const auto n = static_cast<int>(juce::jmin<juce::int64>(reader->lengthInSamples, 44100 * 30));
+                         juce::AudioBuffer<float> audio(static_cast<int>(reader->numChannels), n);
+                         reader->read(&audio, 0, n, 0, true, true);
+                         const float peak = audio.getMagnitude(0, n);
+                         report.add("export a stem: track " + featTrack + ", " + juce::String(reader->lengthInSamples / reader->sampleRate, 1)
+                                    + " s, peak " + juce::String(peak, 3));
+                         return peak > 0.0001f;
                      }});
 
     // Half a second of silence before the first sample, and the tracklist's times after it.
@@ -3444,6 +3476,262 @@ void SmokeTest::addTempoJourney()
                      }});
     steps.back().poll = true;
     steps.back().timeoutMs = 20000.0;
+    // A clip's fade-in handle dragged in: the clip has a fade in; splitting it keeps the fade on
+    // the left half only.
+    steps.push_back({"clip fade handle",
+                     [this]
+                     {
+                         mirror.refreshNow();
+                         featA.clear();
+                         for (const auto& t : model().tracks)
+                             for (const auto& c : t.clips)
+                                 if (!c.locked && featA.isEmpty() && c.effectiveDurationMs > 4000.0) featA = c.id;
+                         featPhase = 0;
+                         featWaits = 0;
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
+                         auto* timeline = window != nullptr ? findDescendant<TimelineView>(window) : nullptr;
+                         auto* workspace = window != nullptr ? findDescendant<Workspace>(window) : nullptr;
+                         if (timeline == nullptr || workspace == nullptr || featA.isEmpty()) return false;
+                         mirror.refreshNow();
+                         const auto* c = model().findClip(featA);
+                         if (c == nullptr) return false;
+                         if (featPhase == 0)
+                         {
+                             timeline->revealRange(c->offsetMs, c->endMs(), c->trackId);
+                             featPhase = 1;
+                             return false;
+                         }
+                         if (featPhase == 1)
+                         {
+                             const auto handle = timeline->fadeHandleForTest(featA, true);
+                             timeline->pressForTest(handle);
+                             timeline->dragForTest(handle.translated(30, 0));
+                             timeline->dragForTest(handle.translated(80, 0));
+                             timeline->releaseForTest(handle.translated(80, 0));
+                             featPhase = 2;
+                             return false;
+                         }
+                         if (featPhase == 2)
+                         {
+                             if (c->fadeInMs <= 0.0 && ++featWaits < 20) return false;
+                             featX = c->fadeInMs;
+                             featB = actions.splitClipAt(featA, c->offsetMs + (c->endMs() - c->offsetMs) / 2.0);
+                             featPhase = 3;
+                             featWaits = 0;
+                             return false;
+                         }
+                         const auto* right = model().findClip(featB);
+                         if (right == nullptr && ++featWaits < 20) return false;
+                         const bool ok = featX > 1.0 && right != nullptr && std::abs(c->fadeInMs - featX) < 1.0 && right->fadeInMs == 0.0;
+                         report.add("clip fade handle: faded in " + juce::String(featX, 0) + " ms; after a split the left keeps "
+                                    + juce::String(c->fadeInMs, 0) + ", the right " + (right != nullptr ? juce::String(right->fadeInMs, 0) : juce::String("-")));
+                         engine.send("EDIT_UNDO");
+                         engine.send("EDIT_UNDO");
+                         return ok;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 20000.0;
+    // Duplicate Track, then the copy dragged above the original.
+    steps.push_back({"duplicate and reorder tracks",
+                     [this]
+                     {
+                         mirror.refreshNow();
+                         featTrack.clear();
+                         for (const auto& t : model().tracks)
+                             if (!t.clips.empty() && featTrack.isEmpty()) featTrack = t.id;
+                         featCount = static_cast<int>(model().tracks.size());
+                         featPhase = 0;
+                         featWaits = 0;
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
+                         auto* workspace = window != nullptr ? findDescendant<Workspace>(window) : nullptr;
+                         auto* headers = window != nullptr ? findDescendant<TrackHeaders>(window) : nullptr;
+                         if (workspace == nullptr || headers == nullptr || featTrack.isEmpty()) return false;
+                         mirror.refreshNow();
+                         const auto indexOf = [this](const juce::String& id)
+                         {
+                             for (size_t i = 0; i < model().tracks.size(); ++i)
+                                 if (model().tracks[i].id == id) return static_cast<int>(i);
+                             return -1;
+                         };
+                         if (featPhase == 0)
+                         {
+                             workspace->viewState().selectedTrackId = featTrack;
+                             workspace->duplicateSelectedTrack();
+                             featB = workspace->viewState().selectedTrackId;
+                             featPhase = 1;
+                             return false;
+                         }
+                         const auto* original = model().findTrack(featTrack);
+                         const auto* copy = model().findTrack(featB);
+                         if (featPhase == 1)
+                         {
+                             if (copy == nullptr && ++featWaits < 40) return false;
+                             const bool copied = copy != nullptr && original != nullptr && copy->clips.size() == original->clips.size()
+                                                 && indexOf(featB) == indexOf(featTrack) + 1 && copy->name == original->name + " copy"
+                                                 && (copy->clips.empty() || copy->clips.front().id != original->clips.front().id);
+                             featX = copied ? 1.0 : 0.0;
+                             report.add("duplicate track: " + juce::String(copy != nullptr ? static_cast<int>(copy->clips.size()) : -1) + " clips, \""
+                                        + (copy != nullptr ? copy->name : juce::String()) + "\" at " + juce::String(indexOf(featB)));
+                             // Dragged to the gap above the original.
+                             headers->reorderForTest(featB, indexOf(featTrack));
+                             featPhase = 2;
+                             featWaits = 0;
+                             return false;
+                         }
+                         if (indexOf(featB) != indexOf(featTrack) - 1 && ++featWaits < 20) return false;
+                         const bool moved = indexOf(featB) == indexOf(featTrack) - 1;
+                         report.add(juce::String("reorder by drag: the copy is ") + (moved ? "above" : "not above") + " the original");
+                         actions.removeTrack(featB);
+                         return featX > 0.5 && moved;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 30000.0;
+    // Insert Time in the middle of a clip, then Delete Time over the same span: the later
+    // clips go 2 s right, then come back.
+    steps.push_back({"insert and delete time",
+                     [this]
+                     {
+                         mirror.refreshNow();
+                         featA.clear();
+                         featB.clear();
+                         // A clip to cut, and one starting after it (on any track) to watch.
+                         for (const auto& t : model().tracks)
+                             for (const auto& c : t.clips)
+                                 if (!c.locked && featA.isEmpty() && c.effectiveDurationMs > 4000.0) featA = c.id;
+                         if (const auto* a = model().findClip(featA))
+                         {
+                             featX = a->offsetMs + 1500.0;
+                             for (const auto& t : model().tracks)
+                                 for (const auto& c : t.clips)
+                                     if (c.offsetMs > featX + 10.0 && featB.isEmpty()) featB = c.id;
+                         }
+                         featCount = 0;
+                         for (const auto& t : model().tracks) featCount += static_cast<int>(t.clips.size());
+                         featPhase = 0;
+                         featWaits = 0;
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         mirror.refreshNow();
+                         const auto* watched = model().findClip(featB);
+                         if (featA.isEmpty() || watched == nullptr) return false;
+                         if (featPhase == 0)
+                         {
+                             featY = watched->offsetMs;
+                             if (!timeedit::insertTime(actions, mirror, featX, 2000.0)) return false;
+                             featPhase = 1;
+                             return false;
+                         }
+                         int clips = 0;
+                         for (const auto& t : model().tracks) clips += static_cast<int>(t.clips.size());
+                         if (featPhase == 1)
+                         {
+                             if (std::abs(watched->offsetMs - (featY + 2000.0)) > 1.0 && ++featWaits < 20) return false;
+                             const bool opened = std::abs(watched->offsetMs - (featY + 2000.0)) < 1.0 && clips > featCount;
+                             report.add("insert time: later clip " + juce::String(watched->offsetMs - featY, 1) + " ms later, "
+                                        + juce::String(clips - featCount) + " clip(s) cut");
+                             if (!opened) return false;
+                             timeedit::deleteTime(actions, mirror, featX, featX + 2000.0);
+                             featPhase = 2;
+                             featWaits = 0;
+                             return false;
+                         }
+                         if (std::abs(watched->offsetMs - featY) > 1.0 && ++featWaits < 20) return false;
+                         const bool closed = std::abs(watched->offsetMs - featY) < 1.0;
+                         report.add("delete time: later clip back " + juce::String(watched->offsetMs - featY, 1) + " ms from where it was");
+                         engine.send("EDIT_UNDO");
+                         engine.send("EDIT_UNDO");
+                         return closed;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 20000.0;
+    // Ripple delete: a track's first clip goes and the next comes left by its length.
+    steps.push_back({"ripple delete",
+                     [this]
+                     {
+                         mirror.refreshNow();
+                         featA.clear();
+                         featB.clear();
+                         for (const auto& t : model().tracks)
+                         {
+                             if (t.clips.size() < 2 || featA.isNotEmpty()) continue;
+                             auto sorted = t.clips;
+                             std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) { return a.offsetMs < b.offsetMs; });
+                             if (sorted[0].locked || sorted[1].offsetMs < sorted[0].endMs() - 0.5) continue;
+                             featA = sorted[0].id;
+                             featB = sorted[1].id;
+                             featX = sorted[0].endMs() - sorted[0].offsetMs;
+                             featY = sorted[1].offsetMs;
+                         }
+                         featPhase = 0;
+                         featWaits = 0;
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
+                         auto* workspace = window != nullptr ? findDescendant<Workspace>(window) : nullptr;
+                         if (workspace == nullptr) return false;
+                         if (featA.isEmpty())
+                         {
+                             report.add("ripple delete: no track with two clips in a row");
+                             return true;
+                         }
+                         mirror.refreshNow();
+                         if (featPhase == 0)
+                         {
+                             workspace->viewState().selectedClipIds = {featA};
+                             workspace->rippleDelete();
+                             featPhase = 1;
+                             return false;
+                         }
+                         const auto* next = model().findClip(featB);
+                         if (next == nullptr) return false;
+                         if (std::abs(next->offsetMs - (featY - featX)) > 1.0 && ++featWaits < 20) return false;
+                         const bool closed = model().findClip(featA) == nullptr && std::abs(next->offsetMs - (featY - featX)) < 1.0;
+                         report.add("ripple delete: the next clip moved " + juce::String(next->offsetMs - featY, 1) + " ms (the deleted clip was "
+                                    + juce::String(featX, 1) + " ms)");
+                         engine.send("EDIT_UNDO");
+                         return closed;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 20000.0;
+    // Zoom to Selection: a selected clip fills the view.
+    steps.push_back({"zoom to selection",
+                     [this]
+                     {
+                         mirror.refreshNow();
+                         featA.clear();
+                         for (const auto& t : model().tracks)
+                             if (!t.clips.empty() && featA.isEmpty()) featA = t.clips.front().id;
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
+                         auto* workspace = window != nullptr ? findDescendant<Workspace>(window) : nullptr;
+                         auto* timeline = window != nullptr ? findDescendant<TimelineView>(window) : nullptr;
+                         if (workspace == nullptr || timeline == nullptr || featA.isEmpty()) return false;
+                         workspace->viewState().selectedClipIds = {featA};
+                         workspace->zoomToSelection();
+                         const auto r = timeline->clipScreenBoundsForTest(featA);
+                         const bool fills = r.getWidth() > timeline->getWidth() / 2 && r.getX() >= -2 && r.getRight() <= timeline->getWidth() + 2;
+                         report.add("zoom to selection: the clip spans " + juce::String(r.getX()) + " to " + juce::String(r.getRight()) + " of "
+                                    + juce::String(timeline->getWidth()));
+                         workspace->viewState().selectedClipIds.clear();
+                         return fills;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 10000.0;
     // Two files dropped at once: the prompt, answered "as dropped", mixes them on two decks.
     steps.push_back({"auto mix on drop",
                      [this]

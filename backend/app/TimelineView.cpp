@@ -430,6 +430,20 @@ std::optional<TimelineView::ClipHit> TimelineView::clipAt(juce::Point<int> p) co
         const auto r = clipBounds(*it, row);
         if (!r.contains(p.toFloat())) continue; // lanes below the clips are not clip area
         ClipHit hit{&*it, r, DragKind::move};
+        if (!it->locked && r.getWidth() > kEdgeGrabPx * 5.0f)
+        {
+            // The fade handles, at the top corners of the body (or where each fade ends).
+            if (fadeHandle(*it, r, it->fadeInMs, true).expanded(3.0f).contains(p.toFloat()))
+            {
+                hit.edge = DragKind::fadeIn;
+                return hit;
+            }
+            if (fadeHandle(*it, r, it->fadeOutMs, false).expanded(3.0f).contains(p.toFloat()))
+            {
+                hit.edge = DragKind::fadeOut;
+                return hit;
+            }
+        }
         if (!it->locked && r.getWidth() > kEdgeGrabPx * 3.0f)
         {
             if (static_cast<float>(p.x) - r.getX() < kEdgeGrabPx) hit.edge = DragKind::trimStart;
@@ -826,11 +840,15 @@ void TimelineView::paint(juce::Graphics& g)
                 const bool dragging = drag != DragKind::none && drag != DragKind::seek && drag != DragKind::range
                                       && drag != DragKind::marker && drag != DragKind::pan && drag != DragKind::transitionMove
                                       && drag != DragKind::transitionStart && drag != DragKind::transitionEnd
-                                      && drag != DragKind::boxSelect
+                                      && drag != DragKind::boxSelect && drag != DragKind::fadeIn && drag != DragKind::fadeOut
                                       && (c.id == dragClipId
                                           || (drag == DragKind::move
                                               && std::any_of(dragGroup.begin(), dragGroup.end(), [&](const GroupClip& m) { return m.id == c.id; })));
                 paintClip(g, c, r, silenced, trackColor, dragging && !dragDuplicates ? 0.35f : 1.0f);
+                const bool fading = (drag == DragKind::fadeIn || drag == DragKind::fadeOut) && c.id == dragClipId;
+                const double in = fading ? fadeDragIn : c.fadeInMs;
+                const double out = fading ? fadeDragOut : c.fadeOutMs;
+                paintFades(g, c, r, in, out, !c.locked && (fading || (drag == DragKind::none && c.id == hoverClipId)));
             }
 
             // Crossfades: the overlap between each transition's two clips.
@@ -1503,6 +1521,8 @@ void TimelineView::mouseDown(const juce::MouseEvent& e)
         }
         if (clip.locked && !(e.mods.isAltDown() && hit->edge == DragKind::move)) return;
         drag = hit->edge;
+        fadeDragIn = clip.fadeInMs;
+        fadeDragOut = clip.fadeOutMs;
         // Alt/Option-drag copies the clip (Logic, Ableton); a locked clip can still be copied.
         dragDuplicates = drag == DragKind::move && e.mods.isAltDown();
         dragClipId = clip.id;
@@ -1649,6 +1669,18 @@ void TimelineView::mouseDrag(const juce::MouseEvent& e)
 
     switch (drag)
     {
+    case DragKind::fadeIn:
+    case DragKind::fadeOut:
+    {
+        const auto* clip = model().findClip(dragClipId);
+        if (clip == nullptr) return;
+        const double length = clip->endMs() - clip->offsetMs;
+        const double raw = juce::jmax(0.0, view.xToMs(e.x));
+        if (drag == DragKind::fadeIn) fadeDragIn = juce::jlimit(0.0, juce::jmax(0.0, length - fadeDragOut), raw - clip->offsetMs);
+        else fadeDragOut = juce::jlimit(0.0, juce::jmax(0.0, length - fadeDragIn), clip->endMs() - raw);
+        repaint();
+        return;
+    }
     case DragKind::boxSelect:
     {
         if (e.getDistanceFromDragStart() <= kDragThresholdPx && !boxPreview.has_value()) return;
@@ -2218,6 +2250,12 @@ void TimelineView::mouseUp(const juce::MouseEvent& e)
     const bool moved = e.getDistanceFromDragStart() > kDragThresholdPx;
     switch (kind)
     {
+    case DragKind::fadeIn:
+    case DragKind::fadeOut:
+        if (const auto* clip = model().findClip(dragClipId);
+            clip != nullptr && (std::abs(clip->fadeInMs - fadeDragIn) >= 0.5 || std::abs(clip->fadeOutMs - fadeDragOut) >= 0.5))
+            actions.setClipFades(dragClipId, fadeDragIn, fadeDragOut);
+        break;
     case DragKind::boxSelect:
         boxPreview.reset();
         break;
@@ -2301,10 +2339,91 @@ void TimelineView::mouseMove(const juce::MouseEvent& e)
         return;
     }
     const auto hit = clipAt(e.getPosition());
-    if (hit && (hit->edge == DragKind::trimStart || hit->edge == DragKind::trimEnd))
+    if (const auto over = hit ? hit->clip->id : juce::String(); over != hoverClipId)
+    {
+        hoverClipId = over;
+        repaint();
+    }
+    if (hit && (hit->edge == DragKind::trimStart || hit->edge == DragKind::trimEnd || hit->edge == DragKind::fadeIn
+                || hit->edge == DragKind::fadeOut))
         setMouseCursor(juce::MouseCursor::LeftRightResizeCursor);
     else
         setMouseCursor(hit ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::NormalCursor);
+}
+
+void TimelineView::mouseExit(const juce::MouseEvent&)
+{
+    if (hoverClipId.isNotEmpty())
+    {
+        hoverClipId.clear();
+        repaint();
+    }
+}
+
+juce::Rectangle<float> TimelineView::fadeHandle(const ClipModel& clip, juce::Rectangle<float> bounds, double ms, bool fadeIn) const
+{
+    juce::ignoreUnused(clip);
+    constexpr float kSize = 8.0f;
+    const auto body = bounds.withTrimmedTop(kClipHeaderPx);
+    const float px = static_cast<float>(ms * view.pxPerSecond / 1000.0);
+    const float x = fadeIn ? juce::jmin(body.getRight() - kSize, body.getX() + px)
+                           : juce::jmax(body.getX(), body.getRight() - px - kSize);
+    return {fadeIn ? x : x, body.getY() + 1.0f, kSize, kSize};
+}
+
+void TimelineView::paintFades(juce::Graphics& g, const ClipModel& clip, juce::Rectangle<float> bounds, double inMs, double outMs,
+                              bool handles) const
+{
+    const auto body = bounds.withTrimmedTop(kClipHeaderPx);
+    if (body.getHeight() < 6.0f) return;
+    const auto pxPerMs = static_cast<float>(view.pxPerSecond / 1000.0);
+    // Equal power, as the engine plays it: sin up, cos down. The part above the curve is shaded.
+    const auto fade = [&](bool in, double ms)
+    {
+        const float width = juce::jmin(body.getWidth(), static_cast<float>(ms) * pxPerMs);
+        if (width < 1.0f) return;
+        juce::Path line, shade;
+        constexpr int kSteps = 24;
+        for (int i = 0; i <= kSteps; ++i)
+        {
+            const float t = static_cast<float>(i) / kSteps;
+            const float gain = in ? std::sin(t * juce::MathConstants<float>::halfPi) : std::cos(t * juce::MathConstants<float>::halfPi);
+            const float x = (in ? body.getX() : body.getRight() - width) + t * width;
+            const float y = body.getBottom() - gain * body.getHeight();
+            if (i == 0) line.startNewSubPath(x, y);
+            else line.lineTo(x, y);
+        }
+        shade = line;
+        const float x0 = in ? body.getX() : body.getRight() - width;
+        shade.lineTo(in ? x0 + width : x0 + width, body.getY());
+        shade.lineTo(x0, body.getY());
+        shade.closeSubPath();
+        g.setColour(juce::Colours::black.withAlpha(0.38f));
+        g.fillPath(shade);
+        g.setColour(colours::text.withAlpha(0.85f));
+        g.strokePath(line, juce::PathStrokeType(1.3f));
+    };
+    fade(true, inMs);
+    fade(false, outMs);
+    if (!handles) return;
+    for (const bool in : {true, false})
+    {
+        const auto h = fadeHandle(clip, bounds, in ? inMs : outMs, in);
+        g.setColour(colours::text);
+        g.fillRect(h);
+        g.setColour(colours::zinc950);
+        g.drawRect(h, 1.0f);
+    }
+}
+
+juce::Point<int> TimelineView::fadeHandleForTest(const juce::String& clipId, bool fadeIn) const
+{
+    const auto* c = model().findClip(clipId);
+    if (c == nullptr) return {};
+    for (const auto& row : rows)
+        if (row.trackId == c->trackId)
+            return fadeHandle(*c, clipBounds(*c, row), fadeIn ? c->fadeInMs : c->fadeOutMs, fadeIn).getCentre().toInt();
+    return {};
 }
 
 void TimelineView::mouseDoubleClick(const juce::MouseEvent& e)
@@ -2748,6 +2867,8 @@ void TimelineView::showClipMenu(const juce::String& clipId, double atMs)
                  [this, clipId, atMs] { actions.splitClipAt(clipId, actions.snap(atMs)); });
     menu.addItem("Duplicate", [this, clipId] { actions.duplicateClip(clipId); });
     // Clicks on the clip add and drag gain points; double-click one to remove it.
+    if (clip->fadeInMs > 0.0 || clip->fadeOutMs > 0.0)
+        menu.addItem("Remove Fades", !clip->locked, false, [this, clipId] { actions.setClipFades(clipId, 0.0, 0.0); });
     menu.addItem("Edit Volume Envelope", !clip->locked, view.envelopeClipId == clipId,
                  [this, clipId]
                  {

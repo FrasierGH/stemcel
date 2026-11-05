@@ -94,7 +94,7 @@ void reconcileTransitionsAfterGeometryEdit(stemcel::AudioEngine& engine,
     const bool removedByHandler = projectState.countTransitions() < transitionsBefore;
     const bool hasTransitions = projectState.hasAnyTransition();
     // Nothing to reconcile and nothing already removed: keep a transition-free drag O(1).
-    if (!hasTransitions && !removedByHandler) return;
+    if (!hasTransitions && !removedByHandler && !projectState.hasAnyClipFade()) return;
 
     const bool removedHere = hasTransitions && projectState.reconcileTransitions(/*useUndo*/ true);
     stemcel::syncClipEdgeFades(engine, projectState);

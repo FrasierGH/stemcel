@@ -6,6 +6,8 @@
 #include "PayloadHelpers.h"
 #include "ProjectSettingsCommands.h"
 #include "ProjectState.h"
+#include "ProjectSession.h"
+#include "DecodedCache.h"
 
 namespace stemcel
 {
@@ -81,6 +83,27 @@ void handleTrackAdd(const juce::var& payload, stemcel::ProjectState& projectStat
     p->setProperty("trackId", trackId);
     p->setProperty("ok", ok);
     bridge.broadcast("TRACK_ADDED", juce::var(p));
+}
+
+void handleTrackDuplicate(const juce::var& payload, stemcel::AudioEngine& engine, stemcel::ProjectState& projectState,
+                          stemcel::BridgeServer& bridge, juce::ThreadPool& peakPool, const stemcel::DecodedCache& decodedCache,
+                          stemcel::ProjectSession& session)
+{
+    const juce::String trackId = tryGetRequiredString(payload, "trackId").value_or(juce::String{});
+    const juce::String newTrackId = tryGetRequiredString(payload, "newTrackId").value_or(juce::String{});
+    const juce::String name = payload.getProperty("name", {}).toString();
+    if (trackId.isEmpty() || newTrackId.isEmpty() || projectState.hasTrack(newTrackId)) return;
+    // The plugins' current sound goes into the copy, not what they sounded like when loaded.
+    stemcel::captureTrackPluginStates(engine, projectState);
+    const auto attached = projectState.getAllClipIds();
+    if (!projectState.duplicateTrack(trackId, newTrackId, name)) return;
+    // The new clips, plugins and automation reach the engine through a rebuild, as an undo does.
+    const double playheadMs = engine.getPositionMs();
+    engine.stop();
+    for (const auto& id : attached) engine.removeClip(id);
+    stemcel::rebuildEngineFromProject(engine, projectState, peakPool, decodedCache);
+    engine.setPositionMs(playheadMs);
+    bridge.broadcast("PROJECT_STATE", stemcel::buildProjectStateEnvelope(session, projectState, false));
 }
 
 void handleTrackRemove(const juce::var& payload, stemcel::AudioEngine& engine, stemcel::ProjectState& projectState,

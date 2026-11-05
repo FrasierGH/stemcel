@@ -173,6 +173,10 @@ class SmokeTest final : private juce::Timer
     double groupHomeA = 0.0, groupHomeB = 0.0;
     int groupPhase = 0, groupWaits = 0, groupBoxCount = 0;
     bool groupBoxBoth = false;
+    // Fades, track duplicate and reorder, time edits, ripple delete, zoom to selection, stems.
+    int featPhase = 0, featWaits = 0, featCount = 0;
+    juce::String featA, featB, featTrack;
+    double featX = 0.0, featY = 0.0;
     // The theme switched while running, and back.
     int themePhase = 0;
     ThemeId themeHome = ThemeId::terminal;

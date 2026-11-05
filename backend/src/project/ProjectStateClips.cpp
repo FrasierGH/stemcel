@@ -880,6 +880,51 @@ bool ProjectState::setClipGainDb(const juce::String& clipId, double gainDb)
     return true;
 }
 
+bool ProjectState::setClipFades(const juce::String& clipId, double fadeInMs, double fadeOutMs)
+{
+    auto clip = findClip(clipId);
+    if (!clip.isValid() || !std::isfinite(fadeInMs) || !std::isfinite(fadeOutMs)) return false;
+    double start = 0.0, end = 0.0;
+    const double length = clipTimelineSpanMs(clipId, start, end) ? juce::jmax(0.0, end - start) : 0.0;
+    // Whole milliseconds, each at most the clip, and the two together no longer than it.
+    double in = std::round(juce::jlimit(0.0, length, fadeInMs));
+    double out = std::round(juce::jlimit(0.0, length, fadeOutMs));
+    if (in + out > length) out = juce::jmax(0.0, length - in);
+    const auto [oldIn, oldOut] = getClipFades(clipId);
+    if (std::abs(in - oldIn) < 0.5 && std::abs(out - oldOut) < 0.5) return false;
+    const auto store = [&](const juce::Identifier& key, double ms)
+    {
+        if (ms < 0.5) clip.removeProperty(key, &undoManager);
+        else clip.setProperty(key, ms, &undoManager);
+    };
+    store(kClipFadeInMs, in);
+    store(kClipFadeOutMs, out);
+    return true;
+}
+
+std::pair<double, double> ProjectState::getClipFades(const juce::String& clipId) const
+{
+    const auto clip = findClip(clipId);
+    if (!clip.isValid()) return {0.0, 0.0};
+    return {juce::jmax(0.0, static_cast<double>(clip.getProperty(kClipFadeInMs, 0.0))),
+            juce::jmax(0.0, static_cast<double>(clip.getProperty(kClipFadeOutMs, 0.0)))};
+}
+
+bool ProjectState::hasAnyClipFade() const
+{
+    for (int t = 0; t < root.getNumChildren(); ++t)
+    {
+        const auto track = root.getChild(t);
+        if (!track.hasType(kTrack)) continue;
+        for (int i = 0; i < track.getNumChildren(); ++i)
+        {
+            const auto c = track.getChild(i);
+            if (c.hasType(kClip) && (c.hasProperty(kClipFadeInMs) || c.hasProperty(kClipFadeOutMs))) return true;
+        }
+    }
+    return false;
+}
+
 double ProjectState::getClipGainDb(const juce::String& clipId) const
 {
     const auto clip = findClip(clipId);
