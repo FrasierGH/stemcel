@@ -119,6 +119,30 @@ ThemeId currentTheme()
     return theme;
 }
 
+namespace
+{
+std::function<void(ThemeId)>& themeSwitcher()
+{
+    static std::function<void(ThemeId)> fn;
+    return fn;
+}
+} // namespace
+
+void setThemeSwitcher(std::function<void(ThemeId)> switcher)
+{
+    themeSwitcher() = std::move(switcher);
+}
+
+void switchTheme(ThemeId id)
+{
+    // Later: the caller (a combo box in the window about to be rebuilt) returns first.
+    juce::MessageManager::callAsync(
+        [id]
+        {
+            if (themeSwitcher()) themeSwitcher()(id);
+        });
+}
+
 juce::String themeName(ThemeId id)
 {
     return id == ThemeId::fusionDark ? "fusionDark" : "terminal";

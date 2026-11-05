@@ -486,10 +486,14 @@ class OptionsDialog final : public juce::Component
             row->time.setSelectedItemIndex(0, juce::dontSendNotification);
             row->time.setTooltip("How long this track plays before the next comes in: the join goes to the breakdown or "
                                  "outro nearest that (with its sections analysed), else to the nearest phrase");
-            addAndMakeVisible(row->name);
-            addAndMakeVisible(row->time);
+            listContent.addAndMakeVisible(row->name);
+            listContent.addAndMakeVisible(row->time);
             rows.push_back(std::move(row));
         }
+        // The tracks scroll past ten, so the buttons stay on screen however many there are.
+        list.setViewedComponent(&listContent, false);
+        list.setScrollBarsShown(true, false);
+        addAndMakeVisible(list);
         matchKeys.setTooltip("Shift a clashing track up to 2 semitones into key with the one before");
         tempoFollows.setTooltip("Each track plays at its own tempo and the project tempo ramps from one to the next over "
                                 "each join (a tempo map), instead of every track being warped to the first one's tempo");
@@ -502,7 +506,7 @@ class OptionsDialog final : public juce::Component
         {
             if (auto* w = findParentComponentOfClass<juce::DialogWindow>()) w->exitModalState(0);
         };
-        setSize(520, 250 + juce::jmin(10, static_cast<int>(rows.size())) * 28);
+        setSize(520, 250 + juce::jmin(kVisibleRows, static_cast<int>(rows.size())) * kRowPitch);
     }
 
     ~OptionsDialog() override
@@ -540,13 +544,18 @@ class OptionsDialog final : public juce::Component
         row(orderLabel, order);
         row(styleLabel, style);
         row(allLabel, all);
-        // A row per track (scrolling is not needed for a mix of a dozen; the window grows).
+        // A row per track, in a list that scrolls past ten.
+        list.setBounds(area.removeFromTop(juce::jmin(kVisibleRows, static_cast<int>(rows.size())) * kRowPitch));
+        const bool scrolls = static_cast<int>(rows.size()) > kVisibleRows;
+        const int width = list.getWidth() - (scrolls ? list.getScrollBarThickness() + 4 : 0);
+        listContent.setSize(width, static_cast<int>(rows.size()) * kRowPitch);
+        int y = 0;
         for (auto& r : rows)
         {
-            auto line = area.removeFromTop(26);
+            auto line = juce::Rectangle<int>(0, y, width, kRowPitch - 2);
             r->name.setBounds(line.removeFromLeft(line.getWidth() - 160).withTrimmedLeft(16));
             r->time.setBounds(line.reduced(0, 2));
-            area.removeFromTop(2);
+            y += kRowPitch;
         }
         area.removeFromTop(6);
         matchKeys.setBounds(area.removeFromTop(24));
@@ -558,11 +567,15 @@ class OptionsDialog final : public juce::Component
     }
 
   private:
+    static constexpr int kVisibleRows = 10;
+    static constexpr int kRowPitch = 28;
     struct Row
     {
         juce::Label name;
         juce::ComboBox time;
     };
+    juce::Viewport list;
+    juce::Component listContent;
     std::vector<juce::String> itemIds;
     std::function<void(Options)> run;
     juce::Label orderLabel, styleLabel, allLabel;

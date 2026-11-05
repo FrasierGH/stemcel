@@ -19,9 +19,10 @@ constexpr int kClearRecentMenuId = 1999;
 } // namespace
 
 MainComponent::MainComponent(EngineClient& engineClient, AppPreferences& preferences, AppController& appController,
-                             juce::ApplicationCommandManager& commands)
+                             juce::ApplicationCommandManager& commands, Status status)
     : engine(engineClient), prefs(preferences), controller(appController), commandManager(commands),
-      subscriptions(engineClient), startup(appController, preferences)
+      subscriptions(engineClient), startup(appController, preferences), engineReady(status.engineReady),
+      audioState(status.audioState), deviceName(status.deviceName)
 {
     addAndMakeVisible(startup);
     addAndMakeVisible(toasts);

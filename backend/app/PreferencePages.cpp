@@ -82,7 +82,7 @@ GeneralPreferencesPage::GeneralPreferencesPage(AppPreferences& preferences) : pr
     toastsHint.setText("Pop-up messages for finished exports, ready stems and errors.", juce::dontSendNotification);
     toastsHint.setFont(uiFont(11.0f));
     toastsHint.setColour(juce::Label::textColourId, colours::textFaint);
-    // Read once at startup (applyTheme): every component takes its colours when it is made.
+    // Applied at once: the window is built again in the new theme.
     styleLabel(themeLabel);
     const auto savedTheme = prefs.get("ui", "theme", "terminal").toString();
     fillCombo(themeBox, {"terminal", "fusionDark"}, {"Terminal", "Fusion Dark"}, savedTheme);
@@ -93,9 +93,7 @@ GeneralPreferencesPage::GeneralPreferencesPage(AppPreferences& preferences) : pr
         const auto chosen = juce::StringArray{"terminal", "fusionDark"}[themeBox.getSelectedItemIndex()];
         prefs.set("ui", "theme", chosen);
         prefs.save();
-        themeNote.setText(themeFromName(chosen) == currentTheme() ? juce::String()
-                                                                  : juce::String("Applies the next time Stemcel starts."),
-                          juce::dontSendNotification);
+        switchTheme(themeFromName(chosen));
     };
     for (auto* c : std::initializer_list<juce::Component*>{&waveLabel, &waveMode, &toasts, &toastsHint, &themeLabel, &themeBox, &themeNote})
         addAndMakeVisible(c);

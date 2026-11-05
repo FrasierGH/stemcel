@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Timeline**: drag a box from empty space to select the clips it touches (with Shift or Cmd/Ctrl, added to the selection).
+- **Theme** changes in Preferences apply at once, without restarting; open projects stay as they were.
+
+### Fixed
+
+- Dragging one of several selected clips moves them all, keeping their spacing and tracks (Alt copies them all).
+- The Auto Mix window's track list scrolls past ten tracks, so the Mix and Cancel buttons are always on screen.
+
 ## 0.3.1
 
 ### Added

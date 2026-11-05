@@ -14,11 +14,15 @@ enum class ThemeId
     fusionDark,
 };
 
-// Sets every colour token below for `theme`, and the interface font. Called once at
-// startup, before any component is made (components take their colours when they are
-// built), so a change of theme applies the next time the app starts.
+// Sets every colour token below for `theme`, and the interface font. Components take their
+// colours when they are built, so a change while running goes through switchTheme, which the
+// app answers by building its window again.
 void applyTheme(ThemeId theme);
 ThemeId currentTheme();
+// Changes the theme while running (Preferences > General): the app's handler, set at startup,
+// applies it and rebuilds the window, on the next message loop turn.
+void setThemeSwitcher(std::function<void(ThemeId)> switcher);
+void switchTheme(ThemeId theme);
 // The name stored in the preferences ("terminal", "fusionDark"), and back; unknown names
 // are the terminal theme.
 juce::String themeName(ThemeId theme);

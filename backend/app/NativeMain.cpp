@@ -9,6 +9,7 @@
 #include "MainWindow.h"
 #include "DebugAssertHook.h"
 #include "PreferencePages.h"
+#include "PreferencesDialog.h"
 #include "PluginScanWorker.h"
 #include "SmokeTest.h"
 #include "Theme.h"
@@ -84,6 +85,7 @@ class StemcelApplication final : public juce::JUCEApplication
 
         commands.registerAllCommandsForTarget(this);
         mainWindow = std::make_unique<MainWindow>(*engine, *prefs, *controller, commands);
+        setThemeSwitcher([this](ThemeId id) { switchThemeNow(id); });
 
         // Opening the audio device blocks the message thread; let the window paint first.
         juce::MessageManager::callAsync(
@@ -151,6 +153,19 @@ class StemcelApplication final : public juce::JUCEApplication
     }
 
   private:
+    // A theme chosen in Preferences: the colours, the fonts JUCE has cached for the old one,
+    // then the window and an open Preferences built again.
+    void switchThemeNow(ThemeId id)
+    {
+        if (id == currentTheme() || mainWindow == nullptr) return;
+        log::info("main", "theme -> " + themeName(id));
+        applyTheme(id);
+        lookAndFeel.applyColours();
+        juce::Typeface::clearTypefaceCache();
+        mainWindow->rebuildContent();
+        PreferencesDialog::rebuildIfOpen(*engine, *prefs);
+    }
+
     // Settings the Electron renderer pushes when it connects, applied from preferences.
     void applyStartupSettings()
     {

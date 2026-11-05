@@ -825,7 +825,11 @@ void TimelineView::paint(juce::Graphics& g)
                 if (r.getRight() < 0.0f || r.getX() > static_cast<float>(getWidth())) continue;
                 const bool dragging = drag != DragKind::none && drag != DragKind::seek && drag != DragKind::range
                                       && drag != DragKind::marker && drag != DragKind::pan && drag != DragKind::transitionMove
-                                      && drag != DragKind::transitionStart && drag != DragKind::transitionEnd && c.id == dragClipId;
+                                      && drag != DragKind::transitionStart && drag != DragKind::transitionEnd
+                                      && drag != DragKind::boxSelect
+                                      && (c.id == dragClipId
+                                          || (drag == DragKind::move
+                                              && std::any_of(dragGroup.begin(), dragGroup.end(), [&](const GroupClip& m) { return m.id == c.id; })));
                 paintClip(g, c, r, silenced, trackColor, dragging && !dragDuplicates ? 0.35f : 1.0f);
             }
 
@@ -877,6 +881,40 @@ void TimelineView::paint(juce::Graphics& g)
                     }
                 }
             }
+        }
+
+        // The rest of a group being moved: a ghost of each where it would land.
+        if (drag == DragKind::move && !dragGroup.empty())
+        {
+            const auto order = trackOrder();
+            const int shift = groupRowShift();
+            const double delta = dragPreviewStartMs - dragOriginStartMs;
+            for (const auto& member : dragGroup)
+            {
+                if (member.id == dragClipId) continue;
+                const auto* c = model().findClip(member.id);
+                const int target = member.trackIndex + shift;
+                if (c == nullptr || target < 0 || target >= static_cast<int>(order.size())) continue;
+                for (size_t i = 0; i < rows.size(); ++i)
+                {
+                    if (rows[i].trackId != order[static_cast<size_t>(target)]) continue;
+                    auto ghost = *c;
+                    ghost.offsetMs = member.startMs + delta;
+                    const auto* track = model().findTrack(rows[i].trackId);
+                    paintClip(g, ghost, clipBounds(ghost, rows[i]), false,
+                              track != nullptr && track->colorIndex >= 0 ? track->colorIndex : static_cast<int>(i), 0.85f);
+                }
+            }
+        }
+
+        // The selection box.
+        if (drag == DragKind::boxSelect && boxPreview.has_value())
+        {
+            const auto accent = getLookAndFeel().findColour(juce::TextEditor::highlightColourId).withAlpha(1.0f);
+            g.setColour(accent.withAlpha(0.14f));
+            g.fillRect(*boxPreview);
+            g.setColour(accent.withAlpha(0.8f));
+            g.drawRect(*boxPreview, 1.0f);
         }
 
         // Library drop preview.
@@ -1474,15 +1512,99 @@ void TimelineView::mouseDown(const juce::MouseEvent& e)
         dragPreviewStartMs = clip.offsetMs;
         dragPreviewEndMs = clip.endMs();
         dragPreviewTrackId = clip.trackId;
+        // Pressed on one of several selected clips: they all move together.
+        dragGroup.clear();
+        if (drag == DragKind::move && view.selectedClipIds.size() > 1 && view.selectedClipIds.count(clip.id) != 0)
+        {
+            const auto order = trackOrder();
+            for (const auto& id : view.selectedClipIds)
+            {
+                const auto* member = model().findClip(id);
+                if (member == nullptr || (member->locked && !dragDuplicates)) continue;
+                const auto at = std::find(order.begin(), order.end(), member->trackId);
+                if (at == order.end()) continue;
+                dragGroup.push_back({member->id, member->offsetMs, member->endMs(), static_cast<int>(at - order.begin())});
+            }
+            if (dragGroup.size() < 2) dragGroup.clear();
+        }
         return;
     }
 
-    // Empty area: select the track, clear clip selection.
-    view.selectedClipIds.clear();
+    // Empty area: select the track and clear the clip selection (Shift or Cmd/Ctrl keeps it,
+    // to add to with a box).
+    const bool adding = e.mods.isShiftDown() || e.mods.isCommandDown();
+    boxBase = adding ? view.selectedClipIds : std::set<juce::String>{};
+    if (!adding) view.selectedClipIds.clear();
     if (const int index = rowIndexAtY(e.y); index >= 0) view.selectedTrackId = rows[static_cast<size_t>(index)].trackId;
     view.changed();
     persistView();
-    if (e.mods.isPopupMenu() && model().findTrack(view.selectedTrackId) != nullptr) showLaneMenu(view.selectedTrackId, ms);
+    if (e.mods.isPopupMenu())
+    {
+        if (model().findTrack(view.selectedTrackId) != nullptr) showLaneMenu(view.selectedTrackId, ms);
+        return;
+    }
+    // Dragging on from here draws a box that selects the clips it touches.
+    drag = DragKind::boxSelect;
+    boxAnchorMs = view.xToMs(e.x);
+    boxAnchorContentY = e.y + view.scrollY;
+    boxPreview.reset();
+}
+
+std::vector<juce::String> TimelineView::trackOrder() const
+{
+    std::vector<juce::String> order;
+    for (const auto& t : model().tracks) order.push_back(t.id);
+    return order;
+}
+
+int TimelineView::groupRowShift() const
+{
+    if (dragGroup.empty()) return 0;
+    const auto order = trackOrder();
+    const auto* clip = model().findClip(dragClipId);
+    const auto from = clip != nullptr ? std::find(order.begin(), order.end(), clip->trackId) : order.end();
+    const auto to = std::find(order.begin(), order.end(), dragPreviewTrackId);
+    if (from == order.end() || to == order.end()) return 0;
+    return static_cast<int>(to - from);
+}
+
+void TimelineView::clampGroupDrag()
+{
+    if (dragGroup.empty()) return;
+    // None before zero.
+    double earliest = dragOriginStartMs;
+    for (const auto& m : dragGroup) earliest = juce::jmin(earliest, m.startMs);
+    const double delta = juce::jmax(dragPreviewStartMs - dragOriginStartMs, -earliest);
+    dragPreviewStartMs = dragOriginStartMs + delta;
+    dragPreviewEndMs = dragPreviewStartMs + (dragOriginEndMs - dragOriginStartMs);
+    // All on tracks: the shift is held to what the highest and lowest member allow.
+    const auto order = trackOrder();
+    const auto* clip = model().findClip(dragClipId);
+    const auto from = clip != nullptr ? std::find(order.begin(), order.end(), clip->trackId) : order.end();
+    if (from == order.end()) return;
+    int lo = 0, hi = static_cast<int>(order.size()) - 1;
+    for (const auto& m : dragGroup)
+    {
+        lo = juce::jmax(lo, -m.trackIndex);
+        hi = juce::jmin(hi, static_cast<int>(order.size()) - 1 - m.trackIndex);
+    }
+    const int shift = juce::jlimit(lo, juce::jmax(lo, hi), groupRowShift());
+    dragPreviewTrackId = order[static_cast<size_t>(juce::jlimit(0, static_cast<int>(order.size()) - 1,
+                                                                static_cast<int>(from - order.begin()) + shift))];
+}
+
+void TimelineView::selectInBox(juce::Rectangle<float> box)
+{
+    auto selected = boxBase;
+    for (const auto& row : rows)
+        if (const auto* track = model().findTrack(row.trackId))
+            for (const auto& c : track->clips)
+                if (clipBounds(c, row).intersects(box)) selected.insert(c.id);
+    if (selected != view.selectedClipIds)
+    {
+        view.selectedClipIds = std::move(selected);
+        view.changed();
+    }
 }
 
 void TimelineView::mouseDrag(const juce::MouseEvent& e)
@@ -1527,6 +1649,19 @@ void TimelineView::mouseDrag(const juce::MouseEvent& e)
 
     switch (drag)
     {
+    case DragKind::boxSelect:
+    {
+        if (e.getDistanceFromDragStart() <= kDragThresholdPx && !boxPreview.has_value()) return;
+        const auto from = juce::Point<float>(static_cast<float>(view.msToX(boxAnchorMs)), static_cast<float>(boxAnchorContentY - view.scrollY));
+        const auto to = e.position.withY(juce::jmax(static_cast<float>(view.headerHeight()), e.position.y));
+        // At least a pixel each way, so a straight line still touches what it crosses.
+        auto box = juce::Rectangle<float>(from, to);
+        box = box.withSize(juce::jmax(1.0f, box.getWidth()), juce::jmax(1.0f, box.getHeight()));
+        boxPreview = box;
+        selectInBox(box);
+        repaint();
+        break;
+    }
     case DragKind::seek:
     case DragKind::range:
         if (std::abs(e.getDistanceFromDragStartX()) > kDragThresholdPx)
@@ -1620,6 +1755,7 @@ void TimelineView::mouseDrag(const juce::MouseEvent& e)
             dragPreviewStartMs = raw;
             dragPreviewEndMs = dragPreviewStartMs + (dragOriginEndMs - dragOriginStartMs);
         }
+        clampGroupDrag();
         repaint();
         break;
     }
@@ -1703,6 +1839,41 @@ void TimelineView::releaseMouseForTest()
     mouseUp(juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(), pos, {}, juce::MouseInputSource::defaultPressure,
                              juce::MouseInputSource::defaultOrientation, juce::MouseInputSource::defaultRotation,
                              juce::MouseInputSource::defaultTiltX, juce::MouseInputSource::defaultTiltY, this, this, now, pos, now, 1, false));
+}
+
+juce::MouseEvent TimelineView::testMouseEvent(juce::Point<int> at, juce::ModifierKeys mods) const
+{
+    const auto now = juce::Time::getCurrentTime();
+    auto* self = const_cast<TimelineView*>(this);
+    return juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(), at.toFloat(), mods, juce::MouseInputSource::defaultPressure,
+                            juce::MouseInputSource::defaultOrientation, juce::MouseInputSource::defaultRotation,
+                            juce::MouseInputSource::defaultTiltX, juce::MouseInputSource::defaultTiltY, self, self, now,
+                            testDownPos.toFloat(), now, 1, false);
+}
+
+void TimelineView::pressForTest(juce::Point<int> at, juce::ModifierKeys mods)
+{
+    testDownPos = at;
+    mouseDown(testMouseEvent(at, mods.withFlags(juce::ModifierKeys::leftButtonModifier)));
+}
+
+void TimelineView::dragForTest(juce::Point<int> to)
+{
+    mouseDrag(testMouseEvent(to, juce::ModifierKeys(juce::ModifierKeys::leftButtonModifier)));
+}
+
+void TimelineView::releaseForTest(juce::Point<int> at)
+{
+    mouseUp(testMouseEvent(at, {}));
+}
+
+juce::Rectangle<int> TimelineView::clipScreenBoundsForTest(const juce::String& clipId) const
+{
+    const auto* c = model().findClip(clipId);
+    if (c == nullptr) return {};
+    for (const auto& row : rows)
+        if (row.trackId == c->trackId) return clipBounds(*c, row).toNearestInt();
+    return {};
 }
 
 void TimelineView::endDragForTest()
@@ -1891,6 +2062,42 @@ void TimelineView::commitMoveDrag(double startMs)
         }
         return;
     }
+    if (!dragGroup.empty())
+    {
+        // Several selected clips: each by the same time, and the same number of tracks.
+        const auto order = trackOrder();
+        const int shift = groupRowShift();
+        const double delta = startMs - dragOriginStartMs;
+        const auto group = std::exchange(dragGroup, {});
+        const auto targetOf = [&](const GroupClip& m)
+        { return order[static_cast<size_t>(juce::jlimit(0, static_cast<int>(order.size()) - 1, m.trackIndex + shift))]; };
+        if (dragDuplicates)
+        {
+            std::set<juce::String> copies;
+            actions.engineClient().inUndoGroup("Copy clips",
+                                               [&]
+                                               {
+                                                   for (const auto& m : group)
+                                                       if (const auto copy = actions.duplicateClipTo(m.id, targetOf(m), juce::jmax(0.0, m.startMs + delta));
+                                                           copy.isNotEmpty())
+                                                           copies.insert(copy);
+                                               });
+            if (!copies.empty())
+            {
+                view.selectedClipIds = copies;
+                view.changed();
+            }
+            return;
+        }
+        actions.engineClient().inUndoGroup("Move clips",
+                                           [&]
+                                           {
+                                               for (const auto& m : group) actions.moveClip(m.id, juce::jmax(0.0, m.startMs + delta), targetOf(m));
+                                               mirror.refreshNow();
+                                               for (const auto& m : group) retimeTransitions(m.id, m.startMs, m.endMs);
+                                           });
+        return;
+    }
     const auto clipId = dragClipId, trackId = dragPreviewTrackId;
     const auto origin = dragOriginStartMs, originEnd = dragOriginEndMs;
     actions.engineClient().inUndoGroup("Move clip",
@@ -2011,6 +2218,9 @@ void TimelineView::mouseUp(const juce::MouseEvent& e)
     const bool moved = e.getDistanceFromDragStart() > kDragThresholdPx;
     switch (kind)
     {
+    case DragKind::boxSelect:
+        boxPreview.reset();
+        break;
     case DragKind::range:
         if (rangePreview.has_value() && rangePreview->second - rangePreview->first > 1.0)
             actions.setTimelineSelection(rangePreview, model().loopSelection);

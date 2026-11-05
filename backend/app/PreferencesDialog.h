@@ -48,6 +48,8 @@ class PreferencesDialog final : public juce::DialogWindow
     void closeButtonPressed() override;
 
     static void show(EngineClient& engine, AppPreferences& prefs);
+    // After a theme change: an open Preferences window is made again in the new colours.
+    static void rebuildIfOpen(EngineClient& engine, AppPreferences& prefs);
 };
 
 } // namespace stemcel::native

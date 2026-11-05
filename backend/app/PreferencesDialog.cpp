@@ -186,6 +186,20 @@ void PreferencesDialog::closeButtonPressed()
     delete this;
 }
 
+void PreferencesDialog::rebuildIfOpen(EngineClient& engine, AppPreferences& prefs)
+{
+    if (openDialog == nullptr) return;
+    const auto bounds = openDialog->getBounds();
+    int page = 0;
+    if (auto* tabs = dynamic_cast<juce::TabbedComponent*>(openDialog->getContentComponent())) page = tabs->getCurrentTabIndex();
+    delete openDialog.getComponent();
+    auto* dialog = new PreferencesDialog(engine, prefs);
+    openDialog = dialog;
+    if (auto* tabs = dynamic_cast<juce::TabbedComponent*>(dialog->getContentComponent())) tabs->setCurrentTabIndex(page);
+    dialog->setBounds(bounds);
+    dialog->setVisible(true);
+}
+
 void PreferencesDialog::show(EngineClient& engine, AppPreferences& prefs)
 {
     if (openDialog != nullptr)

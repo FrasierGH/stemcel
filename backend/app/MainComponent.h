@@ -66,8 +66,15 @@ class MainComponent final : public juce::Component,
                             public juce::MenuBarModel
 {
   public:
+    // What the engine has reported, carried to a window rebuilt for a new theme.
+    struct Status
+    {
+        bool engineReady = false;
+        juce::String audioState, deviceName;
+    };
     MainComponent(EngineClient& engine, AppPreferences& prefs, AppController& controller,
-                  juce::ApplicationCommandManager& commands);
+                  juce::ApplicationCommandManager& commands, Status status = {});
+    Status status() const { return {engineReady, audioState, deviceName}; }
     ~MainComponent() override;
 
     void paint(juce::Graphics&) override;

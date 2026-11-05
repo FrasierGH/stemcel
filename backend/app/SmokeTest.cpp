@@ -3323,6 +3323,127 @@ void SmokeTest::addTempoJourney()
                      }});
     steps.back().poll = true;
     steps.back().timeoutMs = 20000.0;
+    // A box dragged from empty timeline selects the clips it touches; dragging one of them
+    // moves both by the same amount.
+    steps.push_back({"timeline box select and group move",
+                     [this]
+                     {
+                         mirror.refreshNow();
+                         groupA = groupB = {};
+                         for (const auto& t : model().tracks)
+                             for (const auto& c : t.clips)
+                                 if (!c.locked)
+                                 {
+                                     if (groupA.isEmpty()) groupA = c.id;
+                                     else if (groupB.isEmpty()) groupB = c.id;
+                                 }
+                         groupPhase = 0;
+                         groupWaits = 0;
+                         groupBoxCount = 0;
+                         groupBoxBoth = false;
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
+                         auto* timeline = window != nullptr ? findDescendant<TimelineView>(window) : nullptr;
+                         auto* workspace = window != nullptr ? findDescendant<Workspace>(window) : nullptr;
+                         if (timeline == nullptr || workspace == nullptr || groupB.isEmpty()) return false;
+                         mirror.refreshNow();
+                         const auto* a = model().findClip(groupA);
+                         const auto* b = model().findClip(groupB);
+                         if (a == nullptr || b == nullptr) return false;
+                         auto& view = workspace->viewState();
+                         if (groupPhase == 0)
+                         {
+                             // Both in view, then a box from empty space across them.
+                             groupHomeA = a->offsetMs;
+                             groupHomeB = b->offsetMs;
+                             timeline->revealRange(juce::jmin(a->offsetMs, b->offsetMs), juce::jmax(a->endMs(), b->endMs()));
+                             view.scrollY = 0.0;
+                             view.changed();
+                             groupPhase = 1;
+                             return false;
+                         }
+                         if (groupPhase == 1)
+                         {
+                             const auto ra = timeline->clipScreenBoundsForTest(groupA);
+                             const auto rb = timeline->clipScreenBoundsForTest(groupB);
+                             const auto both = ra.getUnion(rb);
+                             if (ra.isEmpty() || rb.isEmpty()) return false;
+                             // An empty point: under the tracks' clips, or past the right of them.
+                             juce::Point<int> from;
+                             for (int y = both.getBottom() + 4; y < timeline->getHeight() - 4 && from.isOrigin(); y += 6)
+                                 if (timeline->clipIdAtForTest({both.getRight() + 4, y}).isEmpty()) from = {both.getRight() + 4, y};
+                             for (int x = both.getRight() + 4; x < timeline->getWidth() - 4 && from.isOrigin(); x += 6)
+                                 if (timeline->clipIdAtForTest({x, both.getY() + 2}).isEmpty()) from = {x, both.getY() + 2};
+                             if (from.isOrigin())
+                             {
+                                 report.add("timeline box: no empty point near " + both.toString());
+                                 return false;
+                             }
+                             view.selectedClipIds.clear();
+                             timeline->pressForTest(from);
+                             timeline->dragForTest({both.getX() + 4, both.getY() + 2});
+                             groupBoxCount = static_cast<int>(view.selectedClipIds.size());
+                             groupBoxBoth = view.selectedClipIds.count(groupA) != 0 && view.selectedClipIds.count(groupB) != 0;
+                             timeline->releaseForTest({both.getX() + 4, both.getY() + 2});
+                             // Now drag A by 120 px: B comes with it (only these two selected).
+                             view.selectedClipIds = {groupA, groupB};
+                             const auto grip = ra.getCentre().withY(ra.getY() + juce::jmin(30, ra.getHeight() / 2));
+                             timeline->pressForTest(grip);
+                             timeline->dragForTest(grip.translated(60, 0));
+                             timeline->dragForTest(grip.translated(120, 0));
+                             timeline->releaseForTest(grip.translated(120, 0));
+                             groupPhase = 2;
+                             return false;
+                         }
+                         const double movedA = a->offsetMs - groupHomeA;
+                         const double movedB = b->offsetMs - groupHomeB;
+                         if (std::abs(movedA) < 1.0 && ++groupWaits < 20) return false;
+                         const bool together = std::abs(movedA) >= 1.0 && std::abs(movedA - movedB) < 1.0;
+                         report.add("timeline box select and group move: the box selected " + juce::String(groupBoxCount)
+                                    + (groupBoxBoth ? " (both)" : " (not both)") + ", moved " + juce::String(movedA, 1) + " and "
+                                    + juce::String(movedB, 1) + " ms");
+                         actions.moveClip(groupA, groupHomeA, a->trackId);
+                         actions.moveClip(groupB, groupHomeB, b->trackId);
+                         return groupBoxBoth && together;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 20000.0;
+    // The theme changed while running: the window is built again in it, the project still open.
+    steps.push_back({"theme switch while running",
+                     [this]
+                     {
+                         mirror.refreshNow();
+                         themeHome = currentTheme();
+                         themeTracks = static_cast<int>(model().tracks.size());
+                         themePhase = 0;
+                         switchTheme(themeHome == ThemeId::terminal ? ThemeId::fusionDark : ThemeId::terminal);
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
+                         auto* timeline = window != nullptr ? findDescendant<TimelineView>(window) : nullptr;
+                         if (timeline == nullptr) return false;
+                         mirror.refreshNow();
+                         if (themePhase == 0)
+                         {
+                             if (currentTheme() == themeHome) return false;
+                             timeline->repaint();
+                             themePhase = 1;
+                             switchTheme(themeHome);
+                             return false;
+                         }
+                         if (currentTheme() != themeHome) return false;
+                         const bool kept = static_cast<int>(model().tracks.size()) == themeTracks;
+                         report.add("theme switch while running: there and back, " + juce::String(themeTracks) + " tracks "
+                                    + (kept ? "kept" : "lost"));
+                         return kept;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 20000.0;
     // Two files dropped at once: the prompt, answered "as dropped", mixes them on two decks.
     steps.push_back({"auto mix on drop",
                      [this]

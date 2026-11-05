@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AppPreferences.h"
+#include "Theme.h"
 #include "AutoMix.h"
 #include "AudioImport.h"
 #include "MidiControllerActions.h"
@@ -167,6 +168,15 @@ class SmokeTest final : private juce::Timer
     bool dragSingleAfter = false;
     bool dragPromptSeen = false;
     std::vector<juce::String> tapCandidates;
+    // Timeline box select and group move.
+    juce::String groupA, groupB;
+    double groupHomeA = 0.0, groupHomeB = 0.0;
+    int groupPhase = 0, groupWaits = 0, groupBoxCount = 0;
+    bool groupBoxBoth = false;
+    // The theme switched while running, and back.
+    int themePhase = 0;
+    ThemeId themeHome = ThemeId::terminal;
+    int themeTracks = 0;
     juce::String tapClipId, tapLine;
     int tapPhase = 0, tapIndex = -1, tapWaits = 0;
     double tapHome = 0.0, tapSynced = 0.0;
