@@ -66,7 +66,7 @@ GeneralPreferencesPage::GeneralPreferencesPage(AppPreferences& preferences) : pr
 {
     styleLabel(waveLabel);
     fillCombo(waveMode, {"summary", "stereo"},
-              {"Single waveform - One combined waveform per clip", "Left and right - Separate L / R for stereo clips"},
+              {"Single waveform", "Left and right"},
               prefs.get("ui", "waveformDisplayMode", "stereo").toString());
     waveMode.onChange = [this]
     {
@@ -85,7 +85,7 @@ GeneralPreferencesPage::GeneralPreferencesPage(AppPreferences& preferences) : pr
     // Read once at startup (applyTheme): every component takes its colours when it is made.
     styleLabel(themeLabel);
     const auto savedTheme = prefs.get("ui", "theme", "terminal").toString();
-    fillCombo(themeBox, {"terminal", "fusionDark"}, {"Terminal - green on black", "Fusion Dark - Qt's Fusion style, dark"}, savedTheme);
+    fillCombo(themeBox, {"terminal", "fusionDark"}, {"Terminal", "Fusion Dark"}, savedTheme);
     themeNote.setFont(uiFont(12.0f));
     themeNote.setColour(juce::Label::textColourId, colours::textFaint);
     themeBox.onChange = [this]
@@ -139,7 +139,7 @@ TimelinePreferencesPage::TimelinePreferencesPage(AppPreferences& preferences) : 
                               "rekordbox use rekordbox's phrases. Nothing is written to rekordbox.");
     styleLabel(skipLabel);
     fillCombo(skipTarget, {"markers", "timelineEnds"},
-              {"Markers - Step through timeline markers", "Timeline ends - Jump to project start / end"},
+              {"Markers", "Project start and end"},
               prefs.get("ui", "skipButtonTarget", "markers").toString());
     skipTarget.onChange = [this]
     {
@@ -212,9 +212,8 @@ ProjectPreferencesPage::ProjectPreferencesPage(AppPreferences& preferences) : pr
         prefs.set("ui", "cleanupProjectFiles", cleanup.getToggleState());
         prefs.save();
     };
-    cleanupHint.setText("When you remove a stem or sample from the library, also delete its generated file from the "
-                        "project's stems / samples folder. Cover art and tag data go once nothing else uses them. "
-                        "Your original imported audio is never deleted. This cannot be undone.",
+    cleanupHint.setText("Removing a stem or sample also deletes its file from the project folder. Imported audio is never "
+                        "deleted. This can't be undone.",
                         juce::dontSendNotification);
     cleanupHint.setFont(uiFont(11.0f));
     cleanupHint.setColour(juce::Label::textColourId, colours::textFaint);
@@ -326,9 +325,8 @@ StemsPreferencesPage::StemsPreferencesPage(AppPreferences& preferences) : prefs(
     help.setFont(uiFont(12.0f));
     help.setColour(juce::Label::textColourId, colours::textFaint);
     help.setJustificationType(juce::Justification::topLeft);
-    help.setText("Stemcel separates stems with UVR's models (BS-Roformer SW, Mel-Band RoFormer and the "
-                 "community ensembles) through audio-separator, which downloads each model the first time "
-                 "it is used. Install it once with:\n" + uvr::installCommand(),
+    help.setText("Stem separation needs audio-separator, which downloads each model the first time it's used. "
+                 "Install it with:\n" + uvr::installCommand(),
                  juce::dontSendNotification);
     locate.onClick = [this]
     {

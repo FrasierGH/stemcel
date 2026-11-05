@@ -419,11 +419,10 @@ TransitionEditor::TransitionEditor(ProjectMirror& projectMirror, TimelineActions
     addAndMakeVisible(heading);
     sub.setFont(uiFont(11.0f));
     sub.setColour(juce::Label::textColourId, colours::textDim);
-    sub.setText("Changes apply as you make them (Undo steps back). The window is where the two clips overlap: move or trim them to "
-                "lengthen it. + on an option draws its curve by hand on the graph.",
+    sub.setText("The window is where the two clips overlap: move or trim them to change it.",
                 juce::dontSendNotification);
     addAndMakeVisible(sub);
-    hint.setFont(uiFont(10.0f));
+    hint.setFont(uiFont(11.0f));
     hint.setColour(juce::Label::textColourId, colours::textFaint);
     hint.setJustificationType(juce::Justification::centredRight);
     hint.setInterceptsMouseClicks(false, false);
@@ -720,7 +719,7 @@ void TransitionEditor::paint(juce::Graphics& g)
     if (bars > 0.0)
     {
         const int beats = static_cast<int>(std::ceil(bars * 4.0));
-        g.setFont(uiFont(9.0f));
+        g.setFont(uiFont(10.0f));
         for (int beat = 0; beat <= beats; ++beat)
         {
             const double at = beat / (bars * 4.0);
@@ -775,7 +774,7 @@ void TransitionEditor::paint(juce::Graphics& g)
                     g.drawEllipse(p.x - r, p.y - r, r * 2.0f, r * 2.0f, active ? 1.8f : 1.2f);
                 }
             g.setColour(colour);
-            g.setFont(uiFont(9.0f, drawn));
+            g.setFont(uiFont(10.5f, drawn));
             g.drawText(labelFor(shape.param) + (drawn ? "*" : ""), juce::Rectangle<float>(legendX, b.getY() + 1.0f, 48.0f, 12.0f),
                        juce::Justification::centredLeft);
             legendX += 50.0f;

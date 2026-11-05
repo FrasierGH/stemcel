@@ -102,6 +102,7 @@ class MainComponent final : public juce::Component,
     ProjectTabStrip tabStrip{controller};
     std::unique_ptr<Workspace> workspace;
     Toasts toasts;
+    juce::TooltipWindow tooltips{this, 600};
 
     bool engineReady = false;
     struct PrefsWatcher final : juce::ChangeListener

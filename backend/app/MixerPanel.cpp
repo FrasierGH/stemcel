@@ -47,7 +47,7 @@ class MixerPanel::Strip final : public juce::Component
             readout.setText(db::format(db::linearToDb(gain)), juce::dontSendNotification);
         };
         addAndMakeVisible(fader);
-        readout.setFont(uiFont(10.0f));
+        readout.setFont(uiFont(11.0f));
         readout.setJustificationType(juce::Justification::centred);
         readout.setColour(juce::Label::textColourId, colours::textDim);
         addAndMakeVisible(readout);
@@ -114,21 +114,35 @@ class MixerPanel::Strip final : public juce::Component
 
     void paint(juce::Graphics& g) override
     {
-        g.fillAll(ownerId == kMasterId ? colours::zinc900 : colours::zinc950);
-        g.setColour(colours::zinc700);
+        const bool fusionStrip = currentTheme() == ThemeId::fusionDark;
+        if (fusionStrip)
+        {
+            // A Fusion panel: the window grey with a soft top light; the master a shade apart.
+            const auto face = ownerId == kMasterId ? colours::zinc900.brighter(0.04f) : colours::zinc900;
+            g.setGradientFill(juce::ColourGradient::vertical(face.brighter(0.05f), 0.0f, face.darker(0.05f), static_cast<float>(getHeight())));
+            g.fillAll();
+            g.setColour(colours::rule);
+        }
+        else
+        {
+            g.fillAll(ownerId == kMasterId ? colours::zinc900 : colours::zinc950);
+            g.setColour(colours::zinc700);
+        }
         g.drawRect(getLocalBounds());
+        // The track's colour along the top, with a faint wash of it below.
         g.setColour(colour);
         g.fillRect(getLocalBounds().removeFromTop(3));
+        g.setGradientFill(juce::ColourGradient::vertical(colour.withAlpha(0.12f), 3.0f, colour.withAlpha(0.0f), 28.0f));
+        g.fillRect(getLocalBounds().withTrimmedTop(3).withHeight(25));
 
-        // Insert slots.
-        g.setFont(uiFont(10.0f));
+        // Insert slots, in one well.
+        g.setFont(uiFont(11.0f));
+        drawWell(g, insertRow(0).getUnion(insertRow(kInsertRows - 1)).toFloat().expanded(1.0f));
         for (int i = 0; i < kInsertRows; ++i)
         {
             const auto r = insertRow(i);
-            g.setColour(colours::zinc900);
-            g.fillRect(r);
-            g.setColour(colours::zinc700);
-            g.drawRect(r);
+            g.setColour(colours::rule.withAlpha(0.8f));
+            if (i > 0) g.drawHorizontalLine(r.getY(), static_cast<float>(r.getX() + 2), static_cast<float>(r.getRight() - 2));
             if (i < static_cast<int>(slots.size()))
             {
                 const auto& s = slots[static_cast<size_t>(i)];
@@ -144,8 +158,7 @@ class MixerPanel::Strip final : public juce::Component
 
         // The meter beside the fader: L and R from -60 dB, a mark at 0.
         const auto area = meterArea();
-        g.setColour(colours::zinc900);
-        g.fillRect(area);
+        drawWell(g, area.toFloat().expanded(1.0f));
         const auto& live = panel.live;
         float l = 0.0f, r = 0.0f;
         if (ownerId == kMasterId)
@@ -163,10 +176,16 @@ class MixerPanel::Strip final : public juce::Component
             const float peak = ch == 0 ? l : r;
             const float dbValue = static_cast<float>(db::linearToDb(peak));
             const float fraction = juce::jlimit(0.0f, 1.0f, (dbValue + 60.0f) / 60.0f);
-            auto bar = area.toFloat().withWidth(area.getWidth() / 2.0f - 1.0f).withX(area.getX() + ch * (area.getWidth() / 2.0f + 1.0f));
-            auto lit = bar.removeFromBottom(bar.getHeight() * fraction);
-            g.setColour(dbValue > -3.0f ? colours::red500 : dbValue > -12.0f ? colours::amber400 : colours::emerald500);
-            g.fillRect(lit);
+            const auto bar = area.toFloat().withWidth(area.getWidth() / 2.0f - 1.0f).withX(area.getX() + ch * (area.getWidth() / 2.0f + 1.0f));
+            const float litTop = bar.getBottom() - bar.getHeight() * fraction;
+            // LED segments, each coloured by the level it stands for; the unlit ones faint.
+            for (float y = bar.getBottom() - 2.0f; y >= bar.getY(); y -= 3.0f)
+            {
+                const float at = -60.0f + (bar.getBottom() - y) / bar.getHeight() * 60.0f;
+                const auto led = at > -3.0f ? colours::red500 : at > -12.0f ? colours::amber400 : colours::emerald500;
+                g.setColour(y >= litTop ? led : led.withAlpha(0.1f));
+                g.fillRect(bar.getX(), y, bar.getWidth(), 2.0f);
+            }
         }
         g.setColour(colours::zinc500);
         g.drawHorizontalLine(area.getY(), static_cast<float>(area.getX()), static_cast<float>(area.getRight()));

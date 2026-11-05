@@ -2,7 +2,9 @@
 
 #include "AudioImport.h"
 #include "LiveState.h"
+#include "BeatSync.h"
 #include "ProjectModel.h"
+#include "Theme.h"
 #include "TimelineActions.h"
 #include "WaveformStore.h"
 
@@ -50,11 +52,24 @@ class TimelineView final : public juce::Component,
     bool keyStateChanged(bool isKeyDown) override;
     // For tests: a move drag of this clip under way, as a press on it would start.
     void beginMoveDragForTest(const juce::String& clipId);
-    bool isBeatSyncedForTest() const { return beatSynced; }
-    void endDragForTest() { drag = DragKind::none; beatSynced = false; beatSyncHeld = false; }
-    // Space while dragging a clip: a tap moves it the least that puts its beats on the beats of
-    // the clip it overlaps (else the grid); held past 0.35 s, a menu of placements opens at the
-    // pointer. False when no clip is being dragged (Space then plays as usual).
+    bool isBeatSyncedForTest() const { return beatLock; }
+    double dragPreviewStartForTest() const { return dragPreviewStartMs; }
+    void endDragForTest();
+    // For tests: Space held or let go (no real key), the hold menu opened now, and the pointer
+    // over its option `index` (-1: away from it).
+    void setSpaceHeldForTest(bool held);
+    void openBeatMenuForTest() { openBeatMenu(); }
+    bool beatMenuOpenForTest() const { return beatMenu.has_value(); }
+    int beatMenuOptionCountForTest() const { return beatMenu ? static_cast<int>(beatMenu->options.size()) : 0; }
+    double beatMenuOptionStartForTest(int index) const;
+    void hoverBeatMenuForTest(int index);
+    // Space while dragging a clip. A tap locks the clip to the beat: it moves the least that
+    // puts its beats on the beats of the clip it overlaps (else the grid), and keeps doing so as
+    // it is dragged on; another tap lets it go. Held past 0.35 s, a menu of placements opens at
+    // the pointer and stays while Space is held: the option under the pointer shows a ghost of
+    // the clip where it would go, letting Space go over an option places the clip there, and
+    // letting it go away from the menu closes it (the drag carries on). False when no clip is
+    // being dragged (Space then plays as usual).
     bool beatSyncKey();
     // Clips on other tracks this one could hand over to, or take over from, without
     // overlapping yet: the nearest starting within 16 bars after it ends, and the nearest
@@ -99,6 +114,12 @@ class TimelineView final : public juce::Component,
     std::function<void(const juce::String& clipId)> onOpenScratch;
     // Quick Mashup of these library items (the source tracks of the selected clips).
     std::function<void(std::vector<juce::String> itemIds)> onQuickMashup;
+    // Several library items dropped on the timeline (track empty: below the tracks), and placing
+    // them one after another there (a new track when none is given).
+    std::function<void(const juce::StringArray& itemIds, const juce::String& trackId, double atMs)> onLibraryItemsDropped;
+    void placeLibraryItems(const juce::StringArray& ids, juce::String trackId, double at);
+    // For tests: the mouse let go where it was pressed (the end of a drag that never moved).
+    void releaseMouseForTest();
     std::function<void(const juce::String& clipId, const juce::StringArray& channels)> onSplitChannels;
 
     // Zoom keeping `anchorMs` under the same x (or the playhead/centre when unset).
@@ -183,7 +204,7 @@ class TimelineView final : public juce::Component,
     void showLaneMenu(const juce::String& trackId, double atMs);
     juce::PopupMenu beatRepeatMenu(const juce::String& trackId, double atMs, const ClipModel* clip);
     juce::PopupMenu stutterMenu(const juce::String& trackId, double atMs);
-    void paintClipHeader(juce::Graphics& g, const ClipModel& clip, juce::Rectangle<float> header, juce::Colour border,
+    void paintClipHeader(juce::Graphics& g, const ClipModel& clip, juce::Rectangle<float> header, const PaletteEntry& palette,
                          float alpha);
     std::vector<int> clipHeaderBadges(const ClipModel& clip) const;
     bool isWarpPending(const ClipModel& clip) const;
@@ -192,6 +213,7 @@ class TimelineView final : public juce::Component,
     std::optional<ClipHit> clipAt(juce::Point<int> p) const;
     const MarkerModel* markerAt(juce::Point<int> p) const;
     double contentLengthMs() const;
+    void paintOverChildren(juce::Graphics&) override;
     void paintRuler(juce::Graphics&, juce::Rectangle<int> area);
     void paintGrid(juce::Graphics&, juce::Rectangle<int> area);
     void paintClip(juce::Graphics&, const ClipModel& clip, juce::Rectangle<float> r, bool silenced, int trackColor,
@@ -214,13 +236,31 @@ class TimelineView final : public juce::Component,
     double dragPreviewStartMs = 0.0;
     double dragPreviewEndMs = 0.0;
     juce::String dragPreviewTrackId;
-    bool beatSyncHeld = false;  // Space is down during a drag (key repeats are ignored)
-    bool beatSyncMenuShown = false;
-    juce::uint32 beatSyncPressedAt = 0;
-    bool beatSynced = false;    // the preview sits where Space put it until the pointer moves on
-    int beatSyncMouseX = 0;
-    juce::String beatSyncLabel; // what the last tap did, shown on the dragged clip
-    void showBeatSyncMenu();
+    bool spaceHeld = false;           // Space is down during a drag (its key repeats are ignored)
+    bool spaceHeldForTest = false;
+    juce::uint32 spacePressedAt = 0;
+    bool unlockOnTap = false;         // this press began with the lock on: a short tap turns it off
+    bool beatLock = false;            // the dragged clip stays on the beat as it moves
+    juce::String beatSyncLabel;       // what the lock did, shown on the dragged clip
+    bool spaceIsDown() const;
+    void spaceReleased();
+    void applyBeatLock(const ClipModel& clip, double rawStartMs);
+    // The placements menu while Space is held, drawn over the timeline at the pointer.
+    struct BeatMenu
+    {
+        std::vector<beatsync::Placement> options;
+        juce::Rectangle<int> bounds;
+        int hovered = -1;
+        bool mouseReleased = false; // the drag's button came up while it was open
+    };
+    std::optional<BeatMenu> beatMenu;
+    void openBeatMenu();
+    int beatMenuRowAt(juce::Point<int> p) const;
+    juce::Rectangle<int> beatMenuRow(int index) const;
+    void hoverBeatMenu(juce::Point<int> p);
+    void placeFromBeatMenu(int index);
+    void closeBeatMenu();
+    void commitMoveDrag(double startMs);
     // The tempo lane's bottom edge, dragged to make it taller (Ruler + lane height).
     bool tempoResizing = false;
     int tempoResizeStartHeight = 0;

@@ -7,12 +7,35 @@
 - **Auto Mix**: a play time for each track (Full length, or about 1:00 to 5:00, with a control to set them all), and **Tempo follows each track** (off by default): each track plays at its own tempo, the project tempo ramping from one to the next over each join, instead of every track being warped to the first one's. Dropping several tracks opens the same dialog.
 - **Transitions**: their fades over the clips show the real level curves, with points; right-click one for its curve (linear, S-curve, fast or slow start, hold, stairs) or Edit Transition.
 - **Tempo lane**: drag its bottom edge to make it taller.
+- **Library**: drag a box from empty space to select what it touches (with Shift or Cmd/Ctrl, added to the selection).
+
+### Changed
+
+- **Space while dragging a clip**: a tap locks the clip to the beat, and it stays on the beat as you drag on (tap again to let go). Hold Space and the placements menu stays open while it's held: the option under the pointer shows a ghost of the clip where it would land, letting go of Space over an option places the clip there, and letting go away from the menu cancels it.
+- **Themes**: both have had a pass for detail.
+  - Clips are coloured to suit each theme: dark glass with a bright trace in Terminal, muted tones with a dark waveform in Fusion.
+  - The clock and tempo sit in one display.
+  - The meters are LED segments.
+  - The toolbar is grouped by thin rules.
+  - The library has proper tabs and cards.
+  - Lit buttons glow rather than flood with colour in Terminal.
+  - Terminal has its own sliders, dials, tick boxes, scroll bars and inverse-video menus, where it used JUCE's stock ones.
+  - Fusion's widgets are drawn to Qt's own Fusion rules, with the exact shades for this palette: lighter gradient buttons with an inner light rim, toggled buttons drawn sunken, 7 px slider grooves with button-shaded handles, Qt's tabs, check boxes, scroll bars, progress bars, line-edit frames and menu frames.
 
 ### Fixed
 
 - Waveforms were drawn slightly later than the audio, more so further into a track (about 0.28 s at two minutes for a 44.1 kHz file).
 - With several clips selected, the clip menu now has **Key Wheel** and **Quick Mashup**.
 - Space while dragging a clip is taken by the timeline itself, shows what it did on the clip, and a hold opens the placements menu from the key's release rather than the keyboard's state.
+- Dragging several selected library items onto the timeline: pressing one of them no longer selected it alone before the drag began, so only one came along.
+- After a Space tap during a clip drag, the clip no longer jumps back when the mouse moves, or when the button is let go without the mouse having moved.
+- Tooltips never appeared anywhere in the app; they do now.
+- Dropping several library items on the timeline offers Auto Mix, as dropping several files does.
+- A box can be dragged from anywhere in the library's empty space, not only beside the items.
+- Less explanatory text around the interface:
+  - The start screen line, the empty-panel hints (now tooltips on the Library and Files tabs, Add Track and the scratch record button) and the tempo lane's subtitle are gone.
+  - Wordy option names, column titles and transition descriptions are shorter.
+- Small text is easier to read on a 1080p screen: the library's key, BPM and use-count pills, durations and type badges, the track headers' Gain and Pan, the meter scales, clip badges and section names, and other small labels are larger, and the key pills have more contrast. The Terminal theme no longer shrinks its small text.
 
 ## 0.3.0
 

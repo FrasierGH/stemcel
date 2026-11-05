@@ -59,7 +59,7 @@ class TransitionEditor final : public juce::Component, private juce::Timer
     mix::Join join;
     juce::Label heading, sub, hint;
     std::unique_ptr<HalfEditor> outEditor, inEditor;
-    juce::ToggleButton rampTempo{"Ramp the tempo across the window, from the outgoing track's to the incoming one's"};
+    juce::ToggleButton rampTempo{"Ramp the tempo across the window"};
     juce::TextButton remove{"Remove"}, close{"Close"};
 
     bool activeOut = true;

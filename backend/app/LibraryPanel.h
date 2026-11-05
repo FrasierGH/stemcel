@@ -100,6 +100,12 @@ class LibraryPanel final : public juce::Component, public juce::FileDragAndDropT
     // A line of background activity (stem separation) beside the tabs; empty clears it.
     void setActivity(const juce::String& text);
     static constexpr int kDefaultHeight = 260;
+    // For tests: the library tab's items pressed and let go as the mouse would, what a drag
+    // from an item would carry, and a box dragged over a span of them (how many it selects).
+    void pressItemForTest(const juce::String& itemId, juce::ModifierKeys mods);
+    void releaseForTest();
+    juce::String dragDescriptionForTest(const juce::String& itemId) const;
+    int boxSelectForTest(const juce::String& firstId, const juce::String& lastId);
 
   private:
     LibraryContext ctx;

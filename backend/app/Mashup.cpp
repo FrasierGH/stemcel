@@ -230,7 +230,7 @@ class Dialog final : public juce::Component
             rows.push_back(std::move(row));
         }
         hint.setText("Each track's chosen parts go on tracks of their own after the arrangement, on the bar grid, in the "
-                     "leader's key. Stems not yet in the library are separated first.",
+                     "leader's key.",
                      juce::dontSendNotification);
         hint.setFont(uiFont(12.0f));
         hint.setColour(juce::Label::textColourId, colours::textDim);

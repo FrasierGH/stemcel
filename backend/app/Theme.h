@@ -67,15 +67,25 @@ inline juce::Colour text = zinc200;
 inline juce::Colour textDim = zinc400;
 inline juce::Colour textFaint = zinc500;
 inline juce::Colour accent = sky500;
+// Surfaces beyond the scale: a recessed well (the clock, the tempo, meters), a card (library
+// tiles), a hairline rule between groups, and text drawn on the accent.
+inline juce::Colour well{0xff000000};
+inline juce::Colour card{0xff04110a};
+inline juce::Colour rule{0xff0f3a1b};
+inline juce::Colour onAccent{0xff000000};
 } // namespace colours
 
 // The renderer's TRACK_PALETTE: one hue per entry, in three shades (clip body, outline,
 // waveform). A track's colorIndex picks the entry; a clip may override it.
+// Each theme draws them its own way: the terminal as dark glass with a bright trace, Fusion as
+// muted mid-tones with a dark waveform.
 struct PaletteEntry
 {
     juce::Colour fill;
     juce::Colour border;
     juce::Colour wave;
+    juce::Colour header;     // the clip's name strip
+    juce::Colour headerText;
 };
 
 inline constexpr int kPaletteSize = 16;
@@ -86,14 +96,30 @@ PaletteEntry paletteEntry(int colorIndex, bool silenced = false);
 // The swatch shown in pickers.
 juce::Colour paletteSwatch(int colorIndex);
 
+// A recessed display (the clock, the tempo, the meters): the terminal's black glass with a
+// faint phosphor rim, Fusion's sunken frame.
+void drawWell(juce::Graphics& g, juce::Rectangle<float> area);
+// The terminal's unlit segments behind a display's digits (each digit as a dim 8), for text in
+// a monospace font laid out as a Label would; nothing in Fusion.
+void drawGhostDigits(juce::Graphics& g, const juce::String& text, const juce::Font& font, juce::Rectangle<int> area,
+                     juce::Justification justification);
+// A colour that marks a lit button (an on state): saturated and bright.
+bool isLitColour(juce::Colour c);
+
 class StemcelLookAndFeel final : public juce::LookAndFeel_V4
 {
   public:
     StemcelLookAndFeel();
 
     juce::Font getTextButtonFont(juce::TextButton&, int buttonHeight) override;
+    // Lit buttons glow in the terminal (a tinted face, a bright rim and text) rather than flood
+    // with the accent. A button with the "tab" property set is drawn as a tab (toggled: in
+    // front).
     void drawButtonBackground(juce::Graphics&, juce::Button&, const juce::Colour& backgroundColour,
                               bool isMouseOverButton, bool isButtonDown) override;
+    void drawButtonText(juce::Graphics&, juce::TextButton&, bool isMouseOverButton, bool isButtonDown) override;
+    void drawTextEditorOutline(juce::Graphics&, int width, int height, juce::TextEditor&) override;
+    void fillTextEditorBackground(juce::Graphics&, int width, int height, juce::TextEditor&) override;
     juce::Font getLabelFont(juce::Label&) override;
     juce::Font getComboBoxFont(juce::ComboBox&) override;
     juce::Font getPopupMenuFont() override;
@@ -102,7 +128,8 @@ class StemcelLookAndFeel final : public juce::LookAndFeel_V4
     void drawComboBox(juce::Graphics&, int width, int height, bool isButtonDown, int buttonX, int buttonY, int buttonW,
                       int buttonH, juce::ComboBox&) override;
 
-    // Fusion Dark draws these as Qt's Fusion style does; the terminal theme keeps JUCE's.
+    // Fusion Dark draws these as Qt's Fusion style does; the terminal as instrument panels
+    // (hairline grooves, block handles, segmented dials).
     void drawLinearSlider(juce::Graphics&, int x, int y, int width, int height, float sliderPos, float minSliderPos,
                           float maxSliderPos, juce::Slider::SliderStyle, juce::Slider&) override;
     void drawRotarySlider(juce::Graphics&, int x, int y, int width, int height, float sliderPosProportional,
@@ -118,6 +145,9 @@ class StemcelLookAndFeel final : public juce::LookAndFeel_V4
     void drawProgressBar(juce::Graphics&, juce::ProgressBar&, int width, int height, double progress,
                          const juce::String& textToShow) override;
     void drawPopupMenuBackground(juce::Graphics&, int width, int height) override;
+    void drawPopupMenuItem(juce::Graphics&, const juce::Rectangle<int>& area, bool isSeparator, bool isActive, bool isHighlighted,
+                           bool isTicked, bool hasSubMenu, const juce::String& text, const juce::String& shortcutKeyText,
+                           const juce::Drawable* icon, const juce::Colour* textColour) override;
 
     // The widget colours for the current theme (applyTheme first). The constructor calls it.
     void applyColours();

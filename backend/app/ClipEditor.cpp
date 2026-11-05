@@ -131,7 +131,7 @@ class ClipEditor::WaveView final : public juce::Component, private juce::ChangeL
         g.setColour(colours::zinc900);
         g.fillRect(getLocalBounds().withHeight(kRulerPx));
         g.setColour(colours::textFaint);
-        g.setFont(uiFont(10.0f));
+        g.setFont(uiFont(11.0f));
         // Labels at least ~90 px apart, on 1/2/5 steps.
         const double minStep = viewDurationMs * 90.0 / juce::jmax(1, getWidth());
         double step = std::pow(10.0, std::floor(std::log10(juce::jmax(1.0, minStep))));

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <map>
+#include <optional>
 #include <set>
 #include <utility>
 
@@ -203,9 +204,9 @@ bool isMinor(const juce::String& key)
 // A small rounded pill; returns its width.
 int pill(juce::Graphics& g, int right, int centreY, const juce::String& text, juce::Colour fill, juce::Colour border, juce::Colour ink)
 {
-    const auto font = uiFont(9.5f);
-    const int w = static_cast<int>(juce::GlyphArrangement::getStringWidth(font, text)) + 8;
-    const juce::Rectangle<float> r(static_cast<float>(right - w), static_cast<float>(centreY - 7), static_cast<float>(w), 14.0f);
+    const auto font = uiFont(11.5f);
+    const int w = static_cast<int>(juce::GlyphArrangement::getStringWidth(font, text)) + 10;
+    const juce::Rectangle<float> r(static_cast<float>(right - w), static_cast<float>(centreY - 8), static_cast<float>(w), 16.0f);
     g.setColour(fill);
     g.fillRoundedRectangle(r, 3.0f);
     g.setColour(border);
@@ -220,14 +221,15 @@ int keyPill(juce::Graphics& g, int right, int centreY, const juce::String& key)
 {
     const auto hue = keyHue(key);
     const bool minor = isMinor(key);
-    return pill(g, right, centreY, key, minor ? hue.darker(1.8f).withAlpha(0.7f) : hue.darker(0.6f).withAlpha(0.4f),
-                minor ? hue.darker(1.2f).withAlpha(0.7f) : hue.withAlpha(0.6f), minor ? hue.brighter(0.3f) : hue.brighter(1.2f));
+    return pill(g, right, centreY, key, minor ? hue.darker(1.6f).withAlpha(0.9f) : hue.darker(0.9f).withAlpha(0.75f),
+                hue.withAlpha(minor ? 0.65f : 0.8f), hue.interpolatedWith(juce::Colours::white, minor ? 0.55f : 0.7f));
 }
 
 int usePill(juce::Graphics& g, int right, int centreY, int uses)
 {
     return pill(g, right, centreY, juce::String(uses), uses > 0 ? colours::sky600.withAlpha(0.35f) : colours::zinc800,
-                uses > 0 ? colours::sky500.withAlpha(0.6f) : colours::zinc700, uses > 0 ? colours::sky400.brighter(0.6f) : colours::zinc400);
+                uses > 0 ? colours::sky500.withAlpha(0.7f) : colours::zinc600, uses > 0 ? colours::sky400.interpolatedWith(juce::Colours::white, 0.5f)
+                                                                                 : colours::zinc300);
 }
 } // namespace tiles
 
@@ -313,7 +315,9 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
         void paint(juce::Graphics& g) override { owner.paintCanvas(g); }
         void mouseDown(const juce::MouseEvent& e) override { owner.canvasDown(e); }
         void mouseDrag(const juce::MouseEvent& e) override { owner.canvasDrag(e); }
+        void mouseUp(const juce::MouseEvent& e) override { owner.canvasUp(e); }
         void mouseDoubleClick(const juce::MouseEvent& e) override { owner.canvasDoubleClick(e); }
+        void paintOverChildren(juce::Graphics& g) override { owner.paintMarquee(g); }
 
       private:
         LibraryItemsView& owner;
@@ -425,11 +429,10 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
         ids.addArray(orphans);
         for (auto it = selection.begin(); it != selection.end();)
             it = ids.contains(*it) ? std::next(it) : selection.erase(it);
-        empty.setText(m.library.empty() ? juce::String("Drop audio files here, or click Import to add them.")
-                      : filter.getText().trim().isEmpty() ? "No " + kindFilter.getText().toLowerCase() + " in the library yet."
-                                                          : "No library items match \"" + filter.getText().trim() + "\".",
+        empty.setText(filter.getText().trim().isEmpty() ? "No " + kindFilter.getText().toLowerCase() + " in the library yet."
+                                                        : "No library items match \"" + filter.getText().trim() + "\".",
                       juce::dontSendNotification);
-        empty.setVisible(m.library.empty() || ids.isEmpty());
+        empty.setVisible(!m.library.empty() && ids.isEmpty());
         layout();
     }
 
@@ -498,7 +501,7 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
         }
         else
             orphanHeader = {};
-        canvas.setSize(width, y + rowHeight + 8);
+        canvas.setSize(width, juce::jmax(y + rowHeight + 8, viewport.getHeight()));
         canvas.repaint();
     }
 
@@ -515,8 +518,8 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
         }
         if (!orphanHeader.isEmpty())
         {
-            g.setColour(colours::zinc500);
-            g.setFont(uiFont(10.0f));
+            g.setColour(colours::zinc400);
+            g.setFont(uiFont(11.0f));
             g.drawText("SAVED CLIPS (SOURCE MISSING)", orphanHeader.reduced(8, 0), juce::Justification::centredLeft, true);
         }
         for (const auto& hit : hits)
@@ -538,8 +541,15 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
     void paintTile(juce::Graphics& g, const Hit& hit, const LibraryItemModel& item, bool selected)
     {
         auto r = hit.bounds;
-        g.setColour(selected ? colours::sky600.withAlpha(0.3f) : colours::zinc950.withAlpha(0.6f));
-        g.fillRect(r.reduced(1));
+        // A card; selected, tinted with the accent and outlined in it.
+        const auto cardArea = r.reduced(1).toFloat();
+        const bool fusionCard = currentTheme() == ThemeId::fusionDark;
+        g.setColour(selected ? colours::card.interpolatedWith(colours::accent, fusionCard ? 0.28f : 0.14f) : colours::card);
+        if (fusionCard) g.fillRoundedRectangle(cardArea, 3.0f);
+        else g.fillRect(cardArea);
+        g.setColour(selected ? colours::accent : colours::rule);
+        if (fusionCard) g.drawRoundedRectangle(cardArea.reduced(0.5f), 3.0f, 1.0f);
+        else g.drawRect(cardArea, 1.0f);
         if (showImages())
         {
             const auto art = r.removeFromLeft(tiles::kTileHeight);
@@ -560,11 +570,11 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
             }
             // LibraryTypeBadge: what kind of audio this is.
             const auto badge = stem ? "STEM" : scratch ? "SCRATCH" : sample ? "SAMPLE" : "SOURCE";
-            const juce::Rectangle<float> b(static_cast<float>(art.getX() + 3), static_cast<float>(art.getBottom() - 15), 50.0f, 12.0f);
-            g.setColour(colours::zinc950.withAlpha(0.8f));
-            g.fillRoundedRectangle(b.withWidth(juce::GlyphArrangement::getStringWidth(uiFont(8.0f, true), badge) + 6.0f), 2.0f);
-            g.setColour(colours::zinc300);
-            g.setFont(uiFont(8.0f, true));
+            const juce::Rectangle<float> b(static_cast<float>(art.getX() + 3), static_cast<float>(art.getBottom() - 17), 60.0f, 14.0f);
+            g.setColour(colours::zinc950.withAlpha(0.85f));
+            g.fillRoundedRectangle(b.withWidth(juce::GlyphArrangement::getStringWidth(uiFont(10.0f, true), badge) + 6.0f), 2.0f);
+            g.setColour(colours::zinc200);
+            g.setFont(uiFont(10.0f, true));
             g.drawText(badge, b.translated(3.0f, 0.0f), juce::Justification::centredLeft, false);
             g.setColour(colours::zinc800);
             g.drawVerticalLine(art.getRight(), static_cast<float>(art.getY()), static_cast<float>(art.getBottom()));
@@ -579,11 +589,11 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
             g.setFont(uiFont(11.0f));
             g.drawText(artist, text.removeFromTop(14), juce::Justification::centredLeft, true);
         }
-        g.setColour(colours::zinc500);
-        g.setFont(uiFont(10.0f));
-        g.drawText(formatDuration(item.durationMs), text.removeFromTop(13), juce::Justification::centredLeft, true);
+        g.setColour(colours::zinc400);
+        g.setFont(uiFont(11.0f));
+        g.drawText(formatDuration(item.durationMs), text.removeFromTop(14), juce::Justification::centredLeft, true);
         // Pills, right to left: use count, BPM, key (or Simple for a one-shot).
-        const int cy = r.getBottom() - 12;
+        const int cy = r.getBottom() - 13;
         int right = r.getRight() - 6;
         right -= tiles::usePill(g, right, cy, uses[item.id]) + 4;
         const auto type = item.raw.getProperty("audioType", {}).toString();
@@ -617,7 +627,7 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
         else arrow.addTriangle(ax - 2.0f, ay - 4.0f, ax - 2.0f, ay + 4.0f, ax + 3.0f, ay);
         g.setColour(colours::zinc400);
         g.fillPath(arrow);
-        g.setFont(uiFont(10.5f));
+        g.setFont(uiFont(11.5f));
         g.drawText(juce::String(count) + (count == 1 ? " saved clip" : " saved clips"), r.withTrimmedLeft(22), juce::Justification::centredLeft, false);
     }
 
@@ -642,12 +652,12 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
         if (item.key.isNotEmpty()) right -= tiles::keyPill(g, right, cy, item.key) + 4;
         const int textWidth = juce::jmax(20, right - (r.getX() + 16) - 2);
         g.setColour(colours::zinc100);
-        g.setFont(uiFont(11.0f, true));
-        g.drawText(displayTitle(item), r.getX() + 16, r.getY() + 5, textWidth, 14, juce::Justification::centredLeft, true);
-        g.setColour(colours::zinc500);
-        g.setFont(uiFont(10.0f));
+        g.setFont(uiFont(12.0f, true));
+        g.drawText(displayTitle(item), r.getX() + 16, r.getY() + 4, textWidth, 16, juce::Justification::centredLeft, true);
+        g.setColour(colours::zinc400);
+        g.setFont(uiFont(11.0f));
         const double duration = static_cast<double>(item.raw.getProperty("sourceDurationMs", item.durationMs));
-        g.drawText(formatDuration(duration), r.getX() + 16, r.getY() + 21, textWidth, 13, juce::Justification::centredLeft, true);
+        g.drawText(formatDuration(duration), r.getX() + 16, r.getY() + 20, textWidth, 14, juce::Justification::centredLeft, true);
     }
 
     const Hit* hitAt(juce::Point<int> p) const
@@ -661,10 +671,20 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
     {
         grabKeyboardFocus();
         dragStarted = false;
+        pendingSingle.clear();
+        marquee.reset();
         const auto* hit = hitAt(e.getPosition());
         if (hit == nullptr)
         {
-            selection.clear();
+            // Empty space: a box dragged from here selects what it touches (with Shift or
+            // Cmd/Ctrl, added to what is selected).
+            if (!e.mods.isShiftDown() && !e.mods.isCommandDown()) selection.clear();
+            if (!e.mods.isPopupMenu())
+            {
+                marqueeBase = selection;
+                marqueeFrom = e.getPosition();
+                marquee = juce::Rectangle<int>(marqueeFrom, marqueeFrom);
+            }
             canvas.repaint();
             return;
         }
@@ -691,7 +711,14 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
             if (!selection.erase(hit->itemId)) selection.insert(hit->itemId);
             anchor = hit->itemId;
         }
-        else if (selection.count(hit->itemId) == 0 || !e.mods.isPopupMenu())
+        else if (selection.count(hit->itemId) != 0 && (e.mods.isPopupMenu() || selection.size() > 1))
+        {
+            // Pressing one of several selected keeps them all, so they can be dragged together;
+            // let go without dragging and it alone is selected.
+            if (!e.mods.isPopupMenu()) pendingSingle = hit->itemId;
+            anchor = hit->itemId;
+        }
+        else
         {
             selection = {hit->itemId};
             anchor = hit->itemId;
@@ -722,18 +749,151 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
 
     void canvasDrag(const juce::MouseEvent& e)
     {
+        if (marquee.has_value())
+        {
+            selectInBox(juce::Rectangle<int>(marqueeFrom, e.getPosition()));
+            const auto inViewport = e.getEventRelativeTo(&viewport).getPosition();
+            viewport.autoScroll(inViewport.x, inViewport.y, 24, 12);
+            return;
+        }
         if (dragStarted || e.getDistanceFromDragStart() < 5 || e.mods.isPopupMenu()) return;
         const auto* hit = hitAt(e.getMouseDownPosition());
         if (hit == nullptr || hit->kind == Hit::Kind::toggle) return;
         dragStarted = true;
-        // Onto a track to place it (the timeline takes one item per drop).
+        pendingSingle.clear();
+        // Onto a track to place it; several selected go together.
         if (auto* container = juce::DragAndDropContainer::findParentDragContainerFor(this))
-            // Several selected: all of them, in on-screen order (ids joined by commas).
-            container->startDragging("libraryItem:" + (selection.count(hit->itemId) != 0 && selection.size() > 1
-                                                           ? juce::StringArray([&] { juce::StringArray a; for (const auto& id : selectedInOrder()) a.add(id); return a; }()).joinIntoString(",")
-                                                           : hit->itemId),
-                                     &canvas,
-                                     juce::ScaledImage(canvas.createComponentSnapshot(hit->bounds.withHeight(juce::jmin(hit->bounds.getHeight(), 40)))));
+            container->startDragging(dragDescriptionFor(hit->itemId), &canvas, dragImageFor(hit->itemId));
+    }
+
+    void canvasUp(const juce::MouseEvent&)
+    {
+        if (marquee.has_value())
+        {
+            marquee.reset();
+            canvas.repaint();
+        }
+        // A press on one of several selected that didn't become a drag: it alone is selected.
+        if (pendingSingle.isNotEmpty() && !dragStarted)
+        {
+            selection = {pendingSingle};
+            canvas.repaint();
+        }
+        pendingSingle.clear();
+    }
+
+    // Everything the box touches is selected, on top of what was selected when it began.
+    void selectInBox(juce::Rectangle<int> box)
+    {
+        // A box dragged straight down (or across) still touches what it passes over.
+        box = box.withSize(juce::jmax(1, box.getWidth()), juce::jmax(1, box.getHeight()));
+        marquee = box;
+        selection = marqueeBase;
+        juce::String last;
+        for (const auto& h : hits)
+            if (h.kind != Hit::Kind::toggle && h.bounds.intersects(box))
+            {
+                selection.insert(h.itemId);
+                last = h.itemId;
+            }
+        if (last.isNotEmpty()) anchor = last;
+        canvas.repaint();
+    }
+
+    void paintMarquee(juce::Graphics& g)
+    {
+        if (!marquee.has_value() || marquee->isEmpty()) return;
+        const auto box = marquee->toFloat();
+        g.setColour(colours::accent.withAlpha(0.14f));
+        g.fillRect(box);
+        g.setColour(colours::accent.withAlpha(0.8f));
+        g.drawRect(box, 1.0f);
+    }
+
+    // What a drag from this item carries: it, or every selected item (in on-screen order,
+    // ids joined by commas) when it is one of several selected.
+    juce::String dragDescriptionFor(const juce::String& itemId) const
+    {
+        if (selection.count(itemId) == 0 || selection.size() < 2) return "libraryItem:" + itemId;
+        juce::StringArray carried;
+        for (const auto& id : selectedInOrder()) carried.add(id);
+        return "libraryItem:" + carried.joinIntoString(",");
+    }
+
+    // The item's tile, or with several dragged, the first few stacked with a count.
+    juce::ScaledImage dragImageFor(const juce::String& itemId)
+    {
+        const auto boundsOf = [this](const juce::String& id) -> juce::Rectangle<int>
+        {
+            for (const auto& h : hits)
+                if (h.itemId == id && h.kind != Hit::Kind::toggle) return h.bounds.withHeight(juce::jmin(h.bounds.getHeight(), 40));
+            return {};
+        };
+        const auto first = boundsOf(itemId);
+        if (selection.count(itemId) == 0 || selection.size() < 2 || first.isEmpty())
+            return juce::ScaledImage(canvas.createComponentSnapshot(first));
+        const auto count = static_cast<int>(selection.size());
+        const auto tile = canvas.createComponentSnapshot(first);
+        constexpr int kStep = 6;
+        const int layers = juce::jmin(3, count);
+        juce::Image image(juce::Image::ARGB, tile.getWidth() + kStep * (layers - 1) + 14, tile.getHeight() + kStep * (layers - 1) + 10, true);
+        juce::Graphics g(image);
+        for (int i = layers - 1; i >= 0; --i)
+        {
+            g.setOpacity(i == 0 ? 1.0f : 0.55f);
+            g.drawImageAt(tile, kStep * i, kStep * i);
+        }
+        g.setOpacity(1.0f);
+        const auto badge = juce::Rectangle<float>(static_cast<float>(image.getWidth() - 26), 0.0f, 26.0f, 18.0f);
+        g.setColour(colours::accent);
+        g.fillRoundedRectangle(badge, 9.0f);
+        g.setColour(colours::zinc950);
+        g.setFont(uiFont(11.0f, true));
+        g.drawText(juce::String(count), badge, juce::Justification::centred);
+        return juce::ScaledImage(image);
+    }
+
+  public:
+    // For tests: a press on the item (as the mouse would, with these keys), the button let go,
+    // and what dragging from that item would carry.
+    void pressForTest(const juce::String& itemId, juce::ModifierKeys mods)
+    {
+        for (const auto& h : hits)
+            if (h.itemId == itemId && h.kind != Hit::Kind::toggle)
+            {
+                canvasDown(eventAt(h.bounds.getCentre(), mods));
+                return;
+            }
+    }
+    void releaseForTest() { canvasUp(eventAt({}, {})); }
+    juce::String dragDescriptionForTest(const juce::String& itemId) const { return dragDescriptionFor(itemId); }
+    // A box from above the first item to below the last, as dragged in the panel.
+    int boxSelectForTest(const juce::String& firstId, const juce::String& lastId)
+    {
+        juce::Rectangle<int> a, b;
+        for (const auto& h : hits)
+        {
+            if (h.itemId == firstId && h.kind != Hit::Kind::toggle) a = h.bounds;
+            if (h.itemId == lastId && h.kind != Hit::Kind::toggle) b = h.bounds;
+        }
+        if (a.isEmpty() || b.isEmpty()) return 0;
+        marqueeBase.clear();
+        marqueeFrom = a.getCentre();
+        marquee = juce::Rectangle<int>(marqueeFrom, marqueeFrom);
+        selectInBox(juce::Rectangle<int>(a.getCentre(), b.getCentre()));
+        canvasUp(eventAt({}, {}));
+        return static_cast<int>(selection.size());
+    }
+
+  private:
+    juce::MouseEvent eventAt(juce::Point<int> p, juce::ModifierKeys mods)
+    {
+        const auto pos = p.toFloat();
+        const auto now = juce::Time::getCurrentTime();
+        return juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(), pos, mods, juce::MouseInputSource::defaultPressure,
+                                juce::MouseInputSource::defaultOrientation, juce::MouseInputSource::defaultRotation,
+                                juce::MouseInputSource::defaultTiltX, juce::MouseInputSource::defaultTiltY, &canvas, &canvas, now, pos,
+                                now, 1, false);
     }
 
     void canvasDoubleClick(const juce::MouseEvent& e)
@@ -1187,6 +1347,10 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
     juce::Rectangle<int> orphanHeader;
     std::set<juce::String> selection;
     juce::String anchor; // where a shift-click span starts
+    juce::String pendingSingle; // pressed while one of several selected: selected alone on release unless dragged
+    std::optional<juce::Rectangle<int>> marquee; // the box being dragged out to select
+    juce::Point<int> marqueeFrom;
+    std::set<juce::String> marqueeBase;          // selected when the box began
     std::map<juce::String, int> uses;
     std::map<juce::String, juce::var> metadataCache;
     std::map<juce::String, juce::Image> coverCache;
@@ -1214,6 +1378,9 @@ LibraryPanel::LibraryPanel(LibraryContext context) : ctx(std::move(context))
     {
         auto* tab = tabs.add(new juce::TextButton(names[index]));
         tab->setConnectedEdges(juce::Button::ConnectedOnLeft | juce::Button::ConnectedOnRight);
+        tab->getProperties().set("tab", true); // drawn as a tab (Theme.cpp)
+        if (index == 0) tab->setTooltip("Drop audio files here, or click Import to add them");
+        if (index == 1) tab->setTooltip("Add a folder of samples or music to browse it here");
         tab->onClick = [this, index] { showTab(index); };
         addAndMakeVisible(tab);
     }
@@ -1251,11 +1418,34 @@ void LibraryPanel::showTab(int index)
     for (int i = 0; i < kTabCount; ++i)
     {
         views[static_cast<size_t>(i)]->setVisible(i == activeTab);
-        tabs[i]->setColour(juce::TextButton::buttonColourId, i == activeTab ? colours::sky600 : colours::zinc800);
+        tabs[i]->setToggleState(i == activeTab, juce::dontSendNotification);
     }
     importButton.setVisible(activeTab <= 2);
+    repaint(); // the line under the tabs opens under the front one
     ctx.prefs.set("ui", "nativeLibraryTab", index);
     ctx.prefs.save();
+}
+
+void LibraryPanel::pressItemForTest(const juce::String& itemId, juce::ModifierKeys mods)
+{
+    showTab(0);
+    library->pressForTest(itemId, mods);
+}
+
+void LibraryPanel::releaseForTest()
+{
+    library->releaseForTest();
+}
+
+juce::String LibraryPanel::dragDescriptionForTest(const juce::String& itemId) const
+{
+    return library->dragDescriptionForTest(itemId);
+}
+
+int LibraryPanel::boxSelectForTest(const juce::String& firstId, const juce::String& lastId)
+{
+    showTab(0);
+    return library->boxSelectForTest(firstId, lastId);
 }
 
 void LibraryPanel::setActivity(const juce::String& text)
@@ -1278,6 +1468,24 @@ void LibraryPanel::importWithDialog()
 void LibraryPanel::paint(juce::Graphics& g)
 {
     g.fillAll(colours::background);
+    // The tabs stand on a line that runs under them to the panel's edge.
+    if (!tabs.isEmpty())
+    {
+        const float y = static_cast<float>(tabs[0]->getBottom() - 1);
+        if (currentTheme() == ThemeId::fusionDark && activeTab >= 0 && activeTab < tabs.size())
+        {
+            // Fusion: the line stops under the front tab, which opens into the pane.
+            const auto front = tabs[activeTab]->getBounds();
+            g.setColour(colours::rule);
+            g.drawHorizontalLine(juce::roundToInt(y), 1.0f, static_cast<float>(front.getX() + 1));
+            g.drawHorizontalLine(juce::roundToInt(y), static_cast<float>(front.getRight() - 1), static_cast<float>(getWidth() - 1));
+        }
+        else
+        {
+            g.setColour(colours::zinc700);
+            g.drawHorizontalLine(juce::roundToInt(y), 1.0f, static_cast<float>(getWidth() - 1));
+        }
+    }
     g.setColour(dragOver ? colours::accent : colours::border);
     g.drawRect(getLocalBounds(), dragOver ? 2 : 1);
 }
@@ -1285,8 +1493,13 @@ void LibraryPanel::paint(juce::Graphics& g)
 void LibraryPanel::resized()
 {
     auto area = getLocalBounds().reduced(1);
-    auto header = area.removeFromTop(30).reduced(4, 3);
-    for (auto* tab : tabs) tab->setBounds(header.removeFromLeft(juce::jmax(64, tab->getBestWidthForHeight(24) + 8)));
+    auto header = area.removeFromTop(30).reduced(4, 0).withTrimmedTop(4);
+    for (auto* tab : tabs)
+    {
+        tab->setBounds(header.removeFromLeft(juce::jmax(64, tab->getBestWidthForHeight(24) + 8)));
+        header.removeFromLeft(1);
+    }
+    header = header.withTrimmedBottom(3);
     importButton.setBounds(header.removeFromRight(90));
     header.removeFromRight(8);
     status.setBounds(header.reduced(8, 0));

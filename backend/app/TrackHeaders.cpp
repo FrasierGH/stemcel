@@ -53,8 +53,8 @@ TrackHeaderRow::TrackHeaderRow(TimelineActions& timelineActions, TimelineViewSta
     automationButton.onClick = [this] { actions.toggleAutomation(trackId); };
     for (auto* l : {&gainCaption, &panCaption})
     {
-        l->setFont(uiFont(10.0f));
-        l->setColour(juce::Label::textColourId, colours::textFaint);
+        l->setFont(uiFont(11.0f));
+        l->setColour(juce::Label::textColourId, colours::textDim);
         l->setJustificationType(juce::Justification::centredLeft);
         l->setInterceptsMouseClicks(false, false);
         addAndMakeVisible(l);
@@ -122,8 +122,18 @@ void TrackHeaderRow::update(const TrackModel& track, int displayIndex, bool sile
 void TrackHeaderRow::paint(juce::Graphics& g)
 {
     const bool selected = view.selectedTrackId == trackId;
-    g.setColour(selected ? colours::zinc800 : colours::zinc900);
-    g.fillRect(getLocalBounds());
+    if (currentTheme() == ThemeId::fusionDark)
+    {
+        // A panel with Fusion's soft top light; the selected one tinted with the highlight.
+        const auto face = selected ? colours::zinc900.interpolatedWith(colours::accent, 0.16f) : colours::zinc900;
+        g.setGradientFill(juce::ColourGradient::vertical(face.brighter(0.05f), 0.0f, face.darker(0.03f), static_cast<float>(getHeight())));
+        g.fillRect(getLocalBounds());
+    }
+    else
+    {
+        g.setColour(selected ? colours::zinc800 : colours::zinc900);
+        g.fillRect(getLocalBounds());
+    }
     g.setColour(colours::border);
     g.drawRect(getLocalBounds());
     g.setColour(paletteSwatch(colourIndex).withMultipliedAlpha(isSilenced ? 0.4f : 1.0f));
@@ -187,23 +197,29 @@ void TrackHeaderRow::paint(juce::Graphics& g)
 
 void TrackHeaderRow::paintMeter(juce::Graphics& g)
 {
-    g.setColour(colours::zinc950);
-    g.fillRect(meterArea);
-    std::pair<float, float> peaks{live.masterPeakL, live.masterPeakR};
-    if (!isMaster())
-    {
-        const auto it = live.trackPeaks.find(trackId);
-        if (it == live.trackPeaks.end()) return;
+    drawWell(g, meterArea.toFloat());
+    std::pair<float, float> peaks{0.0f, 0.0f};
+    if (isMaster())
+        peaks = {live.masterPeakL, live.masterPeakR};
+    else if (const auto it = live.trackPeaks.find(trackId); it != live.trackPeaks.end())
         peaks = it->second;
-    }
+    // LED segments from the bottom, coloured by height (green, amber near the top, red at
+    // the top), the unlit ones faint.
+    const auto inner = meterArea.reduced(1, 2);
     for (int ch = 0; ch < 2; ++ch)
     {
         const float peak = ch == 0 ? peaks.first : peaks.second;
         const double pos = db::dbToPosition(db::linearToDb(peak), db::kMaxTrackDb);
-        auto bar = meterArea.withWidth(meterArea.getWidth() / 2).withX(meterArea.getX() + ch * meterArea.getWidth() / 2);
-        const int h = static_cast<int>(bar.getHeight() * pos);
-        g.setColour(peak >= 1.0f ? colours::red500 : peak > 0.7f ? colours::amber400 : colours::emerald500);
-        g.fillRect(bar.removeFromBottom(h).reduced(1, 0));
+        const auto bar = inner.withWidth(inner.getWidth() / 2).withX(inner.getX() + ch * inner.getWidth() / 2).reduced(ch == 0 ? 0 : 1, 0)
+                             .withTrimmedRight(ch == 0 ? 1 : 0);
+        const int lit = bar.getBottom() - static_cast<int>(bar.getHeight() * pos);
+        for (int y = bar.getBottom() - 2; y >= bar.getY(); y -= 3)
+        {
+            const float height = static_cast<float>(bar.getBottom() - y) / static_cast<float>(juce::jmax(1, bar.getHeight()));
+            const auto colour = height > 0.92f ? colours::red500 : height > 0.75f ? colours::amber400 : colours::emerald500;
+            g.setColour(y >= lit ? colour : colour.withAlpha(0.1f));
+            g.fillRect(bar.getX(), y, bar.getWidth(), 2);
+        }
     }
 }
 
@@ -517,7 +533,7 @@ TrackHeaders::TrackHeaders(ProjectMirror& projectMirror, TimelineViewState& view
                            TimelineActions& timelineActions)
     : mirror(projectMirror), view(viewState), live(liveState), actions(timelineActions)
 {
-    addTrackButton.setTooltip("Add a new track");
+    addTrackButton.setTooltip("Add a track, then drag audio onto it from the library");
     addTrackButton.onClick = [this]
     {
         view.selectedTrackId = actions.addTrack();
@@ -632,9 +648,6 @@ void TrackHeaders::paintHeader(juce::Graphics& g)
         g.setColour(colours::zinc400);
         g.setFont(uiFont(11.0f, true));
         g.drawText("TEMPO", text.removeFromTop(16), juce::Justification::centredLeft);
-        g.setColour(colours::textFaint);
-        g.setFont(uiFont(10.0f));
-        g.drawText("BPM map", text.removeFromTop(14), juce::Justification::centredLeft);
     }
 }
 
