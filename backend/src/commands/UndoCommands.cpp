@@ -33,7 +33,8 @@ bool isUndoableEnvelopeType(const juce::String& type) noexcept
            type == "TRACK_BEAT_REPEAT_ADD" || type == "TRACK_BEAT_REPEAT_DELETE" ||
            type == "TRACK_ADD_PLUGIN" || type == "TRACK_REMOVE_PLUGIN" ||
            type == "TRACK_REORDER_PLUGIN" || type == "TRACK_SET_PLUGIN_BYPASS" ||
-           type == "CLIP_SET_ENVELOPE" || type == "CLIP_SET_GAIN" || type == "CLIP_SET_SOURCE_TEMPO" ||
+           type == "CLIP_SET_ENVELOPE" || type == "CLIP_SET_GAIN" || type == "CLIP_SET_FADES" ||
+           type == "TRACK_DUPLICATE" || type == "CLIP_SET_SOURCE_TEMPO" ||
            type == "CLIP_SET_REVERSED" || type == "CLIP_SET_BRAKE" ||
            type == "CLIP_SET_BACKSPIN" || type == "CLIP_SET_BEAT_OFFSET" ||
            type == "PROJECT_SET_REVERB" || type == "PROJECT_SET_DELAY" ||
@@ -98,6 +99,8 @@ juce::String prettyTransactionName(const juce::String& type)
     if (type == "TRACK_SET_PLUGIN_BYPASS") return "Bypass plugin";
     if (type == "CLIP_SET_ENVELOPE") return "Edit clip volume envelope";
     if (type == "CLIP_SET_GAIN") return "Change clip gain";
+    if (type == "CLIP_SET_FADES") return "Change clip fades";
+    if (type == "TRACK_DUPLICATE") return "Duplicate track";
     if (type == "CLIP_SET_SOURCE_TEMPO") return "Warp clip tempo";
     if (type == "CLIP_SET_REVERSED") return "Reverse clip";
     if (type == "CLIP_SET_BRAKE") return "Brake clip";
@@ -177,7 +180,7 @@ void beginUndoTransactionIfNeeded(const juce::String& type, const juce::var& pay
 
     juce::String idPart;
     if (type == "CLIP_MOVE" || type == "CLIP_TRIM" || type == "CLIP_SET_WARP" ||
-        type == "CLIP_SET_ENVELOPE" || type == "CLIP_SET_GAIN")
+        type == "CLIP_SET_ENVELOPE" || type == "CLIP_SET_GAIN" || type == "CLIP_SET_FADES")
     {
         idPart = readOptionalString(payload, "clipId").value_or(juce::String{});
     }

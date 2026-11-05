@@ -17,6 +17,8 @@ void handleClipColor(const juce::var& payload, ProjectState& projectState);
 void handleClipRemove(const juce::var& payload, AudioEngine& engine, ProjectState& projectState,
                       BridgeServer& bridge);
 void handleClipSetGain(const juce::var& payload, AudioEngine& engine, ProjectState& projectState, BridgeServer& bridge);
+// CLIP_SET_FADES {clipId, fadeInMs, fadeOutMs}: the clip's own fades.
+void handleClipSetFades(const juce::var& payload, AudioEngine& engine, ProjectState& projectState, BridgeServer& bridge);
 void handleClipSetSourceTempo(const juce::var& payload, AudioEngine& engine, ProjectState& projectState, BridgeServer& bridge);
 void handleClipSetEnvelope(const juce::var& payload, AudioEngine& engine, ProjectState& projectState,
                            BridgeServer& bridge);

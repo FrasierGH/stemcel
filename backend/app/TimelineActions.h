@@ -51,6 +51,8 @@ class TimelineActions
     void setClipEnvelope(const juce::String& clipId, const std::vector<EnvelopePoint>& points);
     // The clip's own gain, -24..+12 dB.
     void setClipGain(const juce::String& clipId, double gainDb);
+    // The clip's own fade in and out, in timeline ms (0 = none).
+    void setClipFades(const juce::String& clipId, double fadeInMs, double fadeOutMs);
     void setClipBrake(const juce::String& clipId, bool on);
     // `seconds` / `speed` > 0: the clip's own spin; otherwise the defaults (Preferences).
     void setClipBackspin(const juce::String& clipId, bool on, double seconds = 0.0, double speed = 0.0);
@@ -112,6 +114,8 @@ class TimelineActions
     void setTrackColor(const juce::String& trackId, int colorIndex);
     void setTrackHeight(const juce::String& trackId, double heightPx);
     void moveTrack(const juce::String& trackId, int newIndex);
+    // A copy of the track (clips, plugins, automation, settings) right after it; its id.
+    juce::String duplicateTrack(const juce::String& trackId);
 
     // ── transport & view ───────────────────────────────────────────────────
     void play();

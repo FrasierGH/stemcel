@@ -88,6 +88,9 @@ class TimelineView final : public juce::Component,
     void mouseDrag(const juce::MouseEvent&) override;
     void mouseUp(const juce::MouseEvent&) override;
     void mouseMove(const juce::MouseEvent&) override;
+    void mouseExit(const juce::MouseEvent&) override;
+    // For tests: where a clip's fade handle sits (fadeIn true: its fade in), in timeline pixels.
+    juce::Point<int> fadeHandleForTest(const juce::String& clipId, bool fadeIn) const;
     void mouseDoubleClick(const juce::MouseEvent&) override;
     void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
     void mouseMagnify(const juce::MouseEvent&, float scaleFactor) override;
@@ -120,6 +123,16 @@ class TimelineView final : public juce::Component,
     void placeLibraryItems(const juce::StringArray& ids, juce::String trackId, double at);
     // For tests: the mouse let go where it was pressed (the end of a drag that never moved).
     void releaseMouseForTest();
+    // For tests: the mouse pressed, dragged and let go at points on the timeline (real handlers).
+    void pressForTest(juce::Point<int> at, juce::ModifierKeys mods = {});
+    void dragForTest(juce::Point<int> to);
+    void releaseForTest(juce::Point<int> at);
+    juce::Rectangle<int> clipScreenBoundsForTest(const juce::String& clipId) const;
+    juce::String clipIdAtForTest(juce::Point<int> at) const
+    {
+        const auto hit = clipAt(at);
+        return hit.has_value() ? hit->clip->id : juce::String();
+    }
     std::function<void(const juce::String& clipId, const juce::StringArray& channels)> onSplitChannels;
 
     // Zoom keeping `anchorMs` under the same x (or the playhead/centre when unset).
@@ -155,7 +168,10 @@ class TimelineView final : public juce::Component,
         pan, // middle button held: the view follows the mouse
         transitionMove,  // a transition's label, dragged: the window moves
         transitionStart, // a transition's left edge
-        transitionEnd    // its right edge
+        transitionEnd,   // its right edge
+        boxSelect,       // dragged from empty space: a box selecting the clips it touches
+        fadeIn,          // a clip's fade-in handle (top left of its body)
+        fadeOut          // its fade-out handle (top right)
     };
 
     struct ClipHit
@@ -229,6 +245,35 @@ class TimelineView final : public juce::Component,
 
     DragKind drag = DragKind::none;
     juce::String dragClipId;
+    // The other selected clips moving with the dragged one: where each started, and its track's
+    // place in the project's track order (they keep their spacing and track offsets).
+    struct GroupClip
+    {
+        juce::String id;
+        double startMs = 0.0, endMs = 0.0;
+        int trackIndex = 0;
+    };
+    std::vector<GroupClip> dragGroup;
+    // A fade being dragged: the clip's fade lengths as they would be.
+    double fadeDragIn = 0.0, fadeDragOut = 0.0;
+    juce::String hoverClipId; // fade handles show on the clip under the pointer
+    // The clip's fades over its body (shaded above the curve), and their handles.
+    void paintFades(juce::Graphics& g, const ClipModel& clip, juce::Rectangle<float> bounds, double inMs, double outMs,
+                    bool handles) const;
+    juce::Rectangle<float> fadeHandle(const ClipModel& clip, juce::Rectangle<float> bounds, double ms, bool fadeIn) const;
+    std::vector<juce::String> trackOrder() const;
+    // How many tracks the group moves (the dragged clip's track change, kept on the tracks).
+    int groupRowShift() const;
+    // Keeps the group on the timeline (none before zero) and on the tracks.
+    void clampGroupDrag();
+    // The box being dragged (anchored in content coordinates, so it holds as the view scrolls).
+    double boxAnchorMs = 0.0;
+    double boxAnchorContentY = 0.0;
+    std::optional<juce::Rectangle<float>> boxPreview;
+    std::set<juce::String> boxBase;
+    void selectInBox(juce::Rectangle<float> box);
+    juce::Point<int> testDownPos;
+    juce::MouseEvent testMouseEvent(juce::Point<int> at, juce::ModifierKeys mods) const;
     juce::String dragMarkerId;
     double dragAnchorMs = 0.0;
     double dragOriginStartMs = 0.0;

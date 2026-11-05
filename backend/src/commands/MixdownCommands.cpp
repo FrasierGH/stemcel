@@ -68,7 +68,7 @@ void handleMixdownStart(const juce::var& payload, stemcel::AudioEngine& engine,
     auto snapshot = stemcel::snapshotProjectForMixdown(
         projectState, engine.getBrakeDefaultSeconds(), engine.getBrakeDefaultCurve(),
         engine.getBackspinDefaultSeconds(), engine.getBackspinDefaultSpeed(),
-        engine.getBackspinDefaultCurve());
+        engine.getBackspinDefaultCurve(), payload.getProperty("onlyTrackId", {}).toString());
     // Use the live resolver so mixdown matches decoded-cache playback and warp timing.
     for (auto& trackSnap : snapshot.tracks)
     {

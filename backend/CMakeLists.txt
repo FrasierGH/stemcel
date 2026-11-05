@@ -814,6 +814,7 @@ if(STEMCEL_BUILD_NATIVE_APP)
         app/Theme.cpp
         app/TimelineActions.cpp
         app/TimelineView.cpp
+        app/TimeEdit.cpp
         app/Toasts.cpp
         app/TransitionEditor.cpp
         app/TransitionsPanel.cpp

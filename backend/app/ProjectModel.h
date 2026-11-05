@@ -61,6 +61,7 @@ struct ClipModel
     bool pendingAutoWarp = false;
     std::vector<EnvelopePoint> envelope;
     double gainDb = 0.0; // the clip's own gain
+    double fadeInMs = 0.0, fadeOutMs = 0.0; // its own fades (timeline ms; 0 = none)
     // The source's own tempo when it drifts ({ms into the file, bpm}); empty when steady.
     std::vector<TempoPoint> sourceTempo;
     juce::var raw; // the full clip object (e.g. to tell a pinned tempoRatio from an absent one)

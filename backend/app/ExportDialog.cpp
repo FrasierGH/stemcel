@@ -97,6 +97,14 @@ ExportDialog::ExportDialog(EngineClient& client, AppPreferences& preferences, co
     length.addItem("Timeline selection", 3);
     length.setItemEnabled(3, selection.has_value());
     for (int i = 0; i < kLoudnessLabels.size(); ++i) loudness.addItem(kLoudnessLabels[i], i + 1);
+    what.addItem("The mix", 1);
+    what.addItem("Stems (a file per track)", 2);
+    what.setSelectedItemIndex(0, juce::dontSendNotification);
+    what.setTooltip("Stems: each track on its own, through its effects and sends, whatever its mute and solo; the files "
+                    "are named after the output with the track's name added");
+    addAndMakeVisible(what);
+    styleLabel(whatLabel);
+    addAndMakeVisible(whatLabel);
 
     // Base defaults (reseedOnOpen), then the project's persisted settings over them.
     const int projectRate = static_cast<int>(project.raw.getProperty("targetSampleRate", 0));
@@ -195,6 +203,19 @@ ExportDialog::ExportDialog(EngineClient& client, AppPreferences& preferences, co
     subscriptions.on("MIXDOWN_DONE",
                      [this](const juce::var& p)
                      {
+                         if (stemTotal > 0)
+                         {
+                             // A stem done: the next, or the lot reported together.
+                             if (!stemQueue.empty())
+                             {
+                                 startNextStem();
+                                 return;
+                             }
+                             const int total = std::exchange(stemTotal, 0);
+                             const auto first = stemFiles.empty() ? juce::File() : stemFiles.front();
+                             finished(true, "Exported " + juce::String(total) + " stems to " + first.getParentDirectory().getFileName(), first);
+                             return;
+                         }
                          juce::String message = "Exported " + juce::File(p.getProperty("filePath", {}).toString()).getFileName();
                          if (const auto l = p.getProperty("loudness", {}); l.isObject() && !l.getProperty("integratedLufs", {}).isVoid())
                              message << " (" << juce::String(static_cast<double>(l.getProperty("integratedLufs", 0.0)), 1) << " LUFS)";
@@ -206,13 +227,53 @@ ExportDialog::ExportDialog(EngineClient& client, AppPreferences& preferences, co
                      [this](const juce::var& p)
                      {
                          const auto code = p.getProperty("code", {}).toString();
+                         stemQueue.clear();
+                         stemTotal = 0;
                          finished(false, code == "cancelled" ? juce::String("Export cancelled")
                                                              : "Export failed: " + p.getProperty("error", {}).toString(),
                                   {});
                      });
     refreshTracklist();
     updateEnablement();
-    setSize(620, 680);
+    setSize(620, 712);
+}
+
+std::vector<std::pair<juce::String, juce::File>> ExportDialog::plannedStems(const juce::File& file) const
+{
+    // Each track with clips, named after the output file and the track (made safe for a file name).
+    std::vector<std::pair<juce::String, juce::File>> out;
+    for (size_t i = 0; i < model.tracks.size(); ++i)
+    {
+        const auto& t = model.tracks[i];
+        if (t.clips.empty()) continue;
+        const auto name = (t.name.trim().isNotEmpty() ? t.name.trim() : "Track " + juce::String(static_cast<int>(i) + 1))
+                              .replaceCharacters("\\/:*?\"<>|", "_________");
+        out.emplace_back(t.id, file.getSiblingFile(file.getFileNameWithoutExtension() + " - " + name + "." + format()));
+    }
+    return out;
+}
+
+juce::StringArray ExportDialog::stemFileNamesForTest(const juce::File& file) const
+{
+    juce::StringArray names;
+    for (const auto& [id, f] : plannedStems(file)) names.add(f.getFileName());
+    return names;
+}
+
+void ExportDialog::startNextStem()
+{
+    if (stemQueue.empty()) return;
+    const auto [trackId, file] = stemQueue.front();
+    stemQueue.erase(stemQueue.begin());
+    auto* p = new juce::DynamicObject();
+    if (const auto* shared = stemPayload.getDynamicObject())
+        for (const auto& prop : shared->getProperties()) p->setProperty(prop.name, prop.value);
+    p->setProperty("outputPath", file.getFullPathName());
+    p->setProperty("onlyTrackId", trackId);
+    const int number = stemTotal - static_cast<int>(stemQueue.size());
+    progress = 0.0;
+    progressBar.setTextToDisplay("Stem " + juce::String(number) + " of " + juce::String(stemTotal));
+    engine.send("MIXDOWN_START", juce::var(p));
 }
 
 ExportDialog::~ExportDialog()
@@ -398,7 +459,19 @@ void ExportDialog::submit()
     auto file = juce::File(output.getText().trim());
     if (!file.hasFileExtension(format())) file = file.withFileExtension(format());
     output.setText(file.getFullPathName(), false);
-    if (!file.existsAsFile())
+    int existing = 0;
+    if (stems())
+    {
+        const auto planned = plannedStems(file);
+        if (planned.empty())
+        {
+            if (notify) notify("There are no clips on any track to export as stems.", true);
+            return;
+        }
+        for (const auto& [id, f] : planned) existing += f.existsAsFile() ? 1 : 0;
+    }
+    else existing = file.existsAsFile() ? 1 : 0;
+    if (existing == 0)
     {
         start(file);
         return;
@@ -406,7 +479,9 @@ void ExportDialog::submit()
     juce::AlertWindow::showAsync(juce::MessageBoxOptions()
                                      .withIconType(juce::MessageBoxIconType::QuestionIcon)
                                      .withTitle("Export Mixdown")
-                                     .withMessage(file.getFileName() + " already exists. Replace it?")
+                                     .withMessage(stems() ? juce::String(existing) + (existing == 1 ? " stem file already exists" : " stem files already exist")
+                                                              + ". Replace them?"
+                                                          : file.getFileName() + " already exists. Replace it?")
                                      .withButton("Replace")
                                      .withButton("Cancel"),
                                  [safe = juce::Component::SafePointer<ExportDialog>(this), file](int result)
@@ -484,6 +559,18 @@ void ExportDialog::start(const juce::File& file)
         if (c != &progressBar && c != &cancelButton && c != &exportButton) c->setEnabled(false);
     resized();
     startTimerHz(10);
+    if (stems())
+    {
+        // One render per track, in turn (MIXDOWN_DONE starts the next).
+        stemPayload = juce::var(p);
+        stemQueue = plannedStems(file);
+        stemFiles.clear();
+        for (const auto& [id, f] : stemQueue) stemFiles.push_back(f);
+        stemTotal = static_cast<int>(stemQueue.size());
+        file.getParentDirectory().createDirectory();
+        startNextStem();
+        return;
+    }
     engine.send("MIXDOWN_START", juce::var(p));
 }
 
@@ -498,7 +585,7 @@ void ExportDialog::finished(bool ok, const juce::String& message, const juce::Fi
     rendering = false;
     stopTimer();
     auto said = message;
-    if (ok && file.existsAsFile() && writeTracklist.getToggleState() && tracklistText.getText().trim().isNotEmpty())
+    if (ok && file.existsAsFile() && !stems() && writeTracklist.getToggleState() && tracklistText.getText().trim().isNotEmpty())
     {
         const auto list = file.withFileExtension("txt");
         if (list.replaceWithText(tracklistText.getText().trim() + "\n")) said << " with its tracklist";
@@ -547,6 +634,7 @@ void ExportDialog::resized()
         r.removeFromRight(6);
         output.setBounds(r);
     }
+    what.setBounds(row(whatLabel).removeFromLeft(260));
     {
         auto r = row(formatLabel);
         formatBox.setBounds(r.removeFromLeft(130));

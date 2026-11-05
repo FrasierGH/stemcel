@@ -90,11 +90,19 @@ std::vector<double> clipBeatsMs(const ProjectModel& model, const ClipModel& clip
     const auto* item = model.findLibraryItem(clip.libraryItemId);
     if (item == nullptr) return out;
     std::vector<double> sourceSec = item->beats;
+    const double endSec = (clip.inMs + clip.durationMs) / 1000.0;
     if (sourceSec.empty() && item->bpm > 0.0)
     {
         const double period = 60.0 / item->bpm;
-        const double endSec = (clip.inMs + clip.durationMs) / 1000.0;
         for (double t = std::fmod(item->beatAnchorSec, period); t <= endSec; t += period) sourceSec.push_back(t);
+    }
+    else if (item->bpm > 0.0 && sourceSec.back() + 60.0 / item->bpm <= endSec)
+    {
+        // The beat tracker listens to the first minute only (BpmDetector::kBeatTrackingSeconds);
+        // past its last beat the track's grid carries on at its tempo, to the end of the window.
+        const double period = 60.0 / item->bpm;
+        const double last = sourceSec.back();
+        for (int k = 1; last + k * period <= endSec + 1.0e-6; ++k) sourceSec.push_back(last + k * period);
     }
     if (sourceSec.empty()) return out;
     // Bars count from the beat nearest the anchor (the first downbeat).

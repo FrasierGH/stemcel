@@ -56,6 +56,12 @@ enum : juce::CommandID
     toggleMetronome,
     toggleSnap,
     openClipEditor,
+    zoomToSelection,
+    nudgeLeft,
+    nudgeRight,
+    rippleDelete,
+    insertTime,
+    duplicateTrack,
 };
 } // namespace CommandIds
 
@@ -66,8 +72,17 @@ class MainComponent final : public juce::Component,
                             public juce::MenuBarModel
 {
   public:
+    // What the engine has reported, carried to a window rebuilt for a new theme.
+    // No member initialisers: clang can't take `Status{}` as a default argument within the
+    // class otherwise (value-initialised, engineReady is false).
+    struct Status
+    {
+        bool engineReady;
+        juce::String audioState, deviceName;
+    };
     MainComponent(EngineClient& engine, AppPreferences& prefs, AppController& controller,
-                  juce::ApplicationCommandManager& commands);
+                  juce::ApplicationCommandManager& commands, Status status = Status{});
+    Status status() const { return {engineReady, audioState, deviceName}; }
     ~MainComponent() override;
 
     void paint(juce::Graphics&) override;

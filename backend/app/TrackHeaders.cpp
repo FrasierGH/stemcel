@@ -276,6 +276,14 @@ void TrackHeaderRow::mouseMove(const juce::MouseEvent& e)
 
 void TrackHeaderRow::mouseDrag(const juce::MouseEvent& e)
 {
+    if (reorderArmed && !reordering && std::abs(e.getDistanceFromDragStartY()) > 4) reordering = true;
+    if (reordering)
+    {
+        setMouseCursor(juce::MouseCursor::DraggingHandCursor);
+        if (onReorderDrag && getParentComponent() != nullptr)
+            onReorderDrag(e.getEventRelativeTo(getParentComponent()).y);
+        return;
+    }
     if (resizingLane >= 0 && resizingLane < static_cast<int>(lanes.size()))
     {
         auto next = lanes;
@@ -291,10 +299,16 @@ void TrackHeaderRow::mouseDrag(const juce::MouseEvent& e)
     if (next != clipLaneHeight) actions.setTrackHeight(trackId, next);
 }
 
-void TrackHeaderRow::mouseUp(const juce::MouseEvent&)
+void TrackHeaderRow::mouseUp(const juce::MouseEvent& e)
 {
     resizing = false;
     resizingLane = -1;
+    reorderArmed = false;
+    if (std::exchange(reordering, false))
+    {
+        setMouseCursor(juce::MouseCursor::NormalCursor);
+        if (onReorderDrop && getParentComponent() != nullptr) onReorderDrop(e.getEventRelativeTo(getParentComponent()).y);
+    }
 }
 
 void TrackHeaderRow::mouseDown(const juce::MouseEvent& e)
@@ -313,6 +327,8 @@ void TrackHeaderRow::mouseDown(const juce::MouseEvent& e)
     }
     view.selectedTrackId = trackId;
     view.changed();
+    // A press on the header itself (its controls take their own) can drag the track.
+    reorderArmed = !isMaster() && !e.mods.isPopupMenu() && e.y < clipLaneHeight && !name.getBounds().contains(e.getPosition());
     for (const auto& hit : laneHits)
     {
         if (hit.caption.contains(e.getPosition()))
@@ -507,6 +523,7 @@ void TrackHeaderRow::showMenu()
     menu.addItem(1, "Rename");
     menu.addItem(3, "Move Up", displayIndex > 0);
     menu.addItem(4, "Move Down");
+    menu.addItem(5, "Duplicate Track");
     menu.addSubMenu("Colour", colourMenu);
     menu.addSubMenu("Automation", automationMenu);
     menu.addSeparator();
@@ -519,6 +536,11 @@ void TrackHeaderRow::showMenu()
                            else if (result == 3) actions.moveTrack(id, displayIndex - 1);
                            else if (result == 4) actions.moveTrack(id, displayIndex + 1);
                            else if (result == 2) actions.removeTrack(id);
+                           else if (result == 5)
+                           {
+                               view.selectedTrackId = actions.duplicateTrack(id);
+                               view.changed();
+                           }
                            else if (result >= 300)
                            {
                                // Toggle the lane for that parameter.
@@ -606,6 +628,18 @@ void TrackHeaders::rebuild()
         {
             row = std::make_unique<TrackHeaderRow>(actions, view, live);
             addAndMakeVisible(*row);
+            row->onReorderDrag = [this](int y)
+            {
+                reorderSlot = reorderSlotAt(y);
+                repaint();
+            };
+            row->onReorderDrop = [this, id = track.id](int y)
+            {
+                const int slot = reorderSlotAt(y);
+                reorderSlot = -1;
+                repaint();
+                reorderTo(id, slot);
+            };
         }
         int clipHeight = 0;
         for (const auto& r : layout)
@@ -634,6 +668,54 @@ void TrackHeaders::rebuild()
 void TrackHeaders::paint(juce::Graphics& g)
 {
     g.fillAll(colours::zinc900);
+}
+
+int TrackHeaders::reorderSlotAt(int columnY) const
+{
+    // The gap above the first track whose middle is below the pointer.
+    const auto rows = layoutRows(mirror.model());
+    int slot = 0;
+    for (const auto& r : rows)
+    {
+        if (mirror.model().findTrack(r.trackId) == nullptr) continue; // the master
+        const int middle = r.top + view.headerHeight() - static_cast<int>(view.scrollY) + r.height / 2;
+        if (columnY > middle) ++slot;
+    }
+    return slot;
+}
+
+void TrackHeaders::reorderTo(const juce::String& trackId, int slot)
+{
+    const auto& tracks = mirror.model().tracks;
+    const auto it = std::find_if(tracks.begin(), tracks.end(), [&](const TrackModel& t) { return t.id == trackId; });
+    if (it == tracks.end() || slot < 0) return;
+    const int from = static_cast<int>(it - tracks.begin());
+    // Taken out first, so a gap below it is one index higher than where it lands.
+    const int to = slot > from ? slot - 1 : slot;
+    if (to != from) actions.moveTrack(trackId, to);
+}
+
+void TrackHeaders::reorderForTest(const juce::String& trackId, int slot)
+{
+    reorderTo(trackId, slot);
+}
+
+void TrackHeaders::paintOverChildren(juce::Graphics& g)
+{
+    if (reorderSlot < 0) return;
+    // Where the dragged track would land: a line across the column at that gap.
+    const auto rows = layoutRows(mirror.model());
+    int y = view.headerHeight() - static_cast<int>(view.scrollY);
+    int seen = 0;
+    for (const auto& r : rows)
+    {
+        if (mirror.model().findTrack(r.trackId) == nullptr) continue;
+        if (seen++ == reorderSlot) break;
+        y = r.top + view.headerHeight() - static_cast<int>(view.scrollY) + r.height;
+    }
+    if (reorderSlot == 0 && !rows.empty()) y = rows.front().top + view.headerHeight() - static_cast<int>(view.scrollY);
+    g.setColour(colours::accent);
+    g.fillRect(0, juce::jmax(view.headerHeight(), y - 1), getWidth(), 3);
 }
 
 void TrackHeaders::paintHeader(juce::Graphics& g)

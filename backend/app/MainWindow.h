@@ -21,7 +21,14 @@ class MainWindow final : public juce::DocumentWindow
     // Persists the window's bounds and maximised state into the preferences.
     void saveWindowState();
 
+    // A new theme: the content is built again in its colours (the projects stay open).
+    void rebuildContent();
+
   private:
+    void attachMenu();
+    void detachMenu();
+    EngineClient& engine;
+    juce::ApplicationCommandManager& commands;
     AppPreferences& prefs;
     AppController& controller;
     MainComponent* mainComponent = nullptr;

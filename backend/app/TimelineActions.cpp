@@ -239,6 +239,12 @@ void TimelineActions::replayClipProperties(const ClipModel& source, const juce::
     if (std::abs(source.beatOffsetMs) > 0.0)
         engine.send("CLIP_SET_BEAT_OFFSET", obj({{"clipId", newClipId}, {"beatOffsetMs", source.beatOffsetMs}}));
     if (includeLock && source.locked) engine.send("CLIP_SET_LOCKED", obj({{"clipId", newClipId}, {"locked", true}}));
+    if (source.fadeInMs > 0.0 || source.fadeOutMs > 0.0) setClipFades(newClipId, source.fadeInMs, source.fadeOutMs);
+}
+
+void TimelineActions::setClipFades(const juce::String& clipId, double fadeInMs, double fadeOutMs)
+{
+    engine.send("CLIP_SET_FADES", obj({{"clipId", clipId}, {"fadeInMs", juce::jmax(0.0, fadeInMs)}, {"fadeOutMs", juce::jmax(0.0, fadeOutMs)}}));
 }
 
 void TimelineActions::setClipGain(const juce::String& clipId, double gainDb)
@@ -309,6 +315,12 @@ juce::String TimelineActions::splitClipAt(const juce::String& clipId, double atM
                            {
                                setClipEnvelope(clipId, leftEnvelope);
                                if (!rightEnvelope.empty()) setClipEnvelope(newId, rightEnvelope);
+                           }
+                           // The fade in stays at the left half's start, the fade out goes with the right.
+                           if (clip.fadeInMs > 0.0 || clip.fadeOutMs > 0.0)
+                           {
+                               setClipFades(clipId, clip.fadeInMs, 0.0);
+                               setClipFades(newId, 0.0, clip.fadeOutMs);
                            }
                        });
     return newId;
@@ -625,6 +637,15 @@ void TimelineActions::setTrackHeight(const juce::String& trackId, double heightP
 void TimelineActions::moveTrack(const juce::String& trackId, int newIndex)
 {
     engine.send("TRACK_REORDER", obj({{"trackId", trackId}, {"newIndex", newIndex}}));
+}
+
+juce::String TimelineActions::duplicateTrack(const juce::String& trackId)
+{
+    const auto* track = model().findTrack(trackId);
+    if (track == nullptr) return {};
+    const auto id = EngineClient::newId("track");
+    engine.send("TRACK_DUPLICATE", obj({{"trackId", trackId}, {"newTrackId", id}, {"name", track->name + " copy"}}));
+    return id;
 }
 
 void TimelineActions::play()

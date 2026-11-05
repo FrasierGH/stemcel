@@ -110,6 +110,9 @@ const juce::Identifier ProjectState::kBitCrusherBoost{"bitCrusherBoost"};
 const juce::Identifier ProjectState::kBitCrusherMix{"bitCrusherMix"};
 const juce::Identifier ProjectState::kEnvelopePoints{"envelopePoints"};
 const juce::Identifier ProjectState::kClipGainDb{"gainDb"};
+// Not "fadeInMs"/"fadeOutMs": those were an old, removed clip property that loading strips.
+const juce::Identifier ProjectState::kClipFadeInMs{"userFadeInMs"};
+const juce::Identifier ProjectState::kClipFadeOutMs{"userFadeOutMs"};
 const juce::Identifier ProjectState::kSourceTempo{"sourceTempo"};
 const juce::Identifier ProjectState::kEnvelopeTimeMs{"timeMs"};
 const juce::Identifier ProjectState::kEnvelopeGain{"gain"};

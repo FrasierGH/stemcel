@@ -153,7 +153,7 @@ bool applyUndoClipChangesIncremental(stemcel::AudioEngine& engine,
     // refresh the engine's edge fades, and only when the project actually has transitions — this
     // mirrors the forward geometry-edit path (reconcileTransitionsAfterGeometryEdit) and keeps a
     // transition-free undo genuinely O(touched clips) with no project-wide prefetch churn.
-    if (projectState.hasAnyTransition())
+    if (projectState.hasAnyTransition() || projectState.hasAnyClipFade())
         stemcel::syncClipEdgeFades(engine, projectState);
     return true;
 }

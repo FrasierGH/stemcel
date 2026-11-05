@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Timeline**: drag a box from empty space to select the clips it touches (with Shift or Cmd/Ctrl, added to the selection).
+- **Theme** changes in Preferences apply at once, without restarting; open projects stay as they were.
+- **Clip fades**: drag the small handle at a clip's top left or right corner for a fade in or out (Remove Fades on the clip menu). A transition's crossfade on the same edge takes its place; exports include them.
+- **Duplicate Track** (track menu, Track menu, Cmd/Ctrl+Shift+D): a copy with its clips, plugins, automation and settings, under the original.
+- **Tracks can be dragged by their header** to a new place in the list.
+- **Ripple Delete** (Shift+Delete): deletes the selected clips and closes the gap on their tracks; with no clips selected, deletes the selected time from every track.
+- **Insert Time** (Cmd/Ctrl+Shift+I): opens a gap the length of the selected range at its start, or a bar at the playhead, moving everything after it later. Markers, automation and tempo changes move with the clips.
+- **Zoom to Selection** (Z): fits the selected range, or the selected clips, in view.
+- **Export stems**: Export Mixdown can write a file per track, each heard alone through its own effects and sends.
+- **Nudge Left / Right** are now in the Edit menu (Shift+Left/Right, as before).
+
+### Fixed
+
+- Dragging one of several selected clips moves them all, keeping their spacing and tracks (Alt copies them all).
+- The Auto Mix window's track list scrolls past ten tracks, so the Mix and Cancel buttons are always on screen.
+- Auto Mix at **Full length** cut every track off after about a minute: the beat tracker only listens to a track's first minute, and the joins were placed among those beats. A track's beats now carry on along its grid to its end, so a full-length track plays to its closing bars (beat sync past the first minute benefits too).
+
 ## 0.3.1
 
 ### Added

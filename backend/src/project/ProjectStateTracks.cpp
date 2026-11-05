@@ -3,6 +3,7 @@
 #include "dsp/SaturationParameters.h"
 
 #include <cmath>
+#include <map>
 
 namespace stemcel
 {
@@ -74,6 +75,64 @@ juce::StringArray ProjectState::getTrackIds() const
         ids.add(child.getProperty(juce::Identifier{"id"}).toString());
     }
     return ids;
+}
+
+bool ProjectState::duplicateTrack(const juce::String& trackId, const juce::String& newTrackId, const juce::String& newName)
+{
+    const auto source = findTrack(trackId);
+    if (!source.isValid() || newTrackId.isEmpty()) return false;
+    // A deep copy: var arrays (automation, envelopes) are copied through JSON so the two
+    // tracks never share an object.
+    const auto deepCopy = [](const juce::var& v) { return juce::JSON::parse(juce::JSON::toString(v, true)); };
+    juce::ValueTree copy(source.getType());
+    for (int i = 0; i < source.getNumProperties(); ++i)
+    {
+        const auto key = source.getPropertyName(i);
+        copy.setProperty(key, deepCopy(source.getProperty(key)), nullptr);
+    }
+    copy.setProperty(kId, newTrackId, nullptr);
+    if (newName.isNotEmpty()) copy.setProperty(kName, newName, nullptr);
+
+    std::map<juce::String, juce::String> clipIds, slotIds;
+    const auto freshId = [](const juce::String& prefix) { return prefix + "-" + juce::Uuid().toDashedString(); };
+    for (int i = 0; i < source.getNumChildren(); ++i)
+    {
+        const auto child = source.getChild(i);
+        juce::ValueTree c(child.getType());
+        for (int p = 0; p < child.getNumProperties(); ++p)
+        {
+            const auto key = child.getPropertyName(p);
+            c.setProperty(key, deepCopy(child.getProperty(key)), nullptr);
+        }
+        for (int g = 0; g < child.getNumChildren(); ++g) c.appendChild(child.getChild(g).createCopy(), nullptr);
+        const auto oldId = child.getProperty(kId).toString();
+        if (child.hasType(kClip))
+            c.setProperty(kId, clipIds[oldId] = freshId("clip"), nullptr);
+        else if (child.hasType(juce::Identifier{"PLUGIN"}))
+            c.setProperty(kId, slotIds[oldId] = juce::Uuid().toDashedString(), nullptr);
+        else if (oldId.isNotEmpty())
+            c.setProperty(kId, freshId(child.getType().toString().toLowerCase()), nullptr);
+        copy.appendChild(c, nullptr);
+    }
+    // Transitions name their clips; automation lanes name their plugin slots.
+    for (int i = 0; i < copy.getNumChildren(); ++i)
+    {
+        auto c = copy.getChild(i);
+        if (!c.hasType(kTransition)) continue;
+        for (const auto& key : {kLeftClipId, kRightClipId})
+            if (const auto it = clipIds.find(c.getProperty(key).toString()); it != clipIds.end()) c.setProperty(key, it->second, nullptr);
+    }
+    if (auto* lanes = copy.getProperty(kAutomation).getArray())
+        for (auto& lane : *lanes)
+            if (auto* o = lane.getDynamicObject())
+            {
+                auto paramId = o->getProperty(kAutomationParamId).toString();
+                for (const auto& [from, to] : slotIds)
+                    if (paramId.startsWith("plugin:" + from + ":")) paramId = "plugin:" + to + paramId.fromFirstOccurrenceOf("plugin:" + from, false, false);
+                o->setProperty(kAutomationParamId, paramId);
+            }
+    root.addChild(copy, root.indexOf(source) + 1, &undoManager);
+    return true;
 }
 
 bool ProjectState::moveTrack(const juce::String& trackId, int newIndex)

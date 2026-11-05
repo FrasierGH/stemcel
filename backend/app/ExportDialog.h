@@ -76,6 +76,21 @@ class ExportDialog final : public juce::Component, private juce::Timer
     juce::TextEditor tracklistText;
     bool tracklistEdited = false;
     juce::TextButton exportButton{"Export"}, cancelButton{"Cancel"};
+    // The mix, or stems: a file per track (named "<file> - <track>"), each heard alone.
+    juce::Label whatLabel{{}, "Export"};
+    juce::ComboBox what;
+    bool stems() const { return what.getSelectedItemIndex() == 1; }
+    // Stems still to render (track id, file), how many in all, and the payload they share.
+    std::vector<std::pair<juce::String, juce::File>> stemQueue;
+    std::vector<juce::File> stemFiles;
+    int stemTotal = 0;
+    juce::var stemPayload;
+    std::vector<std::pair<juce::String, juce::File>> plannedStems(const juce::File& file) const;
+    void startNextStem();
+  public:
+    // For tests: the stem files an export to `file` would write.
+    juce::StringArray stemFileNamesForTest(const juce::File& file) const;
+  private:
 
     // Progress view.
     double progress = 0.0;

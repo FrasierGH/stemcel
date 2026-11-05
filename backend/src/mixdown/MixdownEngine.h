@@ -185,7 +185,9 @@ MixdownSnapshot snapshotProjectForMixdown(
     double brakeCurve = BrakeSnapshot::kDefaultCurvePower,
     double backspinSeconds = BackspinSnapshot::kDefaultSpinSeconds,
     double backspinSpeed = BackspinSnapshot::kDefaultSpinSpeed,
-    double backspinCurve = BackspinSnapshot::kDefaultCurvePower);
+    double backspinCurve = BackspinSnapshot::kDefaultCurvePower,
+    // Only this track (a stem), heard whatever the mute and solo buttons say; empty: the mix.
+    const juce::String& onlyTrackId = {});
 
 double computeLastClipEndMs(const MixdownSnapshot& snapshot);
 

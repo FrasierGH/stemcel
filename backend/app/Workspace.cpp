@@ -1,5 +1,7 @@
 #include "Workspace.h"
 
+#include "TimeEdit.h"
+
 #include "KeyWheel.h"
 
 #include "AutoMix.h"
@@ -622,6 +624,84 @@ void Workspace::zoomToFit()
     timeline.zoomToFit();
 }
 
+bool Workspace::hasRangeSelection() const
+{
+    const auto& sel = mirror.model().timelineSelection;
+    return sel.has_value() && sel->second - sel->first > 1.0;
+}
+
+void Workspace::zoomToSelection()
+{
+    const auto& model = mirror.model();
+    if (hasRangeSelection())
+    {
+        timeline.revealRange(model.timelineSelection->first, model.timelineSelection->second);
+        return;
+    }
+    double from = 0.0, to = 0.0;
+    bool any = false;
+    juce::String firstTrack;
+    for (const auto& id : view.selectedClipIds)
+        if (const auto* c = model.findClip(id))
+        {
+            from = any ? juce::jmin(from, c->offsetMs) : c->offsetMs;
+            to = any ? juce::jmax(to, c->endMs()) : c->endMs();
+            if (!any) firstTrack = c->trackId;
+            any = true;
+        }
+    if (any) timeline.revealRange(from, to, firstTrack);
+}
+
+void Workspace::nudgeSelection(int direction, bool fine)
+{
+    const double step = fine ? 10.0 : (actions.snapStepMs() > 0.0 ? actions.snapStepMs() : 10.0);
+    const double delta = direction < 0 ? -step : step;
+    engine.inUndoGroup("Nudge clips",
+                       [&]
+                       {
+                           for (const auto& id : view.selectedClipIds)
+                               if (const auto* c = mirror.model().findClip(id); c != nullptr && !c->locked)
+                                   actions.moveClip(id, juce::jmax(0.0, c->offsetMs + delta), c->trackId);
+                       });
+}
+
+void Workspace::rippleDelete()
+{
+    if (!view.selectedClipIds.empty())
+    {
+        timeedit::rippleDelete(actions, mirror, view.selectedClipIds);
+        view.selectedClipIds.clear();
+        view.changed();
+        return;
+    }
+    if (hasRangeSelection())
+        timeedit::deleteTime(actions, mirror, mirror.model().timelineSelection->first, mirror.model().timelineSelection->second);
+}
+
+void Workspace::insertTime()
+{
+    const auto& model = mirror.model();
+    if (hasRangeSelection())
+    {
+        timeedit::insertTime(actions, mirror, model.timelineSelection->first,
+                             model.timelineSelection->second - model.timelineSelection->first);
+        return;
+    }
+    // A bar (four beats at the tempo there) at the playhead.
+    const auto curve = model.tempoCurve();
+    const double at = live.positionMs;
+    timeedit::insertTime(actions, mirror, at, curve.msAtBeat(curve.beatAt(at) + 4.0) - at);
+}
+
+void Workspace::duplicateSelectedTrack()
+{
+    if (mirror.model().findTrack(view.selectedTrackId) == nullptr) return;
+    const auto id = actions.duplicateTrack(view.selectedTrackId);
+    if (id.isEmpty()) return;
+    view.selectedTrackId = id;
+    view.changed();
+}
+
 bool Workspace::keyPressed(const juce::KeyPress& key)
 {
     const auto mods = key.getModifiers();
@@ -648,6 +728,7 @@ bool Workspace::keyPressed(const juce::KeyPress& key)
         case 'n': toggleSnap(); return true;
         case 'e': openClipEditorOnSelection(); return true;
         case 'x': toggleMixer(); return true;
+        case 'z': zoomToSelection(); return true;
         case ',': stepBars(-1); return true;
         case '.': stepBars(1); return true;
         default: break;
@@ -679,7 +760,9 @@ bool Workspace::keyPressed(const juce::KeyPress& key)
     }
     if (code == juce::KeyPress::deleteKey || code == juce::KeyPress::backspaceKey)
     {
-        deleteSelection();
+        // Shift: ripple delete, closing the gap.
+        if (mods.isShiftDown()) rippleDelete();
+        else deleteSelection();
         return true;
     }
     if (code == juce::KeyPress::homeKey)
@@ -706,15 +789,7 @@ bool Workspace::keyPressed(const juce::KeyPress& key)
     if ((code == juce::KeyPress::leftKey || code == juce::KeyPress::rightKey) && mods.isShiftDown())
     {
         // Nudge selected clips by one grid step (Shift+Alt: 10 ms).
-        const double step = mods.isAltDown() ? 10.0 : (actions.snapStepMs() > 0.0 ? actions.snapStepMs() : 10.0);
-        const double delta = code == juce::KeyPress::leftKey ? -step : step;
-        engine.inUndoGroup("Nudge clips",
-                           [&]
-                           {
-                               for (const auto& id : view.selectedClipIds)
-                                   if (const auto* c = mirror.model().findClip(id); c != nullptr && !c->locked)
-                                       actions.moveClip(id, c->offsetMs + delta, c->trackId);
-                           });
+        nudgeSelection(code == juce::KeyPress::leftKey ? -1 : 1, mods.isAltDown());
         return true;
     }
     return false;

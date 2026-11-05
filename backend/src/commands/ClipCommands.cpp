@@ -113,6 +113,21 @@ void handleClipSetGain(const juce::var& payload, stemcel::AudioEngine& engine, s
     broadcastApplied(bridge, "CLIP_GAIN_APPLIED", {{"clipId", clipId}, {"gainDb", stored}});
 }
 
+void handleClipSetFades(const juce::var& payload, stemcel::AudioEngine& engine, stemcel::ProjectState& projectState,
+                        stemcel::BridgeServer& bridge)
+{
+    const juce::String clipId = tryGetRequiredString(payload, "clipId").value_or(juce::String{});
+    const auto in = tryGetNumber(payload, "fadeInMs");
+    const auto out = tryGetNumber(payload, "fadeOutMs");
+    if (clipId.isEmpty() || !in.has_value() || !out.has_value()) return;
+    if (!projectState.setClipFades(clipId, *in, *out)) return;
+    const auto fade = projectState.getClipEdgeFade(clipId);
+    engine.setClipEdgeFade(clipId, fade.hasFadeIn, fade.fadeInStartMs, fade.fadeInEndMs, fade.hasFadeOut,
+                           fade.fadeOutStartMs, fade.fadeOutEndMs, fade.fadeInCurve, fade.fadeOutCurve);
+    const auto [storedIn, storedOut] = projectState.getClipFades(clipId);
+    broadcastApplied(bridge, "CLIP_FADES_APPLIED", {{"clipId", clipId}, {"fadeInMs", storedIn}, {"fadeOutMs", storedOut}});
+}
+
 void handleClipSetSourceTempo(const juce::var& payload, stemcel::AudioEngine& engine, stemcel::ProjectState& projectState,
                               stemcel::BridgeServer& bridge)
 {

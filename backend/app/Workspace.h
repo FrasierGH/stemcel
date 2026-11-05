@@ -55,6 +55,16 @@ class Workspace final : public juce::Component, public juce::DragAndDropContaine
     void togglePlay();
     void zoom(double factor);
     void zoomToFit();
+    // The range selection, else the selected clips, filling the view.
+    void zoomToSelection();
+    // Selected clips by a grid step (Alt: 10 ms) left (-1) or right (+1).
+    void nudgeSelection(int direction, bool fine = false);
+    // The selected clips, or with none the selected range, deleted and the gap closed.
+    void rippleDelete();
+    // A gap the length of the selected range at its start, else a bar at the playhead.
+    void insertTime();
+    void duplicateSelectedTrack();
+    bool hasRangeSelection() const;
     bool hasClipSelection() const { return !view.selectedClipIds.empty(); }
     void importWithDialog();
     void showLibraryTab(int index);

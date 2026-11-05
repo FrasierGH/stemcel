@@ -200,6 +200,14 @@ class ProjectState : public juce::ValueTree::Listener
     // A clip's own gain, -24..+12 dB (0, the default, is not stored), on top of its envelope.
     bool setClipGainDb(const juce::String& clipId, double gainDb);
     double getClipGainDb(const juce::String& clipId) const;
+    // A clip's own fade in and out (timeline ms from its start and to its end; 0 = none). A
+    // transition's crossfade on the same edge takes its place while there is one.
+    bool setClipFades(const juce::String& clipId, double fadeInMs, double fadeOutMs);
+    std::pair<double, double> getClipFades(const juce::String& clipId) const;
+    bool hasAnyClipFade() const;
+    // A copy of a track (clips, transitions, plugins, automation, settings) under new ids,
+    // placed right after it. Returns false when the track isn't there.
+    bool duplicateTrack(const juce::String& trackId, const juce::String& newTrackId, const juce::String& newName);
 
     // Per-track effect automation: one `automation` array property holds a lane
     // per automated parameter (`{ paramId, points: [{ timeMs, value }] }`). A lane
@@ -1160,6 +1168,8 @@ class ProjectState : public juce::ValueTree::Listener
     // Envelope stays one array property for atomic edits.
     static const juce::Identifier kEnvelopePoints;
     static const juce::Identifier kClipGainDb;
+    static const juce::Identifier kClipFadeInMs;
+    static const juce::Identifier kClipFadeOutMs;
     static const juce::Identifier kSourceTempo;
     static const juce::Identifier kEnvelopeTimeMs;
     static const juce::Identifier kEnvelopeGain;
