@@ -11,7 +11,7 @@ endif()
 set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS version for the backend")
 
 project(StemcelBackend
-    VERSION 0.3.1
+    VERSION 0.3.2
     DESCRIPTION "Stemcel headless audio backend"
     LANGUAGES C CXX)
 
