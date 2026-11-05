@@ -3115,6 +3115,39 @@ void SmokeTest::addTempoJourney()
     steps.back().poll = true;
     // Auto mix aiming at a play time (12 s here, the test tracks being short): the join starts
     // on a bar line, the incoming track's downbeats sit on the grid, the outgoing ends with it.
+    // Detected beats stop after a minute (the tracker hears the first 60 s): a clip's beats
+    // still run to its end, on its grid, so Auto Mix's full length and beat sync reach it.
+    steps.push_back({"beats past the first minute",
+                     [this] { mirror.refreshNow(); },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         auto copy = model();
+                         LibraryItemModel* item = nullptr;
+                         for (auto& it : copy.library)
+                             if (item == nullptr && it.bpm > 0.0 && it.beats.size() >= 16 && it.durationMs > 0.0) item = &it;
+                         if (item == nullptr) return false;
+                         // As if the tracker had stopped at a quarter of the way through.
+                         const auto full = item->beats.size();
+                         item->beats.resize(full / 4);
+                         ClipModel clip;
+                         clip.id = "probe";
+                         clip.libraryItemId = item->id;
+                         clip.durationMs = clip.effectiveDurationMs = item->durationMs;
+                         std::vector<size_t> down;
+                         const auto beats = beatsync::clipBeatsMs(copy, clip, 0.0, &down);
+                         const double period = 60000.0 / item->bpm;
+                         const bool reaches = !beats.empty() && beats.back() >= item->durationMs - period * 1.01;
+                         double worstGap = 0.0;
+                         for (size_t i = 1; i < beats.size(); ++i) worstGap = juce::jmax(worstGap, beats[i] - beats[i - 1]);
+                         const bool even = worstGap < period * 1.5;
+                         const bool bars = down.size() >= beats.size() / 4 - 1 && down.size() <= beats.size() / 4 + 1;
+                         report.add("beats past the first minute: " + juce::String(static_cast<int>(full / 4)) + " detected, "
+                                    + juce::String(static_cast<int>(beats.size())) + " to the end (" + juce::String(beats.empty() ? 0.0 : beats.back() / 1000.0, 1)
+                                    + " of " + juce::String(item->durationMs / 1000.0, 1) + " s), " + juce::String(static_cast<int>(down.size())) + " downbeats");
+                         return reaches && even && bars;
+                     }});
+    steps.back().poll = true;
     steps.push_back({"auto mix with a target play time",
                      [this]
                      {

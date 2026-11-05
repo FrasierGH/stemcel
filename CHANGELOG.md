@@ -19,6 +19,7 @@
 
 - Dragging one of several selected clips moves them all, keeping their spacing and tracks (Alt copies them all).
 - The Auto Mix window's track list scrolls past ten tracks, so the Mix and Cancel buttons are always on screen.
+- Auto Mix at **Full length** cut every track off after about a minute: the beat tracker only listens to a track's first minute, and the joins were placed among those beats. A track's beats now carry on along its grid to its end, so a full-length track plays to its closing bars (beat sync past the first minute benefits too).
 
 ## 0.3.1
 
