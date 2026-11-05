@@ -73,13 +73,15 @@ class MainComponent final : public juce::Component,
 {
   public:
     // What the engine has reported, carried to a window rebuilt for a new theme.
+    // No member initialisers: clang can't take `Status{}` as a default argument within the
+    // class otherwise (value-initialised, engineReady is false).
     struct Status
     {
-        bool engineReady = false;
+        bool engineReady;
         juce::String audioState, deviceName;
     };
     MainComponent(EngineClient& engine, AppPreferences& prefs, AppController& controller,
-                  juce::ApplicationCommandManager& commands, Status status = {});
+                  juce::ApplicationCommandManager& commands, Status status = Status{});
     Status status() const { return {engineReady, audioState, deviceName}; }
     ~MainComponent() override;
 
