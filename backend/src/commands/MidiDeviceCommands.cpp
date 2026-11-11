@@ -6,6 +6,7 @@
 #include "ScratchSessionCommands.h"
 #include "midi/MidiControllerMapping.h"
 #include "midi/MidiScratchRouting.h"
+#include "performance/PerformanceMapping.h"
 
 #include <juce_audio_devices/juce_audio_devices.h>
 
@@ -35,6 +36,8 @@ constexpr juce::int64 relativeBroadcastIntervalMs = 33;
 // receives a sustained host-output stream that wakes it out of demo mode and
 // lands the blank/authoritative state once its port is ready.
 constexpr int kFeedbackWarmupMs = 2000;
+
+std::atomic<MidiPerformanceSink*> g_performanceSink{nullptr};
 
 struct QueuedMidiMessage
 {
@@ -172,6 +175,15 @@ public:
         const auto timestamp = juce::Time::currentTimeMillis();
         lastActivityMs.store(timestamp, std::memory_order_relaxed);
 
+        // Live performance mode takes this controller's input on this thread, straight to the
+        // decks, instead of the timeline controls.
+        if (toPerformance.load(std::memory_order_acquire))
+            if (auto* sink = g_performanceSink.load(std::memory_order_acquire))
+            {
+                sink->handleMidi(identifier, raw, size);
+                return;
+            }
+
         int start1 = 0;
         int size1 = 0;
         int start2 = 0;
@@ -212,6 +224,7 @@ public:
     }
 
     static constexpr int queueCapacity = 512;
+    std::atomic<bool> toPerformance{false};
     juce::String name;
     juce::String identifier;
     bool hasControllerMapping = false;
@@ -255,6 +268,8 @@ public:
                                   manufacturer.has_value()
                                       ? juce::var(*manufacturer)
                                       : juce::var());
+            if (const auto mapping = perf::Mapping::forDevice(device.name))
+                inputObj->setProperty("performanceMapping", mapping->name());
             inputObj->setProperty("controllerProfile",
                                   manufacturer.has_value()
                                       ? juce::var("MIDI deck")
@@ -300,7 +315,7 @@ public:
         for (const auto& device : juce::MidiInput::getAvailableDevices())
         {
             if (!identifiers.contains(device.identifier)) continue;
-            if (!supportsMidiControllerMapping(device.name))
+            if (!supportsMidiControllerMapping(device.name) && perf::Mapping::forDevice(device.name) == nullptr)
             {
                 stemcel::log::warn("midi", "ignoring unsupported MIDI input enable request: " +
                                               device.name);
@@ -326,12 +341,17 @@ public:
                                 " initFrames=" +
                                 juce::String(static_cast<int>(
                                     active->controllerMapper.initMessages().size())));
-                active->resetControllerFeedback();
+                if (auto* sink = g_performanceSink.load())
+                    active->toPerformance.store(sink->acceptsDevice(active->name));
+                if (!active->toPerformance.load()) active->resetControllerFeedback();
                 active->input->start();
                 // Sent after the input starts so the controller's position-report
                 // replies to the init request are captured rather than dropped.
-                active->sendControllerInit();
+                if (!active->toPerformance.load()) active->sendControllerInit();
                 activeInputs.push_back(std::move(active));
+                if (auto* sink = g_performanceSink.load())
+                    if (activeInputs.back()->toPerformance.load())
+                        sink->deviceOpened(activeInputs.back()->identifier, activeInputs.back()->name);
             }
             else
             {
@@ -396,7 +416,7 @@ public:
             const auto messages = active->controllerMapper.selectedTrackMeterMessages(
                 playing ? peakL : 0.0F, playing ? peakR : 0.0F);
             const auto value = messages[0].data2;
-            if (active->output == nullptr) continue;
+            if (active->output == nullptr || active->toPerformance.load()) continue;
             if (active->lastMeterValue == value && !active->shouldForceFeedback(nowMs)) continue;
             active->lastMeterValue = value;
             sendControllerMessages(active->output.get(), messages);
@@ -409,7 +429,7 @@ public:
         const auto nowMs = juce::Time::currentTimeMillis();
         for (const auto& active : activeInputs)
         {
-            if (active->output == nullptr) continue;
+            if (active->output == nullptr || active->toPerformance.load()) continue;
             if (active->lastPlayingValue == value && !active->shouldForceFeedback(nowMs)) continue;
             active->lastPlayingValue = value;
             sendControllerMessages(
@@ -424,7 +444,7 @@ public:
         const auto nowMs = juce::Time::currentTimeMillis();
         for (const auto& active : activeInputs)
         {
-            if (active->output == nullptr) continue;
+            if (active->output == nullptr || active->toPerformance.load()) continue;
             const bool force = active->shouldForceFeedback(nowMs);
             if (active->lastCueValue != cueValue || force)
             {
@@ -442,6 +462,34 @@ public:
         }
     }
 
+    void routeToPerformance(MidiPerformanceSink* sink)
+    {
+        g_performanceSink.store(sink, std::memory_order_release);
+        for (const auto& active : activeInputs)
+        {
+            const bool wanted = sink != nullptr && sink->acceptsDevice(active->name);
+            const bool was = active->toPerformance.exchange(wanted);
+            if (wanted && !was) sink->deviceOpened(active->identifier, active->name);
+            if (!wanted && was)
+            {
+                // Back to the timeline controls: their LEDs from scratch.
+                active->resetControllerFeedback();
+                active->sendControllerInit();
+            }
+        }
+    }
+
+    bool sendRaw(const juce::String& identifier, const juce::uint8* data, int size)
+    {
+        for (const auto& active : activeInputs)
+            if (active->identifier == identifier && active->output != nullptr)
+            {
+                active->output->sendMessageNow(juce::MidiMessage(data, size));
+                return true;
+            }
+        return false;
+    }
+
 private:
     const ActiveMidiInput* findActive(const juce::String& identifier) const
     {
@@ -457,7 +505,7 @@ private:
         {
             // Deck-selection LEDs are reset-only (not emitter-driven), so
             // re-assert them each tick during the warm-up window too.
-            if (active->shouldForceFeedback(juce::Time::currentTimeMillis()))
+            if (!active->toPerformance.load() && active->shouldForceFeedback(juce::Time::currentTimeMillis()))
                 active->sendDeckSelectionLights();
 
             std::array<std::array<double, relativeControlCount>, 2> relativeDeltas{};
@@ -710,6 +758,7 @@ private:
     std::vector<std::unique_ptr<ActiveMidiInput>> activeInputs;
     juce::int64 lastDeviceListBroadcastMs = 0;
     MidiScratchRouter scratchRouter;
+
 };
 
 MidiInputMonitor& midiInputMonitor()
@@ -718,6 +767,16 @@ MidiInputMonitor& midiInputMonitor()
     return instance;
 }
 } // namespace
+
+void setMidiPerformanceSink(MidiPerformanceSink* sink)
+{
+    midiInputMonitor().routeToPerformance(sink);
+}
+
+bool sendMidiToDevice(const juce::String& identifier, const juce::uint8* data, int size)
+{
+    return midiInputMonitor().sendRaw(identifier, data, size);
+}
 
 juce::var buildMidiDevicesListEnvelope()
 {

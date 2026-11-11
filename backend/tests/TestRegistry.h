@@ -42,5 +42,6 @@ void addPluginCatalogueTests(std::vector<TestCase>& tests);
 void addPluginChainTests(std::vector<TestCase>& tests);
 void addPluginLatencyTests(std::vector<TestCase>& tests);
 void addRecordingTests(std::vector<TestCase>& tests);
+void addPerformanceTests(std::vector<TestCase>& tests);
 
 } // namespace stemcel::tests

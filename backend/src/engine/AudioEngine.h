@@ -530,6 +530,12 @@ class AudioEngine : private AudioEngineGraphState,
         return formatManager;
     }
 
+    // Live performance mode (src/performance): the decks and DJ mixer, and the device's
+    // outputs for it — master on 1–2 and the headphone cue on 3–4 when there are four (true
+    // when the cue has its outputs). Message thread.
+    perf::PerformanceEngine& performanceEngine() noexcept { return performance; }
+    bool setPerformanceOutputs(bool withCue);
+
     // Avoid full device scans on startup; ASIO probing can block for hundreds of ms.
     struct DeviceTypeListing
     {

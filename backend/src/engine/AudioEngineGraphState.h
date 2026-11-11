@@ -14,6 +14,8 @@
 #include "recording/CalibrationClickSource.h"
 #include "recording/InputMonitorSource.h"
 #include "TrackAutomationSnapshot.h"
+#include "performance/OutputRouter.h"
+#include "performance/PerformanceEngine.h"
 
 #include <atomic>
 #include <memory>
@@ -63,6 +65,10 @@ protected:
     // than through it, so what it measures is the output path a performer actually hears.
     recording::CalibrationClickSource calibrationClickSource;
     MeteringSource masterMeter{topMixer, outputKeepAlive, master, metronome};
+    // Live performance mode's decks and DJ mixer (silent unless the mode is open), summed into
+    // the master like the timeline; its headphone cue goes to outputs 3–4 through the router.
+    perf::PerformanceEngine performance;
+    perf::OutputRouter outputRouter{masterMeter, performance};
     juce::AudioFormatManager formatManager;
     // Created on first use: constructing it touches the on-disk plugin catalogue, which a
     // headless run that never mentions plugins has no reason to read or write.

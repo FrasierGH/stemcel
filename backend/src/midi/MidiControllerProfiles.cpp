@@ -409,6 +409,8 @@ const std::vector<MidiControllerProfile>& profiles()
 }
 } // namespace
 
+juce::File midiMappingDirectory() { return profileDirectory(); }
+
 const MidiControllerProfile* findMidiControllerProfile(const juce::String& deviceName)
 {
     const auto upperName = deviceName.toUpperCase();
