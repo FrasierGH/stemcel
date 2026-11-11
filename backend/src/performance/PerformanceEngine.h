@@ -171,6 +171,7 @@ class PerformanceEngine final : public juce::AudioSource
     double rate = 44100.0;
     int maxBlock = 512;
     juce::int64 clock = 0;
+    bool wasRecording = false;
     juce::AudioBuffer<float> deckBuffer, cueBuffer;
     int cueSamples = 0;
 

@@ -156,7 +156,7 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& ids)
                   CommandIds::showLibraryTab, CommandIds::showFilesTab, CommandIds::showRekordboxTab,
                   CommandIds::exportMixdown, CommandIds::projectProperties, CommandIds::recordAudio,
                   CommandIds::importFromProject, CommandIds::cutClips, CommandIds::copyClips, CommandIds::pasteClips,
-                  CommandIds::toggleMixer, CommandIds::selectAllClips, CommandIds::joinClips, CommandIds::toggleAutomation,
+                  CommandIds::toggleMixer, CommandIds::togglePerformance, CommandIds::selectAllClips, CommandIds::joinClips, CommandIds::toggleAutomation,
                   CommandIds::toggleLoop, CommandIds::toggleMetronome, CommandIds::toggleSnap, CommandIds::openClipEditor,
                   CommandIds::zoomToSelection, CommandIds::nudgeLeft, CommandIds::nudgeRight, CommandIds::rippleDelete,
                   CommandIds::insertTime, CommandIds::duplicateTrack});
@@ -314,6 +314,12 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
         info.setActive(open);
         info.setTicked(workspace != nullptr && workspace->isMixerShown());
         break;
+    case CommandIds::togglePerformance:
+        info.setInfo("Performance Mode", "Play two decks live with a DJ controller (DDJ-400) and record it into the timeline", "View", 0);
+        info.addDefaultKeypress('l', cmd | juce::ModifierKeys::shiftModifier);
+        info.setActive(open);
+        info.setTicked(workspace != nullptr && workspace->isPerformanceShown());
+        break;
     case CommandIds::selectAllClips:
         info.setInfo("Select All Clips", "Select every clip", "Edit", 0);
         info.addDefaultKeypress('a', cmd);
@@ -427,6 +433,7 @@ bool MainComponent::perform(const InvocationInfo& info)
     case CommandIds::showFilesTab: if (workspace != nullptr) workspace->showLibraryTab(1); return true;
     case CommandIds::showRekordboxTab: if (workspace != nullptr) workspace->showLibraryTab(2); return true;
     case CommandIds::toggleMixer: if (workspace != nullptr) workspace->toggleMixer(); return true;
+    case CommandIds::togglePerformance: if (workspace != nullptr) workspace->togglePerformance(); return true;
     case CommandIds::selectAllClips: if (workspace != nullptr) workspace->selectAllClips(); return true;
     case CommandIds::joinClips: if (workspace != nullptr) workspace->joinSelection(); return true;
     case CommandIds::zoomToSelection: if (workspace != nullptr) workspace->zoomToSelection(); return true;
@@ -535,6 +542,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int topLevelMenuIndex, const juce
         menu.addCommandItem(&commandManager, CommandIds::showRekordboxTab);
         menu.addSeparator();
         menu.addCommandItem(&commandManager, CommandIds::toggleMixer);
+        menu.addCommandItem(&commandManager, CommandIds::togglePerformance);
     }
     else if (topLevelMenuIndex == 3)
     {

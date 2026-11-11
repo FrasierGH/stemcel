@@ -115,6 +115,8 @@ class DeckPlayer
                 bool audible) noexcept;
     void fillView(DeckView& view) const noexcept;
     void announce() noexcept { forceSegment = true; } // the next block starts a segment
+    // The take ends here: the open segment is closed for the recorder.
+    void endTake(DeckRecorder* r, juce::int64 at) noexcept;
 
     const DeckTrack* track() const noexcept { return loaded; }
     bool moving() const noexcept;

@@ -1,0 +1,258 @@
+#include "PerformanceTake.h"
+
+#include "Automation.h"
+
+#include <algorithm>
+#include <cmath>
+
+namespace stemcel::native::perf
+{
+namespace
+{
+constexpr double kMinClipMs = 4.0;
+
+juce::var obj(std::initializer_list<std::pair<const char*, juce::var>> props)
+{
+    auto* o = new juce::DynamicObject();
+    for (const auto& [k, v] : props) o->setProperty(k, v);
+    return juce::var(o);
+}
+
+// Ramer–Douglas–Peucker: the fewest points that stay within `tolerance` of the curve.
+std::vector<std::pair<double, double>> thin(const std::vector<std::pair<double, double>>& pts, double tolerance)
+{
+    if (pts.size() <= 2) return pts;
+    std::vector<bool> keep(pts.size(), false);
+    keep.front() = keep.back() = true;
+    std::vector<std::pair<size_t, size_t>> stack{{0, pts.size() - 1}};
+    while (!stack.empty())
+    {
+        const auto [a, b] = stack.back();
+        stack.pop_back();
+        double worst = 0.0;
+        size_t at = a;
+        const auto& p = pts[a];
+        const auto& q = pts[b];
+        for (size_t i = a + 1; i < b; ++i)
+        {
+            const double t = q.first > p.first ? (pts[i].first - p.first) / (q.first - p.first) : 0.0;
+            const double d = std::abs(pts[i].second - (p.second + t * (q.second - p.second)));
+            if (d > worst)
+            {
+                worst = d;
+                at = i;
+            }
+        }
+        if (worst > tolerance)
+        {
+            keep[at] = true;
+            stack.push_back({a, at});
+            stack.push_back({at, b});
+        }
+    }
+    std::vector<std::pair<double, double>> out;
+    for (size_t i = 0; i < pts.size(); ++i)
+        if (keep[i]) out.push_back(pts[i]);
+    return out;
+}
+
+double tolerance(const juce::String& param) { return param == "filter" ? 0.01 : 0.3; }
+} // namespace
+
+void PerformanceTake::clear()
+{
+    startAt = -1.0;
+    lastAt = 0.0;
+    segments.clear();
+    platter.clear();
+    params.clear();
+}
+
+void PerformanceTake::add(const juce::var& payload)
+{
+    const auto* events = payload.getProperty("events", {}).getArray();
+    if (events == nullptr) return;
+    for (const auto& e : *events)
+    {
+        const auto kind = e.getProperty("kind", "").toString();
+        const double at = static_cast<double>(e.getProperty("at", 0.0));
+        const int deck = static_cast<int>(e.getProperty("deck", 0));
+        if (kind == "start")
+        {
+            clear();
+            startAt = at;
+            rate = static_cast<double>(e.getProperty("sampleRate", 44100.0));
+            continue;
+        }
+        if (startAt < 0.0) continue; // before a take began
+        lastAt = std::max(lastAt, at);
+        if (kind == "segment")
+        {
+            TakeSegment s;
+            s.at = at;
+            s.deck = deck;
+            s.itemId = e.getProperty("libraryItemId", "").toString();
+            s.endPos = static_cast<double>(e.getProperty("endPos", 0.0));
+            s.startPos = static_cast<double>(e.getProperty("startPos", 0.0));
+            s.tempo = static_cast<double>(e.getProperty("tempo", 1.0));
+            s.semitones = static_cast<int>(e.getProperty("semitones", 0));
+            s.moving = static_cast<bool>(e.getProperty("moving", false));
+            s.audible = static_cast<bool>(e.getProperty("audible", false));
+            s.keyLock = static_cast<bool>(e.getProperty("keyLock", false));
+            s.scratch = static_cast<bool>(e.getProperty("scratch", false));
+            segments.push_back(std::move(s));
+        }
+        else if (kind == "platter")
+            platter[deck].push_back({at, static_cast<double>(e.getProperty("pos", 0.0))});
+        else if (kind == "param")
+            params[deck][e.getProperty("param", "").toString()].push_back({at, static_cast<double>(e.getProperty("value", 0.0))});
+    }
+}
+
+bool PerformanceTake::hasAudio() const
+{
+    for (const auto& s : segments)
+        if (s.moving && s.audible) return true;
+    return false;
+}
+
+double PerformanceTake::lengthSec() const { return startAt < 0.0 ? 0.0 : (lastAt - startAt) / rate; }
+
+TakeEdits PerformanceTake::edits(double startMs) const
+{
+    TakeEdits out;
+    if (startAt < 0.0) return out;
+    auto ms = [&](double at) { return startMs + (at - startAt) / rate * 1000.0; };
+    out.lengthMs = (lastAt - startAt) / rate * 1000.0;
+
+    for (int deck = 1; deck <= kDecks; ++deck)
+    {
+        std::vector<const TakeSegment*> list;
+        for (const auto& s : segments)
+            if (s.deck == deck) list.push_back(&s);
+        bool used = false;
+        for (size_t i = 0; i + 1 < list.size(); ++i)
+        {
+            const auto& s = *list[i];
+            const auto& next = *list[i + 1];
+            if (!s.moving || !s.audible || s.itemId.isEmpty()) continue;
+            const double t0 = ms(s.at), t1 = ms(next.at);
+            if (t1 - t0 < kMinClipMs) continue;
+            auto addClip = [&](double from, double to, double srcFrom, double srcTo)
+            {
+                TakeEdits::Clip c;
+                c.deck = deck;
+                c.itemId = s.itemId;
+                c.positionMs = from;
+                c.semitones = s.semitones;
+                c.keyLock = s.keyLock && !s.scratch;
+                c.reversed = srcTo < srcFrom;
+                c.inMs = std::min(srcFrom, srcTo) * 1000.0;
+                c.durationMs = std::abs(srcTo - srcFrom) * 1000.0;
+                c.tempoRatio = juce::jlimit(0.25, 4.0, c.durationMs / std::max(1.0e-6, to - from));
+                if (c.durationMs >= 1.0 && to - from >= kMinClipMs) out.clips.push_back(c);
+                used = true;
+            };
+            if (!s.scratch)
+            {
+                addClip(t0, t1, s.startPos, next.endPos);
+                continue;
+            }
+            // The jog had it: follow the platter, a clip for each run in one direction.
+            std::vector<std::pair<double, double>> path{{s.at, s.startPos}};
+            const auto it = platter.find(deck);
+            if (it != platter.end())
+                for (const auto& p : it->second)
+                    if (p.first > s.at && p.first < next.at) path.push_back(p);
+            path.push_back({next.at, next.endPos});
+            size_t runStart = 0;
+            for (size_t k = 1; k < path.size(); ++k)
+            {
+                const double dir = path[k].second - path[k - 1].second;
+                const bool last = k + 1 == path.size();
+                const double nextDir = last ? dir : path[k + 1].second - path[k].second;
+                if (last || (dir >= 0.0) != (nextDir >= 0.0))
+                {
+                    const auto& a = path[runStart];
+                    const auto& b = path[k];
+                    // Held still (the record stopped under the hand) is silence.
+                    if (std::abs(b.second - a.second) > 0.002) addClip(ms(a.first), ms(b.first), a.second, b.second);
+                    runStart = k;
+                }
+            }
+        }
+        if (used) out.decksUsed.push_back(deck);
+        // The channel's curves, thinned to what changes them.
+        if (const auto pit = params.find(deck); pit != params.end() && used)
+            for (const auto& [param, points] : pit->second)
+            {
+                std::vector<std::pair<double, double>> curve;
+                for (const auto& p : points)
+                {
+                    double v = p.value;
+                    if (param == "level") v = juce::jlimit(-60.0, 6.0, v);
+                    curve.push_back({ms(p.at), v});
+                }
+                out.automation[deck][param] = thin(curve, tolerance(param));
+            }
+    }
+    return out;
+}
+
+bool PerformanceTake::write(EngineClient& engine, ProjectMirror& mirror, TimelineActions& actions, double startMs,
+                            int takeNumber) const
+{
+    const auto e = edits(startMs);
+    if (e.clips.empty()) return false;
+    engine.inUndoGroup(
+        "Live performance",
+        [&]
+        {
+            std::map<int, juce::String> tracks;
+            for (const int deck : e.decksUsed)
+            {
+                const auto id = actions.addTrack();
+                actions.renameTrack(id, "Deck " + juce::String(deck) + (takeNumber > 1 ? " (take " + juce::String(takeNumber) + ")" : ""));
+                tracks[deck] = id;
+            }
+            for (const auto& c : e.clips)
+            {
+                const auto clipId = EngineClient::newId("clip");
+                engine.send("CLIP_ADD", obj({{"trackId", tracks[c.deck]},
+                                             {"clipId", clipId},
+                                             {"libraryItemId", c.itemId},
+                                             {"positionMs", c.positionMs},
+                                             {"inMs", c.inMs},
+                                             {"durationMs", c.durationMs}}));
+                const bool timed = std::abs(c.tempoRatio - 1.0) > 1.0e-4 || c.semitones != 0 || c.keyLock;
+                // Pinned: the clip plays at the speed it was played, whatever the project tempo does.
+                engine.send("CLIP_SET_WARP", obj({{"clipId", clipId},
+                                                  {"warpEnabled", timed},
+                                                  {"warpMode", c.keyLock ? "pro" : "repitch"},
+                                                  {"tempoRatio", c.tempoRatio},
+                                                  {"semitones", c.semitones},
+                                                  {"cents", 0}}));
+                if (c.reversed) engine.send("CLIP_SET_REVERSED", obj({{"clipId", clipId}, {"reversed", true}}));
+            }
+            for (const auto& [deck, curves] : e.automation)
+            {
+                const auto track = tracks.find(deck);
+                if (track == tracks.end()) continue;
+                std::vector<automation::Lane> lanes;
+                for (const auto& [param, pts] : curves)
+                {
+                    std::vector<automation::Point> points;
+                    for (const auto& [t, v] : pts) points.push_back({t, v});
+                    if (points.empty()) continue;
+                    actions.setAutomation(track->second, param, points);
+                    lanes.push_back({param, automation::kDefaultLaneHeight});
+                }
+                if (!lanes.empty()) actions.setAutomationLanes(track->second, lanes);
+            }
+            actions.addMarker(startMs);
+        });
+    mirror.refreshNow();
+    return true;
+}
+
+} // namespace stemcel::native::perf

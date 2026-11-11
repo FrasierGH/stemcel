@@ -513,6 +513,9 @@ void PerformanceEngine::renderBlock(float* const* out, int numOutChannels, int n
     const bool rec = recordingOn.load(std::memory_order_acquire);
     const bool restart = recordingRestart.exchange(false, std::memory_order_acq_rel);
     DeckRecorder* sink = rec ? recorder.get() : nullptr;
+    if (wasRecording && (!rec || restart))
+        for (auto& d : decks) d->endTake(recorder.get(), clock); // close the last take's segments
+    wasRecording = rec;
     if (restart)
     {
         RecEvent r;

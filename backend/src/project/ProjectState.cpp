@@ -85,6 +85,7 @@ const juce::Identifier ProjectState::kClipName{"clipName"};
 const juce::Identifier ProjectState::kCollapsed{"collapsed"};
 const juce::Identifier ProjectState::kCoverArtHidden{"coverArtHidden"};
 const juce::Identifier ProjectState::kSections{"sections"};
+const juce::Identifier ProjectState::kPerfCues{"perfCues"};
 const juce::Identifier ProjectState::kTempoDrift{"tempoDrift"};
 const juce::Identifier ProjectState::kCoverArtOverride{"coverArtOverride"};
 const juce::Identifier ProjectState::kLibraryItemId{"libraryItemId"};

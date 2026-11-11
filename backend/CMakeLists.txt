@@ -463,6 +463,7 @@ add_library(stemcel_backend_core STATIC
     src/dsp/LoudnessAnalyzer.cpp
     src/dsp/SafetyLimiter.cpp
     src/dsp/SharedFx.cpp
+    src/dsp/DjFx.cpp
     src/dsp/ToneEq.cpp
     src/dsp/VinylScratchProcessor.cpp
     src/dsp/VocalDenoiser.cpp
@@ -821,6 +822,10 @@ if(STEMCEL_BUILD_NATIVE_APP)
         app/TimelineActions.cpp
         app/TimelineView.cpp
         app/TimeEdit.cpp
+        app/performance/DeckDisplay.cpp
+        app/performance/PerfBrowser.cpp
+        app/performance/PerformanceTake.cpp
+        app/performance/PerformanceView.cpp
         app/Toasts.cpp
         app/TransitionEditor.cpp
         app/TransitionsPanel.cpp

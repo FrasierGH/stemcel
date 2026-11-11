@@ -131,6 +131,13 @@ class StemcelApplication final : public juce::JUCEApplication
         log::shutdown();
     }
 
+    // An exception the message loop caught: what it was, in the log (JUCE then ends the app).
+    void unhandledException(const std::exception* e, const juce::String& sourceFile, int lineNumber) override
+    {
+        log::error("main", "unhandled exception: " + juce::String(e != nullptr ? e->what() : "unknown") + " at "
+                               + sourceFile + ":" + juce::String(lineNumber));
+    }
+
     void systemRequestedQuit() override
     {
         if (controller != nullptr) controller->requestQuit();

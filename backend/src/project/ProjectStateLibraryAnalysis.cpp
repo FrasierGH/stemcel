@@ -472,6 +472,21 @@ bool ProjectState::setLibraryItemSections(const juce::String& itemId, const juce
     return false;
 }
 
+bool ProjectState::setLibraryItemPerfCues(const juce::String& itemId, const juce::String& cuesJson)
+{
+    auto library = root.getChildWithName(kLibrary);
+    if (!library.isValid()) return false;
+    for (int i = 0; i < library.getNumChildren(); ++i)
+    {
+        auto item = library.getChild(i);
+        if (item.getProperty(kId).toString() != itemId) continue;
+        if (cuesJson.isEmpty()) item.removeProperty(kPerfCues, nullptr);
+        else item.setProperty(kPerfCues, cuesJson, nullptr);
+        return true;
+    }
+    return false;
+}
+
 bool ProjectState::setLibraryItemCoverArtOverride(const juce::String& itemId, const juce::String& coverFile)
 {
     auto library = root.getChildWithName(kLibrary);

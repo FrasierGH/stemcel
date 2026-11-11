@@ -287,6 +287,9 @@ void BusGraph::getNextAudioBlock(const juce::AudioSourceChannelInfo& info)
         sharedFx.process(reverbSendBuf, delaySendBuf, *info.buffer, dst, n);
         // The master inserts, over the whole mix with its returns.
         if (auto* master = masterInserts.load(std::memory_order_acquire)) master->processInserts(*info.buffer, dst, n);
+        // Beat FX on the master (performance mode's CH SELECT = MASTER).
+        if (masterBeatFx.allocated() && info.buffer->getNumChannels() >= 2)
+            masterBeatFx.process(info.buffer->getWritePointer(0, dst), info.buffer->getWritePointer(1, dst), n);
         // The master's automated level, ramped across the sub-block.
         if (masterLevelGain != 1.0F || masterLevelTarget != 1.0F)
         {
@@ -338,6 +341,22 @@ void BusGraph::applyTrackAutomation(TrackRuntime& rt, const TrackAutomationSnaps
     if (snap->hasParam(AutomationParam::bitCrusherBoost)) rt.chain.setBitCrusherBoostTarget(sample(AutomationParam::bitCrusherBoost), discontinuity);
     if (snap->hasParam(AutomationParam::bitCrusherMix)) rt.chain.setBitCrusherMixTarget(sample(AutomationParam::bitCrusherMix), discontinuity);
     if (snap->hasParam(AutomationParam::level)) rt.chain.setLevelTarget(sample(AutomationParam::level), discontinuity);
+    if (snap->usesDjFx())
+    {
+        auto& fx = rt.chain.djEffects();
+        const auto whole = [&](AutomationParam p) { return static_cast<int>(std::lround(sample(p))); };
+        if (snap->hasParam(AutomationParam::fxBpm)) fx.setBpm(sample(AutomationParam::fxBpm));
+        if (snap->hasParam(AutomationParam::colorFxType)) fx.color.setType(whole(AutomationParam::colorFxType));
+        if (snap->hasParam(AutomationParam::colorFx)) fx.color.setAmount(sample(AutomationParam::colorFx));
+        if (snap->hasParam(AutomationParam::beatFxType)) fx.beat.setType(whole(AutomationParam::beatFxType));
+        if (snap->hasParam(AutomationParam::beatFxBeats)) fx.beat.setBeatStep(whole(AutomationParam::beatFxBeats));
+        if (snap->hasParam(AutomationParam::beatFxLevel)) fx.beat.setLevel(sample(AutomationParam::beatFxLevel));
+        if (snap->hasParam(AutomationParam::beatFxOn)) fx.beat.setOn(sample(AutomationParam::beatFxOn) > 0.5F);
+        if (snap->hasParam(AutomationParam::padFxType)) fx.pad.setType(whole(AutomationParam::padFxType));
+        if (snap->hasParam(AutomationParam::padFxBeats)) fx.pad.setBeatStep(whole(AutomationParam::padFxBeats));
+        if (snap->hasParam(AutomationParam::padFxLevel)) fx.pad.setLevel(sample(AutomationParam::padFxLevel));
+        if (snap->hasParam(AutomationParam::padFxOn)) fx.pad.setOn(sample(AutomationParam::padFxOn) > 0.5F);
+    }
     if (snap->hasParam(AutomationParam::reverbSend)) rt.reverbSend.store(sample(AutomationParam::reverbSend), std::memory_order_relaxed);
     if (snap->hasParam(AutomationParam::delaySend)) rt.delaySend.store(sample(AutomationParam::delaySend), std::memory_order_relaxed);
     if (snap->hasParam(AutomationParam::pan))
@@ -395,6 +414,15 @@ void BusGraph::applyMasterAutomation(const TrackAutomationSnapshot* snap, juce::
     if (masterGlue != nullptr && snap->hasParam(AutomationParam::glueMakeup))
         masterGlue->setMakeupDb(sample(AutomationParam::glueMakeup), /*snap*/ false);
     if (!snap->plugins.empty()) applyPluginAutomation(*snap, masterInserts.load(std::memory_order_acquire), ms);
+    if (snap->usesDjFx() && masterBeatFx.allocated())
+    {
+        const auto whole = [&](AutomationParam p) { return static_cast<int>(std::lround(sample(p))); };
+        if (snap->hasParam(AutomationParam::fxBpm)) masterBeatFx.setBpm(sample(AutomationParam::fxBpm));
+        if (snap->hasParam(AutomationParam::beatFxType)) masterBeatFx.setType(whole(AutomationParam::beatFxType));
+        if (snap->hasParam(AutomationParam::beatFxBeats)) masterBeatFx.setBeatStep(whole(AutomationParam::beatFxBeats));
+        if (snap->hasParam(AutomationParam::beatFxLevel)) masterBeatFx.setLevel(sample(AutomationParam::beatFxLevel));
+        if (snap->hasParam(AutomationParam::beatFxOn)) masterBeatFx.setOn(sample(AutomationParam::beatFxOn) > 0.5F);
+    }
 }
 
 } // namespace stemcel

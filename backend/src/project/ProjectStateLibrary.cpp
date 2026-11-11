@@ -529,6 +529,11 @@ juce::var ProjectState::libraryAsJson() const
             if (const auto sections = juce::JSON::parse(item.getProperty(kSections).toString()); sections.isArray())
                 obj->setProperty("sections", sections);
         }
+        if (item.hasProperty(kPerfCues))
+        {
+            if (const auto cues = juce::JSON::parse(item.getProperty(kPerfCues).toString()); cues.isObject())
+                obj->setProperty("perfCues", cues);
+        }
         if (item.hasProperty(kTempoDrift))
         {
             if (const auto drift = juce::JSON::parse(item.getProperty(kTempoDrift).toString()); drift.isObject())

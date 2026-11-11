@@ -248,6 +248,10 @@ bool dispatchLibrary(const DispatchContext& ctx)
     {
         stemcel::handleLibraryItemSetSections(payload, projectState);
     }
+    else if (type == "LIBRARY_ITEM_SET_PERF_CUES")
+    {
+        stemcel::handleLibraryItemSetPerfCues(payload, projectState);
+    }
     else if (type == "LIBRARY_ITEM_SET_TEMPO_DRIFT")
     {
         stemcel::handleLibraryItemSetTempoDrift(payload, projectState);

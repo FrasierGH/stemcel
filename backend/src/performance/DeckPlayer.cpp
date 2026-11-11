@@ -873,6 +873,17 @@ void DeckPlayer::render(float* const* out, int n, const SyncSource& master, Deck
     if (++jogQuietBlocks > 1000000) jogQuietBlocks = 1000000;
 }
 
+void DeckPlayer::endTake(DeckRecorder* r, juce::int64 at) noexcept
+{
+    if (r == nullptr || loaded == nullptr) return;
+    recorder = r;
+    const auto open = lastKey;
+    lastKey = RecKey{};
+    emitSegment(at, pos);
+    lastKey = open;
+    forceSegment = true;
+}
+
 void DeckPlayer::fillView(DeckView& v) const noexcept
 {
     const double rate = sr();

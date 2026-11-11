@@ -357,6 +357,52 @@ void Workspace::toggleMixer()
     resized();
 }
 
+void Workspace::togglePerformance()
+{
+    auto showTimeline = [this](bool show)
+    {
+        for (auto* c : {static_cast<juce::Component*>(&transport), static_cast<juce::Component*>(&headers),
+                        static_cast<juce::Component*>(&timeline), static_cast<juce::Component*>(&bottomBar),
+                        static_cast<juce::Component*>(&headerBar)})
+            c->setVisible(show);
+        if (bottomPanel != nullptr) bottomPanel->setVisible(show && !isMixerShown());
+        if (mixer != nullptr && !show) mixer->setVisible(false);
+    };
+    if (performance == nullptr)
+    {
+        if (live.playing) togglePlay();
+        perf::PerformanceView::Context context{engine,
+                                               mirror,
+                                               actions,
+                                               waveforms,
+                                               importer,
+                                               prefs,
+                                               [this] { return libraryPanel != nullptr ? libraryPanel->rekordboxSnapshot() : nullptr; },
+                                               [this] { return live.positionMs; },
+                                               [this](double ms) { actions.seek(ms); },
+                                               toast,
+                                               [this] { togglePerformance(); }};
+        performance = std::make_unique<perf::PerformanceView>(std::move(context));
+        addAndMakeVisible(*performance);
+        showTimeline(false);
+        resized();
+        performance->grabKeyboardFocus();
+        return;
+    }
+    if (performanceClosing) return;
+    performanceClosing = true;
+    // The take goes into the timeline, then the timeline comes back.
+    performance->finishTake(
+        [this, showTimeline]
+        {
+            performance.reset();
+            performanceClosing = false;
+            showTimeline(true);
+            resized();
+            timeline.grabKeyboardFocus();
+        });
+}
+
 void Workspace::setBottomPanel(std::unique_ptr<juce::Component> panel, int height)
 {
     bottomPanel = std::move(panel);
@@ -407,6 +453,11 @@ void Workspace::setupResizeBars()
 
 void Workspace::resized()
 {
+    if (performance != nullptr)
+    {
+        performance->setBounds(getLocalBounds());
+        return;
+    }
     auto area = getLocalBounds();
     transport.setBounds(area.removeFromTop(TransportBar::kHeight));
     // Whatever sits below the timeline never takes all of it.

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "BitCrusher.h"
+#include "DjFx.h"
 #include "InsertProcessor.h"
 #include "Leveler.h"
 #include "Punch.h"
@@ -24,6 +25,8 @@ public:
     void prepare(double sampleRate, int maxBlockSize, int numChannels) noexcept
     {
         juce::ignoreUnused(maxBlockSize);
+        if (djfxWanted && djfxRate != sampleRate) djfx.allocate(sampleRate);
+        djfxRate = sampleRate;
         tone.prepare(sampleRate, numChannels);
         punch.prepare(sampleRate);
         saturation.prepare(sampleRate);
@@ -37,6 +40,7 @@ public:
     void reset() noexcept
     {
         tone.reset();
+        djfx.reset();
         punch.reset();
         saturation.reset();
         bitCrusher.reset();
@@ -103,6 +107,14 @@ public:
         if (snap) levelSnapRequested.store(true, std::memory_order_release);
     }
 
+    /** The DJ effects' buffers, for a track whose automation uses them (message thread). */
+    void ensureDjFx()
+    {
+        djfxWanted = true;
+        if (!djfx.isAllocated()) djfx.allocate(djfxRate);
+    }
+    djfx::DjFxChain& djEffects() noexcept { return djfx; }
+
     /** Message-thread setter, published for the audio thread. Null detaches the inserts;
      *  the caller must keep the processor alive until the audio thread has left it. */
     void setInserts(InsertProcessor* processor) noexcept
@@ -114,6 +126,7 @@ public:
     void process(juce::AudioBuffer<float>& buffer, int startSample, int numSamples) noexcept
     {
         tone.process(buffer, startSample, numSamples);
+        djfx.processColor(buffer, startSample, numSamples);
         saturation.process(buffer, startSample, numSamples);
         bitCrusher.process(buffer, startSample, numSamples);
         punch.process(buffer, startSample, numSamples);
@@ -133,6 +146,8 @@ public:
         {
             buffer.applyGain(startSample, numSamples, levelGain);
         }
+        // Beat FX after the level, as on a DJM: an echo rings on after the fader closes.
+        djfx.processBeat(buffer, startSample, numSamples);
     }
 
     TrackChain(const TrackChain&) = delete;
@@ -146,6 +161,9 @@ private:
     Punch punch;
     Saturation saturation;
     BitCrusher bitCrusher;
+    djfx::DjFxChain djfx;
+    bool djfxWanted = false;
+    double djfxRate = 44100.0;
     float levelGain = 1.0F;
     std::atomic<InsertProcessor*> inserts{nullptr};
     std::atomic<float> targetLevelGain{1.0F};

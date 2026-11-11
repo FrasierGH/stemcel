@@ -262,6 +262,7 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
         track->cueSec = static_cast<double>(payload.getProperty("cueSec", -1.0));
         cuesFromVar(payload.getProperty("hotCues", {}), track->hotCues, false);
         cuesFromVar(payload.getProperty("memoryCues", {}), track->memoryCues, true);
+        stemcel::log::info("performance", "load deck " + juce::String(deck) + ": " + itemId);
         const auto playbackPath = resolveEnginePlaybackPath(sourcePath, project, decoded);
         const double rate = engine.getOutputSampleRate() > 0.0 ? engine.getOutputSampleRate() : 44100.0;
         const int request = ++loadRequests[deck];
@@ -277,7 +278,9 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
                     if (built.existsAsFile()) file = built;
                 }
                 juce::String error;
+                stemcel::log::info("performance", "reading " + file.getFileName());
                 auto audio = readWhole(file, formats, rate, error);
+                stemcel::log::info("performance", "read " + juce::String(audio != nullptr ? audio->getNumSamples() : 0) + " samples");
                 juce::MessageManager::callAsync(
                     [self, deck, request, track, audio, rate, error]
                     {
@@ -287,6 +290,7 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
                             self->broadcastFailed(deck, track->itemId, error);
                             return;
                         }
+                        stemcel::log::info("performance", "loading deck " + juce::String(deck));
                         track->audio = audio;
                         track->sampleRate = rate;
                         self->loadedTracks[deck] = track;

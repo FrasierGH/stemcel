@@ -1,4 +1,6 @@
 #include "CrashHandler.h"
+#include <exception>
+#include "Log.h"
 
 #ifdef _WIN32
 
@@ -66,6 +68,48 @@ LONG WINAPI unhandledFilter(EXCEPTION_POINTERS* info)
 
         DWORD written = 0;
         WriteFile(file, buffer, static_cast<DWORD>(length), &written, nullptr);
+
+        // A C++ exception: its type (from the throw information) and message.
+        if (code == 0xE06D7363 && rec != nullptr && rec->NumberParameters >= 4)
+        {
+            const auto base = static_cast<UINT_PTR>(params[3]);
+            const auto* throwInfo = reinterpret_cast<const int*>(params[2]);
+            if (throwInfo != nullptr && base != 0)
+            {
+                const auto* types = reinterpret_cast<const int*>(base + static_cast<UINT_PTR>(throwInfo[3]));
+                const int count = types[0];
+                for (int t = 0; t < count && t < 8; ++t)
+                {
+                    const auto* catchable = reinterpret_cast<const int*>(base + static_cast<UINT_PTR>(types[1 + t]));
+                    const char* name = reinterpret_cast<const char*>(base + static_cast<UINT_PTR>(catchable[1]) + 2 * sizeof(void*));
+                    const int n = wsprintfA(buffer, "throwType=%s\r\n", name);
+                    WriteFile(file, buffer, static_cast<DWORD>(n), &written, nullptr);
+                    if (lstrcmpA(name, ".?AVexception@std@@") == 0)
+                    {
+                        const auto* object = reinterpret_cast<const std::exception*>(static_cast<UINT_PTR>(params[1]) + static_cast<UINT_PTR>(catchable[2]));
+                        const int m = wsprintfA(buffer, "what=%.900s\r\n", object->what());
+                        WriteFile(file, buffer, static_cast<DWORD>(m), &written, nullptr);
+                    }
+                }
+            }
+        }
+        // The stack where it happened, as module+offset (a linker map turns them into names).
+        void* frames[48] = {};
+        const USHORT frameCount = CaptureStackBackTrace(0, 48, frames, nullptr);
+        for (USHORT f = 0; f < frameCount; ++f)
+        {
+            HMODULE frameModule = nullptr;
+            char frameModulePath[MAX_PATH] = "?";
+            if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                   static_cast<LPCSTR>(frames[f]), &frameModule) && frameModule != nullptr)
+                GetModuleFileNameA(frameModule, frameModulePath, MAX_PATH);
+            const char* leaf = frameModulePath;
+            for (const char* c = frameModulePath; *c != '\0'; ++c)
+                if (*c == '\\') leaf = c + 1;
+            const int n = wsprintfA(buffer, "  #%d %s+0x%I64X\r\n", static_cast<int>(f), leaf,
+                                    static_cast<unsigned __int64>(reinterpret_cast<UINT_PTR>(frames[f]) - reinterpret_cast<UINT_PTR>(frameModule)));
+            WriteFile(file, buffer, static_cast<DWORD>(n), &written, nullptr);
+        }
         FlushFileBuffers(file);
         CloseHandle(file);
     }
@@ -89,6 +133,31 @@ void install(const juce::String& diagDir)
     // Copy into the static buffer so the fault handler needs no allocation.
     strncpy_s(g_crashLogPath, sizeof(g_crashLogPath), path.toRawUTF8(), _TRUNCATE);
     SetUnhandledExceptionFilter(&unhandledFilter);
+    // An exception nobody caught: its message goes in the log before the process ends, as the
+    // fault handler can only say that one was thrown.
+    std::set_terminate(
+        []
+        {
+            juce::String what = "unknown";
+            if (auto e = std::current_exception())
+            {
+                try
+                {
+                    std::rethrow_exception(e);
+                }
+                catch (const std::exception& x)
+                {
+                    what = x.what();
+                }
+                catch (...)
+                {
+                    what = "a non-standard exception";
+                }
+            }
+            stemcel::log::error("crash", "uncaught exception: " + what + " (phase " + juce::String(g_phase.load()) + ")");
+            stemcel::log::shutdown();
+            std::abort();
+        });
 }
 
 void setPhase(const char* phase)

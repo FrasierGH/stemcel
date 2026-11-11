@@ -2618,10 +2618,13 @@ void SmokeTest::addTempoJourney()
                              if (!isTrackParam(id) || !engineKnows(id)) problems.add("transition writes '" + id + "'");
                          // The engine has no parameter the lanes leave out.
                          const int engineParams = static_cast<int>(AutomationParam::count_);
-                         const int laneParams = static_cast<int>(automation::params().size() + automation::masterParams().size());
-                         // "level" is a lane on both a track and the master: one engine parameter.
-                         if (laneParams - 1 != engineParams)
-                             problems.add("engine has " + juce::String(engineParams) + " parameters, lanes " + juce::String(laneParams - 1));
+                         // A lane on both a track and the master ("level", the Beat FX) is one engine parameter.
+                         std::set<juce::String> laneIds;
+                         for (const auto& p : automation::params()) laneIds.insert(p.id);
+                         for (const auto& p : automation::masterParams()) laneIds.insert(p.id);
+                         const int laneParams = static_cast<int>(laneIds.size());
+                         if (laneParams != engineParams)
+                             problems.add("engine has " + juce::String(engineParams) + " parameters, lanes " + juce::String(laneParams));
                          juce::StringArray writtenList;
                          for (const auto& id : written) writtenList.add(id);
                          everyParamLine = juce::String(knobCount) + " FX knobs, " + juce::String(static_cast<int>(automation::params().size()))
@@ -3762,6 +3765,145 @@ void SmokeTest::addTempoJourney()
                                     + juce::String(timeline->getWidth()));
                          workspace->viewState().selectedClipIds.clear();
                          return fills;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 10000.0;
+    // Live performance mode: opened, a track loaded on deck 1 and driven with the DDJ-400's own
+    // MIDI (PERF_MIDI_INJECT goes through the real mapping), then left: the take is written
+    // into the timeline as a "Deck 1" track with its clips and level automation.
+    auto perfWorkspace = []() -> Workspace*
+    {
+        auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
+        return window != nullptr ? findDescendant<Workspace>(window) : nullptr;
+    };
+    auto inject = [this](std::initializer_list<int> bytes)
+    {
+        juce::Array<juce::var> list;
+        for (int b : bytes) list.add(b);
+        auto* o = new juce::DynamicObject();
+        o->setProperty("bytes", list);
+        engine.send("PERF_MIDI_INJECT", juce::var(o));
+    };
+    steps.push_back({"performance mode opens",
+                     [this, perfWorkspace]
+                     {
+                         mirror.refreshNow();
+                         perfTracksBefore = static_cast<int>(model().tracks.size());
+                         perfItem.clear();
+                         for (const auto& item : model().library)
+                             if (perfItem.isEmpty() && item.kind == "source" && item.bpm > 0.0 && item.durationMs > 8000.0)
+                                 perfItem = item.id;
+                         if (auto* w = perfWorkspace()) w->togglePerformance();
+                     },
+                     {},
+                     [this, perfWorkspace](const juce::var&)
+                     {
+                         auto* w = perfWorkspace();
+                         auto* view = w != nullptr ? w->performanceView() : nullptr;
+                         if (view == nullptr || !view->stateForTest().open) return false;
+                         report.add("performance mode: open, item " + perfItem + (view->stateForTest().cueOutput ? ", cue on 3-4" : ", no cue outputs"));
+                         return perfItem.isNotEmpty();
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 10000.0;
+    steps.push_back({"performance deck loads",
+                     [this, perfWorkspace]
+                     {
+                         if (auto* w = perfWorkspace())
+                             if (auto* view = w->performanceView()) view->loadForTest(perfItem, 1);
+                     },
+                     {},
+                     [this, perfWorkspace](const juce::var&)
+                     {
+                         auto* view = perfWorkspace() != nullptr ? perfWorkspace()->performanceView() : nullptr;
+                         if (view == nullptr) return false;
+                         const auto& d = view->stateForTest().decks[0];
+                         if (!d.loaded || view->trackForTest(1).itemId != perfItem) return false;
+                         perfCue = d.cueSec;
+                         report.add("performance deck 1: " + view->trackForTest(1).title + ", " + juce::String(d.lengthSec, 1) + " s, "
+                                    + juce::String(d.bpm, 2) + " BPM, cue at " + juce::String(d.cueSec, 3) + " s");
+                         return d.bpm > 0.0;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 30000.0;
+    steps.push_back({"performance plays from the controller",
+                     [inject]
+                     {
+                         inject({0xB0, 0x13, 0x7F, 0xB0, 0x33, 0x7F}); // deck 1 channel fader up
+                         inject({0xB6, 0x1F, 0x00, 0xB6, 0x3F, 0x00}); // crossfader to deck 1's side
+                         inject({0x90, 0x0B, 0x7F, 0x90, 0x0B, 0x00}); // PLAY
+                     },
+                     {},
+                     [this, perfWorkspace](const juce::var&)
+                     {
+                         auto* view = perfWorkspace() != nullptr ? perfWorkspace()->performanceView() : nullptr;
+                         if (view == nullptr) return false;
+                         const auto& d = view->stateForTest().decks[0];
+                         if (!d.playing || d.posSec < perfCue + 0.7) return false;
+                         report.add("performance play: at " + juce::String(d.posSec, 2) + " s, fader " + juce::String(d.fader, 2));
+                         return std::abs(d.fader - 1.0F) < 0.01F;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 10000.0;
+    steps.push_back({"performance cue hold",
+                     [inject]
+                     {
+                         inject({0x90, 0x0C, 0x7F, 0x90, 0x0C, 0x00}); // CUE while playing: back to the cue, paused
+                         inject({0x90, 0x0C, 0x7F});                   // CUE held at the cue point: plays
+                     },
+                     {},
+                     [this, perfWorkspace, inject](const juce::var&)
+                     {
+                         auto* view = perfWorkspace() != nullptr ? perfWorkspace()->performanceView() : nullptr;
+                         if (view == nullptr) return false;
+                         const auto& d = view->stateForTest().decks[0];
+                         if (!d.previewing || d.posSec < perfCue + 0.8) return false;
+                         inject({0x90, 0x0C, 0x00}); // released: back to the cue
+                         report.add("performance cue hold: played to " + juce::String(d.posSec, 2) + " s while held");
+                         return true;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 10000.0;
+    steps.push_back({"performance cue release returns",
+                     [] {},
+                     {},
+                     [this, perfWorkspace](const juce::var&)
+                     {
+                         auto* view = perfWorkspace() != nullptr ? perfWorkspace()->performanceView() : nullptr;
+                         if (view == nullptr) return false;
+                         const auto& d = view->stateForTest().decks[0];
+                         return !d.previewing && !d.playing && std::abs(d.posSec - perfCue) < 0.01;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 5000.0;
+    steps.push_back({"performance take in the timeline",
+                     [perfWorkspace]
+                     {
+                         if (auto* w = perfWorkspace()) w->togglePerformance();
+                     },
+                     {},
+                     [this, perfWorkspace](const juce::var&)
+                     {
+                         auto* w = perfWorkspace();
+                         if (w == nullptr || w->performanceView() != nullptr) return false;
+                         mirror.refreshNow();
+                         const TrackModel* deck = nullptr;
+                         for (const auto& t : model().tracks)
+                             if (t.name.startsWith("Deck 1")) deck = &t;
+                         if (deck == nullptr) return false;
+                         juce::String clips;
+                         double heard = 0.0;
+                         for (const auto& c : deck->clips)
+                         {
+                             clips << juce::String(c.inMs / 1000.0, 2) << "+" << juce::String(c.durationMs / 1000.0, 2) << " ";
+                             heard += c.durationMs / 1000.0;
+                         }
+                         const auto level = automation::pointsOf(*deck, "level");
+                         report.add("performance take: " + juce::String(static_cast<int>(deck->clips.size())) + " clips (" + clips.trim()
+                                    + "), " + juce::String(static_cast<int>(level.size())) + " level points, "
+                                    + juce::String(static_cast<int>(model().tracks.size()) - perfTracksBefore) + " new track(s)");
+                         return deck->clips.size() >= 2 && heard > 1.4 && !level.empty() &&
+                                std::abs(deck->clips.back().inMs / 1000.0 - perfCue) < 0.01;
                      }});
     steps.back().poll = true;
     steps.back().timeoutMs = 10000.0;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "SharedFx.h"
+#include "DjFx.h"
 #include "BeatRepeatProcessor.h"
 #include "LatencyDelayLine.h"
 #include "Leveler.h"
@@ -369,6 +370,9 @@ private:
     std::unordered_map<juce::String, const BeatRepeatSnapshot*> pendingBeatRepeats;
 
     SharedFx sharedFx;
+    // Beat FX on the master (live performance mode's CH SELECT = MASTER), allocated when the
+    // master's automation uses it.
+    djfx::BeatFxUnit masterBeatFx;
     juce::AudioBuffer<float> reverbSendBuf;
     juce::AudioBuffer<float> delaySendBuf;
 

@@ -25,6 +25,7 @@ void BusGraph::prepareToPlay(int samplesPerBlockExpected, double sampleRate)
     reverbSendBuf.clear();
     delaySendBuf.clear();
     sharedFx.prepare(preparedRate, preparedMax);
+    if (masterBeatFx.allocated()) masterBeatFx.allocate(preparedRate);
     for (auto& kv : trackPlugins)
         kv.second->prepare(preparedRate, preparedMax);
     for (auto& kv : runtimes)
@@ -83,7 +84,10 @@ void BusGraph::attachClip(const juce::String& trackId,
 
         auto automationIt = pendingAutomation.find(trackId);
         if (createdRuntime && automationIt != pendingAutomation.end())
+        {
             rt->publishedAutomation = automationIt->second;
+            if (automationIt->second != nullptr && automationIt->second->usesDjFx()) rt->chain.ensureDjFx();
+        }
         auto beatRepeatIt = pendingBeatRepeats.find(trackId);
         if (createdRuntime && beatRepeatIt != pendingBeatRepeats.end())
             rt->publishedBeatRepeat = beatRepeatIt->second;
@@ -292,6 +296,7 @@ void BusGraph::setTrackAutomationPtr(const juce::String& trackId,
     if (trackId == plugins::kMasterChainId)
     {
         // The master has no track runtime: its automation rides on the render snapshot.
+        if (snap != nullptr && snap->usesDjFx() && !masterBeatFx.allocated()) masterBeatFx.allocate(preparedRate > 0.0 ? preparedRate : 44100.0);
         masterAutomation = snap;
         publishRenderSnapshot();
         return;
@@ -308,6 +313,7 @@ void BusGraph::setTrackAutomationPtr(const juce::String& trackId,
     auto it = runtimes.find(trackId);
     if (it != runtimes.end())
     {
+        if (snap != nullptr && snap->usesDjFx()) it->second->chain.ensureDjFx();
         it->second->publishedAutomation = snap;
         // Automation lifetime follows the same hazard handshake as clip/runtime
         // pointers, so the caller may retire the old snapshot when this returns.

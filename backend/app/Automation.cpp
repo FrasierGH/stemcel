@@ -1,4 +1,5 @@
 #include "Automation.h"
+#include "DjFx.h"
 
 #include "AutomationShape.h"
 
@@ -29,6 +30,18 @@ const std::vector<Param>& params()
         {"bitCrusherBoost", "Crusher Boost", 0.0, 1.0, 0.0},
         {"bitCrusherMix", "Crusher Mix", 0.0, 1.0, 0.0},
         {"level", "Gain", -60.0, 6.0, 0.0},
+        // The DJ effects performance mode records (DjFx): types and beat steps are whole numbers.
+        {"colorFxType", "Color FX Type", 0.0, 5.0, 0.0},
+        {"colorFx", "Color FX", -1.0, 1.0, 0.0},
+        {"beatFxType", "Beat FX Type", 0.0, 14.0, 1.0},
+        {"beatFxBeats", "Beat FX Beats", 0.0, 9.0, 5.0},
+        {"beatFxLevel", "Beat FX Level", 0.0, 1.0, 0.5},
+        {"beatFxOn", "Beat FX On", 0.0, 1.0, 0.0},
+        {"padFxType", "Pad FX Type", 0.0, 14.0, 1.0},
+        {"padFxBeats", "Pad FX Beats", 0.0, 9.0, 5.0},
+        {"padFxLevel", "Pad FX Level", 0.0, 1.0, 0.5},
+        {"padFxOn", "Pad FX On", 0.0, 1.0, 0.0},
+        {"fxBpm", "FX Tempo", 20.0, 300.0, 120.0},
     };
     return list;
 }
@@ -46,6 +59,11 @@ const std::vector<Param>& masterParams()
         {"delayTone", "Echo Tone", 0.0, 1.0, 0.0},
         {"glue", "Glue", 0.0, 1.0, 0.0},
         {"glueMakeup", "Glue Makeup", 0.0, 12.0, 0.0},
+        {"beatFxType", "Beat FX Type", 0.0, 14.0, 1.0},
+        {"beatFxBeats", "Beat FX Beats", 0.0, 9.0, 5.0},
+        {"beatFxLevel", "Beat FX Level", 0.0, 1.0, 0.5},
+        {"beatFxOn", "Beat FX On", 0.0, 1.0, 0.0},
+        {"fxBpm", "FX Tempo", 20.0, 300.0, 120.0},
     };
     return list;
 }
@@ -125,6 +143,12 @@ juce::String format(const juce::String& id, double v)
     if (id == "toneBass" || id == "toneMid" || id == "toneTreble" || id == "level")
         return (v >= 0 ? "+" : "") + juce::String(v, 1) + " dB";
     if (id == "bitCrusherBits") return juce::String(juce::roundToInt(v)) + "-bit";
+    if (id == "beatFxType" || id == "padFxType") return djfx::beatFxName(juce::roundToInt(v));
+    if (id == "colorFxType") return djfx::colorFxName(juce::roundToInt(v));
+    if (id == "beatFxBeats" || id == "padFxBeats") return djfx::beatStepLabel(juce::roundToInt(v)) + " beat";
+    if (id == "beatFxOn" || id == "padFxOn") return v > 0.5 ? "On" : "Off";
+    if (id == "fxBpm") return juce::String(v, 1) + " BPM";
+    if (id == "colorFx") return std::abs(v) < 0.02 ? juce::String("Off") : (v < 0 ? "L " : "R ") + pct(std::abs(v));
     if (id == "bitCrusherBoost") return "+" + juce::String(juce::roundToInt(v * 12.0)) + " dB";
     return pct(v);
 }

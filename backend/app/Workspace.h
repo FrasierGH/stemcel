@@ -19,6 +19,7 @@
 #include "Mashup.h"
 #include "ResizeBar.h"
 #include "WaveformStore.h"
+#include "performance/PerformanceView.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -84,6 +85,11 @@ class Workspace final : public juce::Component, public juce::DragAndDropContaine
     void alignAfterAnalysis(const juce::var& analysis);
     void alignAfterTempoSeed();
     bool isMixerShown() const { return mixer != nullptr && mixer->isVisible(); }
+    // Live performance mode (the decks, mixer and browser) in place of the timeline, or back:
+    // leaving writes the take into the timeline first.
+    void togglePerformance();
+    bool isPerformanceShown() const { return performance != nullptr; }
+    perf::PerformanceView* performanceView() { return performance.get(); }
     void saveViewState();
     // Imports files/rekordbox tracks and lays them end to end on `trackId` (a new track
     // when empty) from `positionMs`, as one undo step. Two or more ask first whether to auto
@@ -148,6 +154,8 @@ class Workspace final : public juce::Component, public juce::DragAndDropContaine
     int headerWidth = 193;
     void setupResizeBars();
     std::unique_ptr<MidiControllerActions> midi;
+    std::unique_ptr<perf::PerformanceView> performance;
+    bool performanceClosing = false;
     std::map<juce::String, juce::uint32> gridAlignPending; // item id -> when it was analysed
     std::function<void(const juce::String&, bool)> toast;
 };
