@@ -7,6 +7,7 @@
 // for the view and LEDs, and while recording, what happened is logged for the timeline.
 
 #include "DeckPlayer.h"
+#include "DjFx.h"
 #include "PerfCurves.h"
 #include "ToneEq.h"
 
@@ -54,11 +55,12 @@ struct RecEvent
         segment,
         platter,
         param,
-        clockRate
+        clockRate,
+        sample // a sampler slot: flags 1 = started, 0 = stopped; param = slot; a = its length (s)
     };
     juce::int64 at = 0;
     Kind kind = Kind::segment;
-    std::uint8_t deck = 0;  // 1..kDecks, 0 = master
+    std::uint8_t deck = 0;  // 1..kDecks, 0 = master, kSamplerDeck = the sampler
     std::uint8_t param = 0; // RecParam
     std::uint8_t flags = 0; // segment: 1 moving, 2 audible, 4 keyLock, 8 scratch
     std::int16_t semitones = 0;
@@ -67,6 +69,9 @@ struct RecEvent
     float tempo = 1.0F;
 };
 
+constexpr int kSamplerDeck = kDecks + 1;
+constexpr int kSamplerSlots = 64; // 4 banks of 16
+
 enum class RecParam : std::uint8_t
 {
     levelDb,
@@ -74,8 +79,28 @@ enum class RecParam : std::uint8_t
     midDb,
     trebleDb,
     filter,
+    colorFxType,
+    colorFx,
+    beatFxType,
+    beatFxBeats,
+    beatFxLevel,
+    beatFxOn,
+    padFxType,
+    padFxBeats,
+    padFxLevel,
+    padFxOn,
+    fxBpm,
     count
 };
+// Pad FX presets (rekordbox's PAD FX1 / PAD FX2 banks of 16: pads, then SHIFT + pads).
+struct PadFxPreset
+{
+    int type = 1;  // djfx::BeatFx
+    int step = 5;  // djfx::kBeatSteps
+    float level = 0.6F;
+    bool release = false; // the Release FX pad
+};
+const PadFxPreset& padFxPreset(int bank, int pad, bool shifted) noexcept;
 const char* recParamName(RecParam p) noexcept; // the timeline automation param id
 
 struct ChannelView
@@ -84,6 +109,7 @@ struct ChannelView
     bool hpCue = false;
     PadMode padMode = PadMode::hotCue;
     int beatJumpPage = 1, keyPage = 0, keyboardCue = -1;
+    int padFxHeld = -1; // a Pad FX pad held (0..15), or -1
 };
 
 struct EngineView
@@ -97,6 +123,16 @@ struct EngineView
     int masterDeck = 0; // 1..kDecks, 0 = none
     bool cueOutput = false; // headphones on outputs 3–4
     bool recording = false;
+    // The Beat FX section and Sound Color FX.
+    int fxType = 1, fxStep = djfx::kDefaultBeatStep, fxChannel = 0, colorType = 0, releaseType = 1;
+    float fxLevel = 0.5F;
+    bool fxOn = false, fxTapMode = false;
+    double fxBpm = 120.0;
+    // The sampler: its bank, volume, and the slots loaded and playing (bit per slot).
+    int samplerBank = 0;
+    float samplerVolume = 0.8F;
+    std::uint64_t samplesLoaded = 0, samplesPlaying = 0;
+    std::array<int, kSamplerSlots> sampleSerials{};
 };
 
 class PerformanceEngine final : public juce::AudioSource
@@ -113,6 +149,8 @@ class PerformanceEngine final : public juce::AudioSource
     void post(const Event& e);
     // `track` stays alive here until no deck holds it; `copyFromDeck` > 0 = Instant Doubles.
     void load(int deck, std::shared_ptr<const DeckTrack> track, int copyFromDeck = 0);
+    // A sampler slot's sample (0..kSamplerSlots-1); null empties it.
+    void loadSample(int slot, std::shared_ptr<const DeckTrack> sample);
     const EngineView& view() { return views.read(); }
     // Takes the recorder's events since the last call.
     void drainRecording(std::vector<RecEvent>& out);
@@ -136,6 +174,7 @@ class PerformanceEngine final : public juce::AudioSource
         const DeckTrack* track = nullptr;
         int copyFrom = 0;
         bool isLoad = false;
+        int sampleSlot = -1; // a sampler load
     };
     struct Channel
     {
@@ -145,6 +184,9 @@ class PerformanceEngine final : public juce::AudioSource
         bool hpCue = false;
         PadMode padMode = PadMode::hotCue;
         int beatJumpPage = 1, keyPage = 0, keyboardCue = -1;
+        int padFxHeld = -1;
+        int padFxRestoreStep = -1; // BEAT ◁/▷ during a held pad changes it until it is let go
+        djfx::DjFxChain fx;
         bool wasMoving = false;
         // The recorder's last values per param, and when they went out.
         std::array<double, static_cast<size_t>(RecParam::count)> sent{};
@@ -161,6 +203,12 @@ class PerformanceEngine final : public juce::AudioSource
     SyncSource syncSourceFor(int deck) const noexcept;
     double channelGain(int deck) const noexcept;
     void recordParams(int deck, juce::int64 at, bool force) noexcept;
+    void recordMasterParams(juce::int64 at, bool force) noexcept;
+    void beatFxControl(const Event& e) noexcept;
+    void applyBeatFx() noexcept;
+    void triggerSample(int slot, bool start) noexcept;
+    void renderSampler(float* const* out, int numOutChannels, int n) noexcept;
+    double fxBpmFor(int deck) const noexcept;
     void renderBlock(float* const* out, int numOutChannels, int n) noexcept;
     void publishView() noexcept;
 
@@ -168,6 +216,28 @@ class PerformanceEngine final : public juce::AudioSource
     std::array<Channel, kDecks> channels;
     float crossfader = 0.5F;
     int masterDeck = 0;
+    // Beat FX section
+    int fxType = 1, fxStep = djfx::kDefaultBeatStep, fxChannel = 0, colorType = 0, releaseType = 1;
+    float fxLevel = 0.5F;
+    bool fxOn = false, fxTapMode = false;
+    double tapBpm = 0.0;
+    juce::int64 lastTapAt = -1;
+    juce::int64 releaseLeft = 0; // a Release FX playing out (samples)
+    int releaseUnit = -1;        // 0 = master, 1..kDecks = that channel's Beat FX
+    djfx::BeatFxUnit masterFx;
+    std::array<double, static_cast<size_t>(RecParam::count)> masterSent{};
+    std::array<juce::int64, static_cast<size_t>(RecParam::count)> masterSentAt{};
+    // Sampler
+    struct Voice
+    {
+        const DeckTrack* sample = nullptr;
+        double pos = 0.0;
+        bool playing = false;
+    };
+    std::array<Voice, kSamplerSlots> voices{};
+    int samplerBank = 0;
+    float samplerVolume = 0.8F;
+    double samplerSentDb = 1000.0;
     double rate = 44100.0;
     int maxBlock = 512;
     juce::int64 clock = 0;

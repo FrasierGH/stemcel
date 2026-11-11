@@ -9,6 +9,7 @@
 #include "ProjectState.h"
 #include "performance/PerformanceEngine.h"
 #include "performance/PerformanceMapping.h"
+#include "DjFx.h"
 
 #include <juce_events/juce_events.h>
 #include <samplerate.h>
@@ -222,7 +223,64 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
             appEvents.push_back(e);
             return;
         }
+        if (e.control == perf::Control::padShift && e.mode == perf::PadMode::sampler && e.value > 0.5F)
+        {
+            auto load = e;
+            load.control = perf::Control::samplerLoad;
+            const juce::SpinLock::ScopedLockType lock(appLock);
+            appEvents.push_back(load);
+        }
         perfEngine().post(e);
+    }
+
+    // A sampler slot's sample: read whole on a worker, at the output's rate.
+    void loadSample(const juce::var& payload, ProjectState& project, const DecodedCache& decoded, juce::ThreadPool& pool)
+    {
+        const int slot = static_cast<int>(payload.getProperty("slot", -1));
+        if (slot < 0 || slot >= perf::kSamplerSlots) return;
+        const auto itemId = payload.getProperty("libraryItemId", "").toString();
+        if (itemId.isEmpty())
+        {
+            perfEngine().loadSample(slot, nullptr);
+            return;
+        }
+        const auto sourcePath = project.getLibraryItemFilePath(itemId);
+        if (sourcePath.isEmpty()) return;
+        auto sample = std::make_shared<perf::DeckTrack>();
+        sample->serial = ++serials;
+        sample->itemId = itemId;
+        sample->title = payload.getProperty("title", juce::File(sourcePath).getFileNameWithoutExtension()).toString();
+        itemBySerial[sample->serial] = itemId;
+        const auto playbackPath = resolveEnginePlaybackPath(sourcePath, project, decoded);
+        const double rate = engine.getOutputSampleRate() > 0.0 ? engine.getOutputSampleRate() : 44100.0;
+        auto* self = this;
+        pool.addJob(
+            [self, slot, sample, rate, playbackPath, sourcePath, &decoded]
+            {
+                auto& formats = self->engine.getFormatManager();
+                auto file = juce::File(playbackPath);
+                if (!file.existsAsFile() || file.hasFileExtension("mp3"))
+                {
+                    const auto built = decoded.ensureDecoded(juce::File(sourcePath), formats);
+                    if (built.existsAsFile()) file = built;
+                }
+                juce::String error;
+                auto audio = readWhole(file, formats, rate, error);
+                juce::MessageManager::callAsync(
+                    [self, slot, sample, audio, rate]
+                    {
+                        if (g_host.get() != self || audio == nullptr) return;
+                        sample->audio = audio;
+                        sample->sampleRate = rate;
+                        self->perfEngine().loadSample(slot, sample);
+                        auto* o = new juce::DynamicObject();
+                        o->setProperty("slot", slot);
+                        o->setProperty("libraryItemId", sample->itemId);
+                        o->setProperty("title", sample->title);
+                        o->setProperty("lengthSec", audio->getNumSamples() / rate);
+                        self->bridge.broadcast("PERF_SAMPLE_LOADED", juce::var(o));
+                    });
+            });
     }
 
     // Loading ---------------------------------------------------------------------------------
@@ -377,6 +435,7 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
             o->setProperty("control", perf::controlName(e.control));
             o->setProperty("deck", static_cast<int>(e.deck));
             o->setProperty("value", e.value);
+            o->setProperty("index", static_cast<int>(e.index));
             bridge.broadcast("PERF_UI", juce::var(o));
         }
         flushRecording();
@@ -443,6 +502,16 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
                     o->setProperty("kind", "start");
                     o->setProperty("sampleRate", r.a);
                     break;
+                case perf::RecEvent::Kind::sample:
+                {
+                    o->setProperty("kind", "sample");
+                    o->setProperty("slot", static_cast<int>(r.param));
+                    o->setProperty("start", (r.flags & 1) != 0);
+                    o->setProperty("lengthSec", r.a);
+                    const auto it = itemBySerial.find(r.serial);
+                    o->setProperty("libraryItemId", it != itemBySerial.end() ? it->second : juce::String());
+                    break;
+                }
             }
             list.add(juce::var(o));
         }
@@ -509,10 +578,31 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
             x->setProperty("beatJumpPage", cv.beatJumpPage);
             x->setProperty("keyPage", cv.keyPage);
             x->setProperty("keyboardCue", cv.keyboardCue);
+            x->setProperty("padFxHeld", cv.padFxHeld);
             x->setProperty("peak", peaks[static_cast<size_t>(d)]);
             decks.add(juce::var(x));
         }
         o->setProperty("decks", decks);
+        auto* fx = new juce::DynamicObject();
+        fx->setProperty("type", v.fxType);
+        fx->setProperty("typeName", djfx::beatFxName(v.fxType));
+        fx->setProperty("step", v.fxStep);
+        fx->setProperty("stepLabel", djfx::beatStepLabel(v.fxStep));
+        fx->setProperty("channel", v.fxChannel);
+        fx->setProperty("level", v.fxLevel);
+        fx->setProperty("on", v.fxOn);
+        fx->setProperty("tap", v.fxTapMode);
+        fx->setProperty("bpm", v.fxBpm);
+        fx->setProperty("colorType", v.colorType);
+        fx->setProperty("colorName", djfx::colorFxName(v.colorType));
+        fx->setProperty("releaseType", v.releaseType);
+        o->setProperty("fx", juce::var(fx));
+        auto* sampler = new juce::DynamicObject();
+        sampler->setProperty("bank", v.samplerBank);
+        sampler->setProperty("volume", v.samplerVolume);
+        sampler->setProperty("loaded", juce::String::toHexString(static_cast<juce::int64>(v.samplesLoaded)));
+        sampler->setProperty("playing", juce::String::toHexString(static_cast<juce::int64>(v.samplesPlaying)));
+        o->setProperty("sampler", juce::var(sampler));
         {
             const juce::SpinLock::ScopedLockType lock(appLock);
             if (monitorChanged)
@@ -583,6 +673,16 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
                         case perf::PadMode::beatJump: lit = dv.loaded; break;
                         case perf::PadMode::keyboard: lit = cv.keyboardCue < 0 ? dv.hotCues[static_cast<size_t>(pad)].set() : true; break;
                         case perf::PadMode::keyShift: lit = dv.loaded; break;
+                        case perf::PadMode::sampler:
+                        {
+                            const int slot = v.samplerBank * 16 + (deck - 1) * 8 + pad;
+                            const bool loaded = (v.samplesLoaded >> slot) & 1ULL;
+                            const bool playing = (v.samplesPlaying >> slot) & 1ULL;
+                            lit = playing ? blink : loaded;
+                            break;
+                        }
+                        case perf::PadMode::padFx1:
+                        case perf::PadMode::padFx2: lit = cv.padFxHeld == pad || cv.padFxHeld == pad + 8; break;
                         default: break;
                     }
                     setLed(d, id, modeName, deck, pad, on(lit));
@@ -592,6 +692,7 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
                 const double db = peak > 1.0e-5F ? 20.0 * std::log10(peak) : -100.0;
                 setLed(d, id, "meter", deck, 0, juce::jlimit(0, 127, static_cast<int>((db + 48.0) / 48.0 * 127.0)));
             }
+            setLed(d, id, "fxOn", 0, 0, v.fxOn ? 0x7F : 0x00);
         }
     }
 
@@ -648,6 +749,7 @@ bool dispatchPerformanceCommand(const juce::String& type, const juce::var& paylo
     if (type == "PERF_OPEN") h.open();
     else if (type == "PERF_CLOSE") h.close();
     else if (type == "PERF_LOAD") h.load(payload, project, decodedCache, pool);
+    else if (type == "PERF_SAMPLER_LOAD") h.loadSample(payload, project, decodedCache, pool);
     else if (type == "PERF_RECORD") engine.performanceEngine().setRecording(static_cast<bool>(payload.getProperty("on", false)));
     else if (type == "PERF_CONTROL")
     {

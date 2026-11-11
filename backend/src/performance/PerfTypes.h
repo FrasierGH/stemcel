@@ -89,6 +89,14 @@ enum class Control : std::uint8_t
     fxLevel,
     fxOn,
     fxRelease,
+    // On screen (rekordbox's panels): the Sound Color FX and Release FX types, the Beat FX type
+    // directly, the sampler's bank and volume, and SHIFT + a sampler pad on an empty slot.
+    colorFxSelect, // value = ColorFx index
+    releaseFxSelect, // value = 0 Vinyl Brake, 1 Echo, 2 Spin Back
+    fxTypeSelect,  // value = BeatFx index
+    samplerBank,   // value = 0..3
+    samplerVolume, // value 0..1
+    samplerLoad,   // index = slot (the app loads the browser's item)
     count
 };
 

@@ -56,7 +56,26 @@ std::vector<std::pair<double, double>> thin(const std::vector<std::pair<double, 
     return out;
 }
 
-double tolerance(const juce::String& param) { return param == "filter" ? 0.01 : 0.3; }
+double tolerance(const juce::String& param)
+{
+    if (param == "filter" || param == "colorFx" || param.endsWith("Level")) return 0.01;
+    if (param == "fxBpm") return 0.05;
+    return 0.3;
+}
+
+// Whole-number parameters (types, beat steps, on/off) hold their value to the next change.
+bool stepped(const juce::String& param)
+{
+    return param.endsWith("Type") || param.endsWith("Beats") || param.endsWith("On");
+}
+
+std::vector<std::pair<double, double>> changesOnly(const std::vector<std::pair<double, double>>& pts)
+{
+    std::vector<std::pair<double, double>> out;
+    for (const auto& p : pts)
+        if (out.empty() || std::abs(out.back().second - p.second) > 1.0e-6) out.push_back(p);
+    return out;
+}
 } // namespace
 
 void PerformanceTake::clear()
@@ -66,6 +85,7 @@ void PerformanceTake::clear()
     segments.clear();
     platter.clear();
     params.clear();
+    sampleHits.clear();
 }
 
 void PerformanceTake::add(const juce::var& payload)
@@ -102,6 +122,20 @@ void PerformanceTake::add(const juce::var& payload)
             s.scratch = static_cast<bool>(e.getProperty("scratch", false));
             segments.push_back(std::move(s));
         }
+        else if (kind == "sample")
+        {
+            const int slot = static_cast<int>(e.getProperty("slot", 0));
+            if (static_cast<bool>(e.getProperty("start", false)))
+                sampleHits.push_back({at, -1.0, static_cast<double>(e.getProperty("lengthSec", 0.0)), slot,
+                                      e.getProperty("libraryItemId", "").toString()});
+            else
+                for (auto it = sampleHits.rbegin(); it != sampleHits.rend(); ++it)
+                    if (it->slot == slot && it->stopAt < 0.0)
+                    {
+                        it->stopAt = at;
+                        break;
+                    }
+        }
         else if (kind == "platter")
             platter[deck].push_back({at, static_cast<double>(e.getProperty("pos", 0.0))});
         else if (kind == "param")
@@ -113,7 +147,7 @@ bool PerformanceTake::hasAudio() const
 {
     for (const auto& s : segments)
         if (s.moving && s.audible) return true;
-    return false;
+    return !sampleHits.empty();
 }
 
 double PerformanceTake::lengthSec() const { return startAt < 0.0 ? 0.0 : (lastAt - startAt) / rate; }
@@ -193,9 +227,33 @@ TakeEdits PerformanceTake::edits(double startMs) const
                     if (param == "level") v = juce::jlimit(-60.0, 6.0, v);
                     curve.push_back({ms(p.at), v});
                 }
-                out.automation[deck][param] = thin(curve, tolerance(param));
+                out.automation[deck][param] = stepped(param) ? changesOnly(curve) : thin(curve, tolerance(param));
             }
     }
+    // The master's Beat FX (when it was on the master) and the sampler.
+    if (const auto pit = params.find(0); pit != params.end())
+    {
+        bool used = false;
+        if (const auto on = pit->second.find("beatFxOn"); on != pit->second.end())
+            for (const auto& p : on->second) used = used || p.value > 0.5;
+        if (used)
+            for (const auto& [param, points] : pit->second)
+            {
+                std::vector<std::pair<double, double>> curve;
+                for (const auto& p : points) curve.push_back({ms(p.at), p.value});
+                out.master[param] = stepped(param) ? changesOnly(curve) : thin(curve, tolerance(param));
+            }
+    }
+    for (const auto& h : sampleHits)
+    {
+        if (h.itemId.isEmpty()) continue;
+        const double endAt = h.stopAt >= 0.0 ? h.stopAt : h.at + h.lengthSec * rate;
+        const double length = std::min(h.lengthSec * 1000.0, (endAt - h.at) / rate * 1000.0);
+        if (length >= kMinClipMs) out.samples.push_back({h.slot, h.itemId, ms(h.at), length});
+    }
+    if (const auto pit = params.find(kDecks + 1); pit != params.end())
+        if (const auto level = pit->second.find("level"); level != pit->second.end())
+            for (const auto& p : level->second) out.samplerLevel.push_back({ms(p.at), juce::jlimit(-60.0, 6.0, p.value)});
     return out;
 }
 
@@ -203,7 +261,7 @@ bool PerformanceTake::write(EngineClient& engine, ProjectMirror& mirror, Timelin
                             int takeNumber) const
 {
     const auto e = edits(startMs);
-    if (e.clips.empty()) return false;
+    if (e.clips.empty() && e.samples.empty()) return false;
     engine.inUndoGroup(
         "Live performance",
         [&]
@@ -242,12 +300,43 @@ bool PerformanceTake::write(EngineClient& engine, ProjectMirror& mirror, Timelin
                 for (const auto& [param, pts] : curves)
                 {
                     std::vector<automation::Point> points;
-                    for (const auto& [t, v] : pts) points.push_back({t, v});
+                    for (const auto& [t, v] : pts) points.push_back({t, v, stepped(param) ? "hold" : "linear"});
                     if (points.empty()) continue;
                     actions.setAutomation(track->second, param, points);
                     lanes.push_back({param, automation::kDefaultLaneHeight});
                 }
                 if (!lanes.empty()) actions.setAutomationLanes(track->second, lanes);
+            }
+            // The master's Beat FX, added to whatever its lanes already hold after the take.
+            for (const auto& [param, pts] : e.master)
+            {
+                std::vector<automation::Point> points;
+                for (const auto& [t, v] : pts) points.push_back({t, v, stepped(param) ? "hold" : "linear"});
+                if (!points.empty()) actions.setAutomation(kMasterTrackId, param, points);
+            }
+            // Sampler hits: a track per slot used, at the sampler's volume.
+            std::map<int, juce::String> samplerTracks;
+            for (const auto& h : e.samples)
+            {
+                auto& track = samplerTracks[h.slot];
+                if (track.isEmpty())
+                {
+                    track = actions.addTrack();
+                    actions.renameTrack(track, "Sampler " + juce::String(h.slot % 16 + 1) +
+                                                   (takeNumber > 1 ? " (take " + juce::String(takeNumber) + ")" : ""));
+                    if (!e.samplerLevel.empty())
+                    {
+                        std::vector<automation::Point> points;
+                        for (const auto& [t, v] : e.samplerLevel) points.push_back({t, v});
+                        actions.setAutomation(track, "level", points);
+                    }
+                }
+                engine.send("CLIP_ADD", obj({{"trackId", track},
+                                             {"clipId", EngineClient::newId("clip")},
+                                             {"libraryItemId", h.itemId},
+                                             {"positionMs", h.positionMs},
+                                             {"inMs", 0.0},
+                                             {"durationMs", h.durationMs}}));
             }
             actions.addMarker(startMs);
         });

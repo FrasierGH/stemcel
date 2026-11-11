@@ -159,7 +159,7 @@ void DeckDisplay::paintCloseUp(juce::Graphics& g, juce::Rectangle<float> area)
             const double t = info.anchorSec + static_cast<double>(k) * beat;
             if (t < 0.0 || t > state.lengthSec) continue;
             const bool bar = ((k % 4) + 4) % 4 == 0;
-            g.setColour(bar ? colours::zinc500 : colours::zinc700);
+            g.setColour(bar ? colours::text.withAlpha(0.55F) : colours::textDim.withAlpha(0.3F));
             g.fillRect(xAt(t), area.getY(), bar ? 1.5F : 1.0F, area.getHeight());
         }
     }

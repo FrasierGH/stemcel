@@ -3841,6 +3841,12 @@ void SmokeTest::addTempoJourney()
                          const auto& d = view->stateForTest().decks[0];
                          if (!d.playing || d.posSec < perfCue + 0.7) return false;
                          report.add("performance play: at " + juce::String(d.posSec, 2) + " s, fader " + juce::String(d.fader, 2));
+                         if (auto* window = juce::TopLevelWindow::getTopLevelWindow(0))
+                         {
+                             const auto image = window->createComponentSnapshot(window->getLocalBounds());
+                             juce::FileOutputStream out(workDir.getChildFile("performance.png"));
+                             if (out.openedOk()) juce::PNGImageFormat().writeImageToStream(image, out);
+                         }
                          return std::abs(d.fader - 1.0F) < 0.01F;
                      }});
     steps.back().poll = true;

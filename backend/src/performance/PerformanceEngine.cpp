@@ -23,8 +23,51 @@ constexpr std::array<std::array<int, 8>, 3> kKeyPages{{
 constexpr double kFineJumpSeconds = 0.005;
 constexpr double kParamMinIntervalSec = 0.010;
 
-double paramEpsilon(RecParam p) noexcept { return p == RecParam::filter ? 0.002 : 0.05; }
+double paramEpsilon(RecParam p) noexcept
+{
+    switch (p)
+    {
+        case RecParam::filter:
+        case RecParam::colorFx:
+        case RecParam::beatFxLevel:
+        case RecParam::padFxLevel:
+            return 0.004;
+        case RecParam::fxBpm:
+            return 0.05;
+        case RecParam::levelDb:
+        case RecParam::bassDb:
+        case RecParam::midDb:
+        case RecParam::trebleDb:
+            return 0.05;
+        default:
+            return 0.5; // whole-number steps: any change
+    }
+}
+
+// Release FX types: Vinyl Brake, Echo, Spin Back.
+constexpr std::array<int, 3> kReleaseTypes{static_cast<int>(djfx::BeatFx::vinylBrake), static_cast<int>(djfx::BeatFx::echo),
+                                           static_cast<int>(djfx::BeatFx::spinBack)};
+
+// PAD FX1 and PAD FX2: [bank][pad + 8 with SHIFT]. rekordbox doesn't publish its defaults;
+// these cover every Beat FX, at the lengths DJs reach for.
+using FX = djfx::BeatFx;
+constexpr int t(FX f) { return static_cast<int>(f); }
+const PadFxPreset kPadFx[2][16] = {
+    {{t(FX::echo), 3, 0.6F}, {t(FX::echo), 4, 0.6F}, {t(FX::roll), 2, 1.0F}, {t(FX::roll), 1, 1.0F},
+     {t(FX::trans), 2, 0.9F}, {t(FX::filter), 5, 0.8F}, {t(FX::flanger), 6, 0.7F}, {t(FX::reverb), 7, 0.7F},
+     {t(FX::delay), 3, 0.6F}, {t(FX::pingPong), 3, 0.6F}, {t(FX::spiral), 3, 0.6F}, {t(FX::phaser), 7, 0.7F},
+     {t(FX::pitch), 5, 0.85F}, {t(FX::slipRoll), 3, 0.6F}, {t(FX::helix), 3, 0.7F}, {t(FX::vinylBrake), 5, 0.5F}},
+    {{t(FX::echo), 2, 0.6F}, {t(FX::pingPong), 2, 0.6F}, {t(FX::roll), 0, 1.0F}, {t(FX::roll), 3, 1.0F},
+     {t(FX::trans), 1, 0.9F}, {t(FX::trans), 3, 0.9F}, {t(FX::spiral), 5, 0.6F}, {t(FX::echo), 5, 0.7F, true},
+     {t(FX::reverb), 8, 0.8F}, {t(FX::phaser), 8, 0.7F}, {t(FX::flanger), 7, 0.7F}, {t(FX::filter), 6, 0.8F},
+     {t(FX::pitch), 5, 0.2F}, {t(FX::delay), 5, 0.6F}, {t(FX::helix), 2, 0.7F}, {t(FX::vinylBrake), 6, 0.6F}},
+};
 } // namespace
+
+const PadFxPreset& padFxPreset(int bank, int pad, bool shifted) noexcept
+{
+    return kPadFx[std::clamp(bank, 0, 1)][std::clamp(pad, 0, 7) + (shifted ? 8 : 0)];
+}
 
 const char* recParamName(RecParam p) noexcept
 {
@@ -35,6 +78,17 @@ const char* recParamName(RecParam p) noexcept
         case RecParam::midDb: return "toneMid";
         case RecParam::trebleDb: return "toneTreble";
         case RecParam::filter: return "filter";
+        case RecParam::colorFxType: return "colorFxType";
+        case RecParam::colorFx: return "colorFx";
+        case RecParam::beatFxType: return "beatFxType";
+        case RecParam::beatFxBeats: return "beatFxBeats";
+        case RecParam::beatFxLevel: return "beatFxLevel";
+        case RecParam::beatFxOn: return "beatFxOn";
+        case RecParam::padFxType: return "padFxType";
+        case RecParam::padFxBeats: return "padFxBeats";
+        case RecParam::padFxLevel: return "padFxLevel";
+        case RecParam::padFxOn: return "padFxOn";
+        case RecParam::fxBpm: return "fxBpm";
         default: return "";
     }
 }
@@ -134,6 +188,26 @@ void PerformanceEngine::load(int deck, std::shared_ptr<const DeckTrack> track, i
     queueFifo.finishedWrite(1);
 }
 
+void PerformanceEngine::loadSample(int slot, std::shared_ptr<const DeckTrack> sample)
+{
+    if (slot < 0 || slot >= kSamplerSlots) return;
+    const DeckTrack* raw = sample.get();
+    if (sample != nullptr)
+    {
+        const std::scoped_lock lock(tracksMutex);
+        if (std::find(tracks.begin(), tracks.end(), sample) == tracks.end()) tracks.push_back(std::move(sample));
+    }
+    const juce::SpinLock::ScopedLockType lock(writeLock);
+    int s1 = 0, n1 = 0, s2 = 0, n2 = 0;
+    queueFifo.prepareToWrite(1, s1, n1, s2, n2);
+    if (n1 == 0) return;
+    Queued q;
+    q.track = raw;
+    q.sampleSlot = slot;
+    queue[static_cast<size_t>(s1)] = q;
+    queueFifo.finishedWrite(1);
+}
+
 void PerformanceEngine::collectGarbage()
 {
     // A track can go once no deck shows it and no load of it is still queued.
@@ -145,6 +219,8 @@ void PerformanceEngine::collectGarbage()
                                 {
                                     for (const auto& d : v.decks)
                                         if (d.serial == t->serial) return false;
+                                    for (const int serial : v.sampleSerials)
+                                        if (serial == t->serial) return false;
                                     return true;
                                 }),
                  tracks.end());
@@ -181,6 +257,181 @@ void PerformanceEngine::prepareToPlay(int samplesPerBlockExpected, double sample
                        static_cast<float>(curves::eqDb(c.eqHi)), static_cast<float>(curves::filterAmount(c.filter)), true);
         c.gain.reset(rate, 0.008);
         c.gain.setCurrentAndTargetValue(0.0F);
+        c.fx.allocate(rate);
+    }
+    masterFx.allocate(rate);
+    applyBeatFx();
+}
+
+double PerformanceEngine::fxBpmFor(int deck) const noexcept
+{
+    // TAP mode: the tapped tempo; else the channel's own (the master deck's for the master).
+    if (fxTapMode && tapBpm > 0.0) return tapBpm;
+    const int d = deck >= 1 ? deck : masterDeck;
+    if (d >= 1 && d <= kDecks)
+        if (const double bpm = decks[static_cast<size_t>(d - 1)]->effectiveBpm(); bpm > 0.0) return bpm;
+    for (const auto& p : decks)
+        if (p->effectiveBpm() > 0.0) return p->effectiveBpm();
+    return 120.0;
+}
+
+// The Beat FX section on its unit (a channel's, or the master's), with a Release FX taking it
+// over while it plays out; the other units' section FX off.
+void PerformanceEngine::applyBeatFx() noexcept
+{
+    for (int unit = 0; unit <= kDecks; ++unit)
+    {
+        auto& fx = unit == 0 ? masterFx : channels[static_cast<size_t>(unit - 1)].fx.beat;
+        const bool routed = (fxChannel == 2 && unit == 0) || (fxChannel == unit - 1 && unit >= 1);
+        const bool releasing = releaseLeft > 0 && releaseUnit == unit;
+        fx.setType(releasing ? kReleaseTypes[static_cast<size_t>(std::clamp(releaseType, 0, 2))] : fxType);
+        fx.setBeatStep(releasing ? djfx::kDefaultBeatStep : fxStep);
+        fx.setLevel(releasing ? 0.8F : fxLevel);
+        fx.setOn(releasing || (routed && fxOn));
+    }
+}
+
+void PerformanceEngine::beatFxControl(const Event& e) noexcept
+{
+    const bool press = e.value > 0.5F;
+    int heldDeck = 0;
+    for (int d = 1; d <= kDecks; ++d)
+        if (channels[static_cast<size_t>(d - 1)].padFxHeld >= 0) heldDeck = d;
+    switch (e.control)
+    {
+        case Control::fxBeatPrev:
+        case Control::fxBeatNext:
+        {
+            if (!press) return;
+            const int delta = e.control == Control::fxBeatNext ? 1 : -1;
+            if (heldDeck != 0)
+            {
+                // BEAT ◁/▷ while a Pad FX pad is held: that pad's length, until it is let go.
+                auto& c = channels[static_cast<size_t>(heldDeck - 1)];
+                c.padFxRestoreStep = std::clamp((c.padFxRestoreStep >= 0 ? c.padFxRestoreStep : djfx::kDefaultBeatStep) + delta, 0, 9);
+                c.fx.pad.setBeatStep(c.padFxRestoreStep);
+                return;
+            }
+            fxStep = std::clamp(fxStep + delta, 0, static_cast<int>(djfx::kBeatSteps.size()) - 1);
+            break;
+        }
+        case Control::fxBpmAuto:
+            if (press) fxTapMode = false;
+            break;
+        case Control::fxTap:
+        case Control::hpCueShift:
+            if (!press) break;
+            fxTapMode = true;
+            if (lastTapAt >= 0)
+            {
+                const double seconds = static_cast<double>(clock - lastTapAt) / rate;
+                if (seconds > 0.2 && seconds < 2.0) tapBpm = tapBpm > 0.0 ? 0.5 * tapBpm + 0.5 * (60.0 / seconds) : 60.0 / seconds;
+            }
+            lastTapAt = clock;
+            break;
+        case Control::fxSelect:
+            if (press) fxType = (fxType + 1) % djfx::kBeatFxSelectable;
+            break;
+        case Control::fxSelectPrev:
+            if (press) fxType = (fxType + djfx::kBeatFxSelectable - 1) % djfx::kBeatFxSelectable;
+            break;
+        case Control::fxTypeSelect:
+            fxType = std::clamp(static_cast<int>(std::lround(e.value)), 0, djfx::kBeatFxSelectable - 1);
+            break;
+        case Control::fxChannel:
+            fxChannel = std::clamp(static_cast<int>(e.index), 0, 2);
+            break;
+        case Control::fxLevel:
+            fxLevel = std::clamp(e.value, 0.0F, 1.0F);
+            break;
+        case Control::fxOn:
+            if (press) fxOn = !fxOn;
+            break;
+        case Control::fxRelease:
+            if (!press) break;
+            // Release FX on the Beat FX's channel for a beat or two, then the Beat FX is off.
+            releaseUnit = fxChannel == 2 ? 0 : fxChannel + 1;
+            releaseLeft = static_cast<juce::int64>(60.0 / fxBpmFor(releaseUnit) * (releaseType == 1 ? 1.0 : 2.0) * rate);
+            fxOn = false;
+            break;
+        case Control::releaseFxSelect:
+            releaseType = std::clamp(static_cast<int>(std::lround(e.value)), 0, 2);
+            break;
+        case Control::colorFxSelect:
+            colorType = std::clamp(static_cast<int>(std::lround(e.value)), 0, static_cast<int>(djfx::ColorFx::count) - 1);
+            for (auto& c : channels)
+            {
+                // The FILTER knob drives the channel filter, or the colour effect instead.
+                const bool filter = colorType == static_cast<int>(djfx::ColorFx::filter);
+                c.eq.setFilterTarget(filter ? static_cast<float>(curves::filterAmount(c.filter)) : 0.0F, false);
+                c.fx.color.setType(colorType);
+                c.fx.color.setAmount(filter ? 0.0F : static_cast<float>(curves::filterAmount(c.filter)));
+            }
+            break;
+        default:
+            break;
+    }
+    applyBeatFx();
+}
+
+void PerformanceEngine::triggerSample(int slot, bool start) noexcept
+{
+    auto& v = voices[static_cast<size_t>(slot)];
+    const bool rec = recordingOn.load(std::memory_order_relaxed);
+    if (v.playing && rec)
+    {
+        RecEvent r;
+        r.at = clock;
+        r.kind = RecEvent::Kind::sample;
+        r.deck = static_cast<std::uint8_t>(kSamplerDeck);
+        r.param = static_cast<std::uint8_t>(slot);
+        r.flags = 0;
+        r.serial = v.sample != nullptr ? v.sample->serial : 0;
+        pushRec(r);
+    }
+    v.playing = false;
+    if (!start || v.sample == nullptr || v.sample->audio == nullptr) return;
+    v.pos = 0.0;
+    v.playing = true;
+    if (rec)
+    {
+        RecEvent r;
+        r.at = clock;
+        r.kind = RecEvent::Kind::sample;
+        r.deck = static_cast<std::uint8_t>(kSamplerDeck);
+        r.param = static_cast<std::uint8_t>(slot);
+        r.flags = 1;
+        r.serial = v.sample->serial;
+        r.a = v.sample->audio->getNumSamples() / v.sample->sampleRate;
+        pushRec(r);
+    }
+}
+
+void PerformanceEngine::renderSampler(float* const* out, int numOutChannels, int n) noexcept
+{
+    const auto gain = static_cast<float>(curves::faderGain(samplerVolume));
+    for (int slot = 0; slot < kSamplerSlots; ++slot)
+    {
+        auto& v = voices[static_cast<size_t>(slot)];
+        if (!v.playing || v.sample == nullptr || v.sample->audio == nullptr) continue;
+        const auto& audio = *v.sample->audio;
+        const double step = v.sample->sampleRate / rate;
+        const int len = audio.getNumSamples();
+        const float* l = audio.getReadPointer(0);
+        const float* r = audio.getReadPointer(std::min(1, audio.getNumChannels() - 1));
+        for (int i = 0; i < n; ++i)
+        {
+            const auto k = static_cast<int>(v.pos);
+            if (k >= len - 1)
+            {
+                triggerSample(slot, false); // played out
+                break;
+            }
+            const auto f = static_cast<float>(v.pos - k);
+            out[0][i] += (l[k] + (l[k + 1] - l[k]) * f) * gain;
+            if (numOutChannels > 1) out[1][i] += (r[k] + (r[k + 1] - r[k]) * f) * gain;
+            v.pos += step;
+        }
     }
 }
 
@@ -353,13 +604,53 @@ void PerformanceEngine::applyPad(int deck, const Event& e, bool shifted) noexcep
             player.handle(out);
             break;
         }
+        case PadMode::padFx1:
+        case PadMode::padFx2:
+        {
+            const int bank = e.mode == PadMode::padFx1 ? 0 : 1;
+            const int slot = pad + (shifted ? 8 : 0);
+            if (press)
+            {
+                const auto& preset = padFxPreset(bank, pad, shifted);
+                c.padFxHeld = slot;
+                c.padFxRestoreStep = -1;
+                c.fx.pad.setType(preset.release ? kReleaseTypes[static_cast<size_t>(std::clamp(releaseType, 0, 2))] : preset.type);
+                c.fx.pad.setBeatStep(preset.step);
+                c.fx.pad.setLevel(preset.level);
+                c.fx.pad.setOn(true);
+            }
+            else if (c.padFxHeld == slot)
+            {
+                c.padFxHeld = -1;
+                c.padFxRestoreStep = -1;
+                c.fx.pad.setOn(false);
+            }
+            break;
+        }
+        case PadMode::sampler:
+        {
+            if (!press) break;
+            const int slot = samplerBank * 16 + (deck - 1) * 8 + pad;
+            // A pad plays its slot from the start (again if it is playing); SHIFT stops it.
+            // SHIFT on an idle slot loads the browser's track into it (the app does that).
+            if (shifted) triggerSample(slot, false);
+            else triggerSample(slot, true);
+            break;
+        }
         default:
-            break; // sampler and pad FX: their own milestone
+            break;
     }
 }
 
 void PerformanceEngine::apply(const Queued& q) noexcept
 {
+    if (q.sampleSlot >= 0)
+    {
+        auto& v = voices[static_cast<size_t>(q.sampleSlot)];
+        triggerSample(q.sampleSlot, false);
+        v.sample = q.track;
+        return;
+    }
     if (q.isLoad)
     {
         const int d = q.event.deck;
@@ -387,11 +678,23 @@ void PerformanceEngine::apply(const Queued& q) noexcept
         case Control::fxTap:
         case Control::fxSelect:
         case Control::fxSelectPrev:
+        case Control::fxTypeSelect:
+        case Control::releaseFxSelect:
+        case Control::colorFxSelect:
+        case Control::hpCueShift:
+            beatFxControl(e);
+            return;
+        case Control::samplerBank:
+            samplerBank = std::clamp(static_cast<int>(std::lround(e.value)), 0, 3);
+            return;
+        case Control::samplerVolume:
+            samplerVolume = std::clamp(e.value, 0.0F, 1.0F);
+            return;
         case Control::masterLevel:
         case Control::masterCue:
         case Control::hpMix:
         case Control::hpLevel:
-            return; // effects: their own milestone; the master and headphone knobs act in hardware
+            return; // the master and headphone knobs act in the unit's own hardware
         default:
             break;
     }
@@ -405,7 +708,15 @@ void PerformanceEngine::apply(const Queued& q) noexcept
         case Control::eqHi: c.eqHi = e.value; c.eq.setTrebleTarget(static_cast<float>(curves::eqDb(e.value)), false); break;
         case Control::eqMid: c.eqMid = e.value; c.eq.setMidTarget(static_cast<float>(curves::eqDb(e.value)), false); break;
         case Control::eqLow: c.eqLow = e.value; c.eq.setBassTarget(static_cast<float>(curves::eqDb(e.value)), false); break;
-        case Control::filter: c.filter = e.value; c.eq.setFilterTarget(static_cast<float>(curves::filterAmount(e.value)), false); break;
+        case Control::filter:
+        {
+            c.filter = e.value;
+            const bool asFilter = colorType == static_cast<int>(djfx::ColorFx::filter);
+            c.eq.setFilterTarget(asFilter ? static_cast<float>(curves::filterAmount(e.value)) : 0.0F, false);
+            c.fx.color.setType(colorType);
+            c.fx.color.setAmount(asFilter ? 0.0F : static_cast<float>(curves::filterAmount(e.value)));
+            break;
+        }
         case Control::fader: c.fader = e.value; break;
         case Control::hpCue:
             if (press) c.hpCue = !c.hpCue;
@@ -438,9 +749,28 @@ void PerformanceEngine::apply(const Queued& q) noexcept
 void PerformanceEngine::recordParams(int deck, juce::int64 at, bool force) noexcept
 {
     auto& c = channels[static_cast<size_t>(deck - 1)];
+    const bool asFilter = colorType == static_cast<int>(djfx::ColorFx::filter);
+    const bool routed = fxChannel == deck - 1;
+    const bool releasing = releaseLeft > 0 && releaseUnit == deck;
+    const PadFxPreset* pad = nullptr;
+    if (c.padFxHeld >= 0) pad = &padFxPreset(c.padMode == PadMode::padFx2 ? 1 : 0, c.padFxHeld % 8, c.padFxHeld >= 8);
     const std::array<double, static_cast<size_t>(RecParam::count)> values{
-        curves::gainToDb(channelGain(deck)), curves::eqDb(c.eqLow), curves::eqDb(c.eqMid), curves::eqDb(c.eqHi),
-        curves::filterAmount(c.filter)};
+        curves::gainToDb(channelGain(deck)),
+        curves::eqDb(c.eqLow),
+        curves::eqDb(c.eqMid),
+        curves::eqDb(c.eqHi),
+        asFilter ? curves::filterAmount(c.filter) : 0.0,
+        static_cast<double>(colorType),
+        asFilter ? 0.0 : curves::filterAmount(c.filter),
+        static_cast<double>(releasing ? kReleaseTypes[static_cast<size_t>(std::clamp(releaseType, 0, 2))] : fxType),
+        static_cast<double>(releasing ? djfx::kDefaultBeatStep : fxStep),
+        releasing ? 0.8 : static_cast<double>(fxLevel),
+        (releasing || (routed && fxOn)) ? 1.0 : 0.0,
+        static_cast<double>(pad == nullptr ? 1 : (pad->release ? kReleaseTypes[static_cast<size_t>(std::clamp(releaseType, 0, 2))] : pad->type)),
+        static_cast<double>(pad == nullptr ? djfx::kDefaultBeatStep : (c.padFxRestoreStep >= 0 ? c.padFxRestoreStep : pad->step)),
+        static_cast<double>(pad == nullptr ? 0.5F : pad->level),
+        pad != nullptr ? 1.0 : 0.0,
+        fxBpmFor(deck)};
     const auto minGap = static_cast<juce::int64>(kParamMinIntervalSec * rate);
     for (size_t i = 0; i < values.size(); ++i)
     {
@@ -466,6 +796,47 @@ void PerformanceEngine::recordParams(int deck, juce::int64 at, bool force) noexc
         c.sent[i] = values[i];
         c.sentAt[i] = at;
         c.pending[i] = false;
+    }
+}
+
+void PerformanceEngine::recordMasterParams(juce::int64 at, bool force) noexcept
+{
+    // The master's Beat FX (CH SELECT = MASTER) and its tempo; the sampler's level.
+    const bool releasing = releaseLeft > 0 && releaseUnit == 0;
+    const std::array<std::pair<RecParam, double>, 5> values{{
+        {RecParam::beatFxType, static_cast<double>(releasing ? kReleaseTypes[static_cast<size_t>(std::clamp(releaseType, 0, 2))] : fxType)},
+        {RecParam::beatFxBeats, static_cast<double>(releasing ? djfx::kDefaultBeatStep : fxStep)},
+        {RecParam::beatFxLevel, releasing ? 0.8 : static_cast<double>(fxLevel)},
+        {RecParam::beatFxOn, (releasing || (fxChannel == 2 && fxOn)) ? 1.0 : 0.0},
+        {RecParam::fxBpm, fxBpmFor(0)},
+    }};
+    const auto minGap = static_cast<juce::int64>(kParamMinIntervalSec * rate);
+    for (const auto& [param, value] : values)
+    {
+        const auto i = static_cast<size_t>(param);
+        const bool changed = std::abs(value - masterSent[i]) > paramEpsilon(param);
+        if (!force && (!changed || at - masterSentAt[i] < minGap)) continue;
+        RecEvent r;
+        r.at = at;
+        r.kind = RecEvent::Kind::param;
+        r.deck = 0;
+        r.param = static_cast<std::uint8_t>(param);
+        r.a = value;
+        pushRec(r);
+        masterSent[i] = value;
+        masterSentAt[i] = at;
+    }
+    const double samplerDb = curves::gainToDb(curves::faderGain(samplerVolume));
+    if (force || std::abs(samplerDb - samplerSentDb) > 0.05)
+    {
+        RecEvent r;
+        r.at = at;
+        r.kind = RecEvent::Kind::param;
+        r.deck = static_cast<std::uint8_t>(kSamplerDeck);
+        r.param = static_cast<std::uint8_t>(RecParam::levelDb);
+        r.a = samplerDb;
+        pushRec(r);
+        samplerSentDb = samplerDb;
     }
 }
 
@@ -526,6 +897,18 @@ void PerformanceEngine::renderBlock(float* const* out, int numOutChannels, int n
     }
 
     updateMaster();
+    if (releaseLeft > 0)
+    {
+        releaseLeft -= n;
+        if (releaseLeft <= 0)
+        {
+            releaseLeft = 0;
+            releaseUnit = -1;
+        }
+        applyBeatFx();
+    }
+    for (int d = 1; d <= kDecks; ++d) channels[static_cast<size_t>(d - 1)].fx.setBpm(fxBpmFor(d));
+    masterFx.setBpm(fxBpmFor(0));
     std::fill(out[0], out[0] + n, 0.0F);
     if (numOutChannels > 1 && out[1] != out[0]) std::fill(out[1], out[1] + n, 0.0F);
     const bool cueOn = cueOutputAvailable.load(std::memory_order_relaxed);
@@ -546,16 +929,25 @@ void PerformanceEngine::renderBlock(float* const* out, int numOutChannels, int n
         player.render(buf, n, sync, sink, clock, audible);
         c.wasMoving = player.moving();
 
+        // The channel as a timeline track plays it: EQ and filter, Sound Color FX, the level,
+        // then Beat FX and Pad FX (whose echoes ring on after the fader closes).
         juce::AudioBuffer<float> view(buf, 2, n);
         c.eq.process(view, 0, n);
+        c.fx.processColor(view, 0, n);
         if (cueOn && c.hpCue && cueAt + n <= cueBuffer.getNumSamples())
             for (int ch = 0; ch < 2; ++ch) cueBuffer.addFrom(ch, cueAt, buf[ch], n);
         c.gain.setTargetValue(static_cast<float>(target));
-        float peak = 0.0F;
         for (int i = 0; i < n; ++i)
         {
             const float g = c.gain.getNextValue();
-            const float l = buf[0][i] * g, r = buf[1][i] * g;
+            buf[0][i] *= g;
+            buf[1][i] *= g;
+        }
+        c.fx.processBeat(view, 0, n);
+        float peak = 0.0F;
+        for (int i = 0; i < n; ++i)
+        {
+            const float l = buf[0][i], r = buf[1][i];
             out[0][i] += l;
             if (numOutChannels > 1) out[1][i] += r;
             peak = std::max(peak, std::max(std::abs(l), std::abs(r)));
@@ -564,6 +956,10 @@ void PerformanceEngine::renderBlock(float* const* out, int numOutChannels, int n
         while (peak > prev && !peaks[static_cast<size_t>(d - 1)].compare_exchange_weak(prev, peak)) {}
         if (rec) recordParams(d, clock, restart);
     }
+    // The sampler into the master, then the master's Beat FX over everything.
+    renderSampler(out, numOutChannels, n);
+    if (numOutChannels > 1) masterFx.process(out[0], out[1], n);
+    if (rec) recordMasterParams(clock, restart);
     if (cueOn) cueSamples = cueAt + n;
     clock += n;
 }
@@ -603,6 +999,27 @@ void PerformanceEngine::publishView() noexcept
         cv.beatJumpPage = c.beatJumpPage;
         cv.keyPage = c.keyPage;
         cv.keyboardCue = c.keyboardCue;
+        cv.padFxHeld = c.padFxHeld;
+    }
+    v.fxType = fxType;
+    v.fxStep = fxStep;
+    v.fxChannel = fxChannel;
+    v.colorType = colorType;
+    v.releaseType = releaseType;
+    v.fxLevel = fxLevel;
+    v.fxOn = fxOn || releaseLeft > 0;
+    v.fxTapMode = fxTapMode;
+    v.fxBpm = fxBpmFor(fxChannel == 2 ? 0 : fxChannel + 1);
+    v.samplerBank = samplerBank;
+    v.samplerVolume = samplerVolume;
+    v.samplesLoaded = 0;
+    v.samplesPlaying = 0;
+    for (int slot = 0; slot < kSamplerSlots; ++slot)
+    {
+        const auto& voice = voices[static_cast<size_t>(slot)];
+        v.sampleSerials[static_cast<size_t>(slot)] = voice.sample != nullptr ? voice.sample->serial : 0;
+        if (voice.sample != nullptr) v.samplesLoaded |= (1ULL << slot);
+        if (voice.playing) v.samplesPlaying |= (1ULL << slot);
     }
     v.crossfader = crossfader;
     v.masterDeck = masterDeck;

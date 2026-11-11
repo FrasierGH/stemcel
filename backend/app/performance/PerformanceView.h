@@ -83,6 +83,8 @@ class PerformanceView final : public juce::Component, private juce::Timer, priva
     void loadRow(const BrowserRow& row, int deck);
     void loadItem(const juce::String& itemId, int deck);
     void loadButton(int deck);
+    void loadSampleSlot(int slot);
+    void buildFx();
     void enableControllers(const juce::var& devices);
     void restoreControllers();
     juce::String padLabel(int deck, int pad) const;
@@ -95,6 +97,13 @@ class PerformanceView final : public juce::Component, private juce::Timer, priva
     std::array<DeckTrackInfo, kDecks> infos{};
     std::array<DeckControls, kDecks> decks;
     std::unique_ptr<ControlSlider> crossfader;
+    // The Beat FX section, Sound Color FX and Release FX, and the sampler.
+    std::unique_ptr<HoldButton> fxPrev, fxNext, beatPrev, beatNext, fxOnButton, releaseButton;
+    std::array<std::unique_ptr<HoldButton>, 3> fxChannelButtons;
+    std::unique_ptr<ControlSlider> fxLevelKnob, samplerVolumeKnob;
+    juce::ComboBox colorFxBox, releaseFxBox, samplerBankBox;
+    juce::Rectangle<int> fxArea;
+    std::array<juce::String, 64> sampleNames;
     PerfBrowser browser;
     juce::TextButton exitButton{"Exit"}, recButton{"REC"};
     juce::Label status, midiLine;

@@ -36,8 +36,26 @@ struct DeckState
     float trim = 0.5F, eqHi = 0.5F, eqMid = 0.5F, eqLow = 0.5F, filter = 0.5F, fader = 1.0F;
     bool hpCue = false;
     juce::String padMode = "hotCue";
-    int beatJumpPage = 1, keyPage = 0, keyboardCue = -1;
+    int beatJumpPage = 1, keyPage = 0, keyboardCue = -1, padFxHeld = -1;
     float peak = 0.0F;
+};
+
+struct FxState
+{
+    int type = 1, step = 5, channel = 0, colorType = 0, releaseType = 1;
+    juce::String typeName = "ECHO", stepLabel = "1", colorName = "FILTER";
+    float level = 0.5F;
+    bool on = false, tap = false;
+    double bpm = 120.0;
+};
+
+struct SamplerState
+{
+    int bank = 0;
+    float volume = 0.8F;
+    juce::uint64 loaded = 0, playing = 0;
+    bool isLoaded(int slot) const { return ((loaded >> slot) & 1ULL) != 0; }
+    bool isPlaying(int slot) const { return ((playing >> slot) & 1ULL) != 0; }
 };
 
 // What was loaded, from PERF_LOADED (and the library).
@@ -55,6 +73,8 @@ struct State
     float crossfader = 0.5F;
     int masterDeck = 0;
     std::array<DeckState, kDecks> decks{};
+    FxState fx;
+    SamplerState sampler;
     juce::StringArray midi; // the controller monitor's last lines
 };
 
@@ -77,6 +97,28 @@ inline void readState(const juce::var& p, State& s)
     {
         s.midi.clear();
         for (const auto& line : *m) s.midi.add(line.toString());
+    }
+    if (const auto fx = p.getProperty("fx", {}); fx.isObject())
+    {
+        s.fx.type = static_cast<int>(fx.getProperty("type", 1));
+        s.fx.typeName = fx.getProperty("typeName", "").toString();
+        s.fx.step = static_cast<int>(fx.getProperty("step", 5));
+        s.fx.stepLabel = fx.getProperty("stepLabel", "").toString();
+        s.fx.channel = static_cast<int>(fx.getProperty("channel", 0));
+        s.fx.level = static_cast<float>(static_cast<double>(fx.getProperty("level", 0.5)));
+        s.fx.on = static_cast<bool>(fx.getProperty("on", false));
+        s.fx.tap = static_cast<bool>(fx.getProperty("tap", false));
+        s.fx.bpm = static_cast<double>(fx.getProperty("bpm", 120.0));
+        s.fx.colorType = static_cast<int>(fx.getProperty("colorType", 0));
+        s.fx.colorName = fx.getProperty("colorName", "").toString();
+        s.fx.releaseType = static_cast<int>(fx.getProperty("releaseType", 1));
+    }
+    if (const auto sm = p.getProperty("sampler", {}); sm.isObject())
+    {
+        s.sampler.bank = static_cast<int>(sm.getProperty("bank", 0));
+        s.sampler.volume = static_cast<float>(static_cast<double>(sm.getProperty("volume", 0.8)));
+        s.sampler.loaded = static_cast<juce::uint64>(sm.getProperty("loaded", "0").toString().getHexValue64());
+        s.sampler.playing = static_cast<juce::uint64>(sm.getProperty("playing", "0").toString().getHexValue64());
     }
     const auto* decks = p.getProperty("decks", {}).getArray();
     if (decks == nullptr) return;
@@ -128,6 +170,7 @@ inline void readState(const juce::var& p, State& s)
         x.beatJumpPage = static_cast<int>(d.getProperty("beatJumpPage", 1));
         x.keyPage = static_cast<int>(d.getProperty("keyPage", 0));
         x.keyboardCue = static_cast<int>(d.getProperty("keyboardCue", -1));
+        x.padFxHeld = static_cast<int>(d.getProperty("padFxHeld", -1));
         x.peak = static_cast<float>(num("peak", 0.0));
     }
 }

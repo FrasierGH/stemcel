@@ -81,6 +81,12 @@ constexpr ControlName kControlNames[] = {
     {Control::fxLevel, "fxLevel"},
     {Control::fxOn, "fxOn"},
     {Control::fxRelease, "fxRelease"},
+    {Control::colorFxSelect, "colorFxSelect"},
+    {Control::releaseFxSelect, "releaseFxSelect"},
+    {Control::fxTypeSelect, "fxTypeSelect"},
+    {Control::samplerBank, "samplerBank"},
+    {Control::samplerVolume, "samplerVolume"},
+    {Control::samplerLoad, "samplerLoad"},
 };
 
 constexpr const char* kPadModeNames[] = {"hotCue",   "padFx1", "beatJump", "sampler",
@@ -193,6 +199,7 @@ bool isAppControl(Control control) noexcept
         case Control::browsePress:
         case Control::browsePressShift:
         case Control::masterCueShift:
+        case Control::samplerLoad:
             return true;
         default:
             return false;

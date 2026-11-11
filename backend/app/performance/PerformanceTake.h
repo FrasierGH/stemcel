@@ -54,6 +54,16 @@ struct TakeEdits
     std::map<int, std::map<juce::String, std::vector<std::pair<double, double>>>> automation;
     double lengthMs = 0.0;
     std::vector<int> decksUsed;
+    // Sampler hits: clips on a track per slot.
+    struct Hit
+    {
+        int slot = 0;
+        juce::String itemId;
+        double positionMs = 0.0, durationMs = 0.0;
+    };
+    std::vector<Hit> samples;
+    std::vector<std::pair<double, double>> samplerLevel; // (ms, dB)
+    std::map<juce::String, std::vector<std::pair<double, double>>> master; // the master's Beat FX
 };
 
 class PerformanceTake
@@ -74,6 +84,13 @@ class PerformanceTake
     std::vector<TakeSegment> segments;
     std::map<int, std::vector<std::pair<double, double>>> platter; // deck → (at, pos)
     std::map<int, std::map<juce::String, std::vector<TakePoint>>> params;
+    struct SampleHit
+    {
+        double at = 0.0, stopAt = -1.0, lengthSec = 0.0;
+        int slot = 0;
+        juce::String itemId;
+    };
+    std::vector<SampleHit> sampleHits;
 };
 
 } // namespace stemcel::native::perf

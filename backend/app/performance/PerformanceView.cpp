@@ -2,6 +2,7 @@
 
 #include "Log.h"
 #include "Theme.h"
+#include "DjFx.h"
 
 namespace stemcel::native::perf
 {
@@ -24,6 +25,7 @@ PerformanceView::PerformanceView(Context context)
     for (int d = 1; d <= kDecks; ++d) build(d);
     crossfader = std::make_unique<ControlSlider>(ctx.engine, "crossfader", 0, juce::Slider::LinearHorizontal, "Crossfader");
     addAndMakeVisible(*crossfader);
+    buildFx();
     addAndMakeVisible(browser);
     browser.onLoad = [this](const BrowserRow& row, int deck) { loadRow(row, deck); };
 
@@ -59,6 +61,12 @@ PerformanceView::PerformanceView(Context context)
     subscriptions.on("PERF_UI", [this](const juce::var& p) { onUi(p); });
     subscriptions.on("PERF_CUES", [this](const juce::var& p) { onCues(p); });
     subscriptions.on("PERF_REC", [this](const juce::var& p) { take.add(p); });
+    subscriptions.on("PERF_SAMPLE_LOADED",
+                     [this](const juce::var& p)
+                     {
+                         const int slot = static_cast<int>(p.getProperty("slot", -1));
+                         if (slot >= 0 && slot < 64) sampleNames[static_cast<size_t>(slot)] = p.getProperty("title", "").toString();
+                     });
     subscriptions.on("MIDI_DEVICES_LIST", [this](const juce::var& p) { enableControllers(p); });
     ctx.mirror.addChangeListener(this);
 
@@ -148,6 +156,61 @@ void PerformanceView::build(int deck)
     }
 }
 
+void PerformanceView::buildFx()
+{
+    auto& engine = ctx.engine;
+    auto press = [&](std::unique_ptr<HoldButton>& b, const juce::String& text, const juce::String& control, juce::Colour lit = colours::accent)
+    {
+        b = std::make_unique<HoldButton>(text, lit);
+        b->onPress = [&engine, control](bool down) { sendControl(engine, control, 0, down ? 1.0 : 0.0); };
+        addAndMakeVisible(*b);
+    };
+    press(fxPrev, "<", "fxSelectPrev");
+    press(fxNext, ">", "fxSelect");
+    press(beatPrev, "<", "fxBeatPrev");
+    press(beatNext, ">", "fxBeatNext");
+    press(fxOnButton, "ON", "fxOn", colours::red500);
+    press(releaseButton, "RELEASE", "fxRelease", colours::amber500);
+    const char* channelNames[3] = {"1", "2", "M"};
+    for (int i = 0; i < 3; ++i)
+    {
+        auto& b = fxChannelButtons[static_cast<size_t>(i)];
+        b = std::make_unique<HoldButton>(channelNames[i], colours::accent);
+        b->onPress = [&engine, i](bool down) { if (down) sendControl(engine, "fxChannel", 0, 1.0, i); };
+        addAndMakeVisible(*b);
+    }
+    fxLevelKnob = std::make_unique<ControlSlider>(engine, "fxLevel", 0, juce::Slider::RotaryHorizontalVerticalDrag, "Level/Depth");
+    addAndMakeVisible(*fxLevelKnob);
+    samplerVolumeKnob = std::make_unique<ControlSlider>(engine, "samplerVolume", 0, juce::Slider::RotaryHorizontalVerticalDrag, "Sampler");
+    addAndMakeVisible(*samplerVolumeKnob);
+    for (int i = 0; i < static_cast<int>(djfx::ColorFx::count); ++i) colorFxBox.addItem(juce::String("CFX ") + djfx::colorFxName(i), i + 1);
+    colorFxBox.setTooltip("Sound Color FX on the FILTER knobs");
+    colorFxBox.onChange = [this] { sendControl(ctx.engine, "colorFxSelect", 0, colorFxBox.getSelectedId() - 1); };
+    addAndMakeVisible(colorFxBox);
+    releaseFxBox.addItem("Release: Vinyl Brake", 1);
+    releaseFxBox.addItem("Release: Echo", 2);
+    releaseFxBox.addItem("Release: Spin Back", 3);
+    releaseFxBox.setTooltip("SHIFT + ON/OFF, and the Release FX pad");
+    releaseFxBox.onChange = [this] { sendControl(ctx.engine, "releaseFxSelect", 0, releaseFxBox.getSelectedId() - 1); };
+    addAndMakeVisible(releaseFxBox);
+    for (int b = 0; b < 4; ++b) samplerBankBox.addItem("Sampler bank " + juce::String(b + 1), b + 1);
+    samplerBankBox.onChange = [this] { sendControl(ctx.engine, "samplerBank", 0, samplerBankBox.getSelectedId() - 1); };
+    addAndMakeVisible(samplerBankBox);
+}
+
+void PerformanceView::loadSampleSlot(int slot)
+{
+    // SHIFT + an idle sampler pad: the browser's track goes into that slot.
+    if (slot < 0 || slot >= 64 || state.sampler.isPlaying(slot)) return;
+    const auto* row = browser.selectedRow();
+    if (row == nullptr || row->itemId.isEmpty()) return;
+    auto* o = new juce::DynamicObject();
+    o->setProperty("slot", slot);
+    o->setProperty("libraryItemId", row->itemId);
+    o->setProperty("title", row->title);
+    ctx.engine.send("PERF_SAMPLER_LOAD", juce::var(o));
+}
+
 // --- Engine state -----------------------------------------------------------------------------
 
 void PerformanceView::onState(const juce::var& p)
@@ -189,11 +252,25 @@ void PerformanceView::onState(const juce::var& p)
             }
             else if (s.padMode == "keyShift") lit = s.semitones == kKeyPages[juce::jlimit(0, 2, s.keyPage)][pad];
             else if (s.padMode == "keyboard") lit = s.keyboardCue < 0 ? s.hotCues[static_cast<size_t>(pad)].set() : true;
+            else if (s.padMode == "sampler")
+            {
+                const int slot = state.sampler.bank * 16 + i * 8 + pad;
+                lit = state.sampler.isLoaded(slot);
+            }
+            else if (s.padMode == "padFx1" || s.padMode == "padFx2") lit = s.padFxHeld == pad || s.padFxHeld == pad + 8;
             d.pads[static_cast<size_t>(pad)]->setLit(lit);
             d.pads[static_cast<size_t>(pad)]->setText(padLabel(i + 1, pad));
         }
     }
     crossfader->follow(state.crossfader);
+    fxLevelKnob->follow(state.fx.level);
+    samplerVolumeKnob->follow(state.sampler.volume);
+    fxOnButton->setLit(state.fx.on);
+    for (int i = 0; i < 3; ++i) fxChannelButtons[static_cast<size_t>(i)]->setLit(state.fx.channel == i);
+    if (colorFxBox.getSelectedId() != state.fx.colorType + 1) colorFxBox.setSelectedId(state.fx.colorType + 1, juce::dontSendNotification);
+    if (releaseFxBox.getSelectedId() != state.fx.releaseType + 1) releaseFxBox.setSelectedId(state.fx.releaseType + 1, juce::dontSendNotification);
+    if (samplerBankBox.getSelectedId() != state.sampler.bank + 1) samplerBankBox.setSelectedId(state.sampler.bank + 1, juce::dontSendNotification);
+    repaint(fxArea);
     if (state.midi.size() > 0) midiLine.setText("MIDI  " + state.midi[state.midi.size() - 1], juce::dontSendNotification);
     juce::String text;
     text << (state.cueOutput ? "Headphones: outputs 3-4" : "Headphones: this output has no 3-4");
@@ -257,6 +334,8 @@ void PerformanceView::onUi(const juce::var& p)
     else if (control == "browsePress" && value > 0.5) browser.press(false);
     else if (control == "browsePressShift" && value > 0.5) browser.press(true);
     else if (control == "load" && value > 0.5) loadButton(deck);
+    else if (control == "samplerLoad")
+        loadSampleSlot(state.sampler.bank * 16 + (deck - 1) * 8 + static_cast<int>(p.getProperty("index", 0)));
 }
 
 void PerformanceView::loadButton(int deck)
@@ -418,8 +497,18 @@ juce::String PerformanceView::padLabel(int deck, int pad) const
         const int k = kKeyPages[juce::jlimit(0, 2, s.keyPage)][pad];
         return (k > 0 ? "+" : "") + juce::String(k);
     }
-    if (s.padMode == "sampler") return "S" + juce::String(pad + 1);
-    return "FX " + juce::String(pad + 1);
+    if (s.padMode == "sampler")
+    {
+        const int slot = state.sampler.bank * 16 + (deck - 1) * 8 + pad;
+        const auto& name = sampleNames[static_cast<size_t>(slot)];
+        return name.isNotEmpty() ? name : "S" + juce::String(slot % 16 + 1);
+    }
+    // Pad FX: the preset's effect and length (SHIFT pads are the second 8).
+    static const int types[2][8] = {{1, 1, 11, 11, 5, 6, 7, 4}, {1, 2, 11, 11, 5, 5, 3, 1}};
+    static const char* steps[2][8] = {{"1/2", "3/4", "1/4", "1/8", "1/4", "1", "2", "4"},
+                                      {"1/4", "1/4", "1/16", "1/2", "1/8", "1/2", "1", "REL"}};
+    const int bank = s.padMode == "padFx2" ? 1 : 0;
+    return juce::String(djfx::beatFxName(types[bank][pad])) + " " + steps[bank][pad];
 }
 
 // --- Frame updates ----------------------------------------------------------------------------
@@ -458,6 +547,20 @@ void PerformanceView::paint(juce::Graphics& g)
     // The mixer's captions and meters.
     g.setColour(colours::panel);
     g.fillRoundedRectangle(mixerArea.toFloat(), 6.0F);
+    // The Beat FX section's display: effect, beats, tempo.
+    if (!fxArea.isEmpty())
+    {
+        auto display = fxArea.reduced(4).removeFromTop(38).toFloat();
+        drawWell(g, display);
+        g.setColour(state.fx.on ? colours::red500 : colours::text);
+        g.setFont(uiFont(13.0F, true));
+        g.drawText(state.fx.typeName, display.reduced(6, 2).removeFromTop(18), juce::Justification::centredLeft);
+        g.setColour(colours::textDim);
+        g.setFont(uiFont(11.0F));
+        const juce::String ch = state.fx.channel == 2 ? "MASTER" : "CH" + juce::String(state.fx.channel + 1);
+        g.drawText(state.fx.stepLabel + " beat   " + ch + "   " + juce::String(state.fx.bpm, 1) + (state.fx.tap ? " TAP" : " BPM"),
+                   display.reduced(6, 2).removeFromBottom(16), juce::Justification::centredLeft);
+    }
     g.setFont(uiFont(10.0F, true));
     g.setColour(colours::textFaint);
     for (auto& d : decks)
@@ -510,12 +613,33 @@ void PerformanceView::layoutMixer(juce::Rectangle<int> area)
     mixerArea = area;
     auto r = area.reduced(8);
     crossfader->setBounds(r.removeFromBottom(30).reduced(30, 4));
+    // The Beat FX section and the sampler under the channels.
+    fxArea = r.removeFromBottom(200);
+    auto fx = fxArea.reduced(4);
+    fx.removeFromTop(42);
+    auto row = fx.removeFromTop(26);
+    const int w = row.getWidth() / 4;
+    fxPrev->setBounds(row.removeFromLeft(w).reduced(2));
+    fxNext->setBounds(row.removeFromLeft(w).reduced(2));
+    beatPrev->setBounds(row.removeFromLeft(w).reduced(2));
+    beatNext->setBounds(row.removeFromLeft(w).reduced(2));
+    row = fx.removeFromTop(26);
+    for (auto& b : fxChannelButtons) b->setBounds(row.removeFromLeft(w).reduced(2));
+    fxOnButton->setBounds(row.reduced(2));
+    row = fx.removeFromTop(44);
+    fxLevelKnob->setBounds(row.removeFromLeft(row.getWidth() / 2).withSizeKeepingCentre(40, 40));
+    releaseButton->setBounds(row.reduced(2, 8));
+    colorFxBox.setBounds(fx.removeFromTop(24).reduced(2));
+    releaseFxBox.setBounds(fx.removeFromTop(24).reduced(2));
+    row = fx.removeFromTop(30);
+    samplerBankBox.setBounds(row.removeFromLeft(row.getWidth() - 34).reduced(2));
+    samplerVolumeKnob->setBounds(row.withSizeKeepingCentre(28, 28));
     const int half = r.getWidth() / 2;
     for (int i = 0; i < kDecks; ++i)
     {
         auto& d = decks[static_cast<size_t>(i)];
         auto col = i == 0 ? r.withWidth(half) : r.withTrimmedLeft(half);
-        const int knob = juce::jmin(54, col.getWidth() - 10);
+        const int knob = juce::jmin(44, juce::jmin(col.getWidth() - 10, (col.getHeight() - 140) / 5));
         for (auto* s : {d.trim.get(), d.eqHi.get(), d.eqMid.get(), d.eqLow.get(), d.filter.get()})
             s->setBounds(col.removeFromTop(knob + 4).withSizeKeepingCentre(knob, knob));
         d.hpCue->setBounds(col.removeFromTop(26).reduced(6, 2));
