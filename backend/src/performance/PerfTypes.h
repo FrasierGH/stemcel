@@ -97,6 +97,7 @@ enum class Control : std::uint8_t
     samplerBank,   // value = 0..3
     samplerVolume, // value 0..1
     samplerLoad,   // index = slot (the app loads the browser's item)
+    channelBind,   // value 1: the channel drives a timeline track (the deck is silent), 0: the deck again
     count
 };
 

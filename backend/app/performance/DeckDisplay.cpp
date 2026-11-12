@@ -28,6 +28,72 @@ void DeckDisplay::update(const DeckState& s, const DeckTrackInfo& i, double posS
     repaint();
 }
 
+void DeckDisplay::showTrack(const juce::String& name, std::vector<TrackClip> clips, double playheadMs, double lengthMs, bool playing)
+{
+    trackMode = true;
+    trackName = name;
+    trackClips = std::move(clips);
+    trackPlayheadMs = playheadMs;
+    trackLengthMs = std::max(lengthMs, playheadMs + 1000.0);
+    trackPlaying = playing;
+    repaint();
+}
+
+void DeckDisplay::drawClips(juce::Graphics& g, juce::Rectangle<float> area, double fromMs, double toMs)
+{
+    const double span = toMs - fromMs;
+    if (span <= 0.0) return;
+    auto xAt = [&](double ms) { return area.getX() + static_cast<float>((ms - fromMs) / span) * area.getWidth(); };
+    for (const auto& c : trackClips)
+    {
+        const double a = std::max(c.startMs, fromMs), b = std::min(c.endMs, toMs);
+        if (b <= a) continue;
+        auto r = juce::Rectangle<float>(xAt(a), area.getY(), std::max(1.0F, xAt(b) - xAt(a)), area.getHeight());
+        g.setColour(colours::accent.withAlpha(0.12F));
+        g.fillRect(r);
+        if (c.audioPath.isEmpty()) continue;
+        if (auto peaks = waveforms.get(c.audioPath))
+            drawPeaks(g, *peaks, r.reduced(0.0F, 2.0F), c.inMs + (a - c.startMs) * c.ratio, (b - a) * c.ratio, false, colours::accent);
+    }
+}
+
+void DeckDisplay::paintTrack(juce::Graphics& g)
+{
+    auto header = getLocalBounds().reduced(8, 6).removeFromTop(38);
+    g.setColour(colours::amber400);
+    g.setFont(uiFont(22.0F, true));
+    g.drawText(juce::String(deck), header.removeFromLeft(24), juce::Justification::centredLeft);
+    auto right = header.removeFromRight(160);
+    g.setColour(colours::text);
+    g.setFont(uiFont(15.0F, true));
+    g.drawText("Timeline track: " + trackName, header.removeFromTop(20), juce::Justification::centredLeft, true);
+    g.setColour(colours::textDim);
+    g.setFont(uiFont(12.0F));
+    g.drawText("The knobs and FX act on this track; with REC on, moves are written as it plays", header,
+               juce::Justification::centredLeft, true);
+    const double sec = trackPlayheadMs / 1000.0;
+    const int m = static_cast<int>(sec / 60.0);
+    g.setColour(trackPlaying ? colours::emerald500 : colours::text);
+    g.setFont(uiFont(16.0F, true));
+    g.drawText(juce::String(m) + ":" + juce::String(sec - m * 60.0, 1).paddedLeft('0', 4), right.removeFromTop(20),
+               juce::Justification::centredRight);
+
+    auto overview = overviewArea().toFloat();
+    drawWell(g, overview);
+    drawClips(g, overview, 0.0, trackLengthMs);
+    g.setColour(colours::text);
+    g.fillRect(overview.getX() + static_cast<float>(trackPlayheadMs / trackLengthMs) * overview.getWidth() - 1.0F, overview.getY(), 2.0F,
+               overview.getHeight());
+    auto close = closeUpArea().toFloat();
+    drawWell(g, close);
+    g.saveState();
+    g.reduceClipRegion(close.toNearestInt());
+    drawClips(g, close, trackPlayheadMs - halfWindow * 1000.0, trackPlayheadMs + halfWindow * 1000.0);
+    g.restoreState();
+    g.setColour(colours::red500);
+    g.fillRect(close.getCentreX() - 1.0F, close.getY(), 2.0F, close.getHeight());
+}
+
 juce::Rectangle<int> DeckDisplay::overviewArea() const
 {
     auto r = getLocalBounds().reduced(6);
@@ -46,6 +112,11 @@ void DeckDisplay::paint(juce::Graphics& g)
 {
     g.setColour(colours::panel);
     g.fillRoundedRectangle(getLocalBounds().toFloat(), 6.0F);
+    if (trackMode)
+    {
+        paintTrack(g);
+        return;
+    }
     auto header = getLocalBounds().reduced(8, 6).removeFromTop(38);
 
     // Deck number, title and artist.

@@ -19,8 +19,23 @@ double nowMs() { return juce::Time::getMillisecondCounterHiRes(); }
 } // namespace
 
 PerformanceView::PerformanceView(Context context)
-    : ctx(std::move(context)), subscriptions(ctx.engine), browser(ctx.mirror, ctx.rekordbox)
+    : ctx(std::move(context)), subscriptions(ctx.engine), browser(ctx.mirror, ctx.rekordbox),
+      driver(ctx.engine, ctx.mirror, ctx.actions, ctx.live)
 {
+    for (int d = 1; d <= kDecks; ++d)
+    {
+        auto& box = targetBoxes[static_cast<size_t>(d - 1)];
+        box = std::make_unique<juce::ComboBox>();
+        box->setTooltip("What this channel plays: its deck, or a track in the timeline (the knobs and FX then act on it)");
+        box->onChange = [this, d]
+        {
+            const int id = targetBoxes[static_cast<size_t>(d - 1)]->getSelectedId();
+            const juce::String track = id >= 2 && id - 2 < static_cast<int>(targetIds.size()) ? targetIds[static_cast<size_t>(id - 2)] : juce::String();
+            driver.bind(d, track);
+            if (track.isEmpty()) decks[static_cast<size_t>(d - 1)].display->showDeck();
+        };
+        addAndMakeVisible(*box);
+    }
     setWantsKeyboardFocus(true);
     for (int d = 1; d <= kDecks; ++d) build(d);
     crossfader = std::make_unique<ControlSlider>(ctx.engine, "crossfader", 0, juce::Slider::LinearHorizontal, "Crossfader");
@@ -68,7 +83,9 @@ PerformanceView::PerformanceView(Context context)
                          if (slot >= 0 && slot < 64) sampleNames[static_cast<size_t>(slot)] = p.getProperty("title", "").toString();
                      });
     subscriptions.on("MIDI_DEVICES_LIST", [this](const juce::var& p) { enableControllers(p); });
+    subscriptions.on("MIXDOWN_DONE", [this](const juce::var& p) { regionRendered(p); });
     ctx.mirror.addChangeListener(this);
+    refreshTargets();
 
     ctx.engine.send("PERF_OPEN");
     ctx.engine.send("MIDI_DEVICES_REQUEST");
@@ -80,6 +97,7 @@ PerformanceView::~PerformanceView()
 {
     log::info("performance", "view: closing");
     stopTimer();
+    driver.finish();
     ctx.mirror.removeChangeListener(this);
     ctx.engine.send("PERF_CLOSE");
     restoreControllers();
@@ -213,6 +231,7 @@ void PerformanceView::loadSampleSlot(int slot)
 void PerformanceView::onState(const juce::var& p)
 {
     readState(p, state);
+    driver.update(state);
     const double now = nowMs();
     for (int i = 0; i < kDecks; ++i)
     {
@@ -323,6 +342,13 @@ void PerformanceView::onUi(const juce::var& p)
     const auto control = p.getProperty("control", "").toString();
     const int deck = static_cast<int>(p.getProperty("deck", 0));
     const double value = static_cast<double>(p.getProperty("value", 0.0));
+    // A channel driving a timeline track: its transport and jog work the timeline.
+    if (deck >= 1 && deck <= kDecks && driver.boundTrack(deck).isNotEmpty() &&
+        (control.startsWith("play") || control.startsWith("cue") || control.startsWith("jog")))
+    {
+        driver.transport(control, value);
+        return;
+    }
     if (control == "browse") browser.browse(static_cast<int>(value));
     else if (control == "browseShift")
     {
@@ -357,6 +383,13 @@ void PerformanceView::loadButton(int deck)
 
 void PerformanceView::loadRow(const BrowserRow& row, int deck)
 {
+    if (row.isRegion)
+    {
+        renderRegion(row, deck);
+        return;
+    }
+    if (driver.boundTrack(deck).isNotEmpty()) targetBoxes[static_cast<size_t>(deck - 1)]->setSelectedId(1); // back to the deck
+    deckRegions[static_cast<size_t>(deck - 1)].reset();
     if (row.itemId.isNotEmpty())
     {
         loadItem(row.itemId, deck);
@@ -412,6 +445,99 @@ void PerformanceView::loadItem(const juce::String& itemId, int deck)
     ctx.engine.send("PERF_LOAD", juce::var(o));
 }
 
+void PerformanceView::renderRegion(const BrowserRow& row, int deck)
+{
+    // The stretch is rendered (as it sounds) and loaded like any track.
+    const auto folder = juce::File::getSpecialLocation(juce::File::userHomeDirectory).getChildFile("Stemcel").getChildFile("Regions");
+    folder.createDirectory();
+    const auto file = folder.getChildFile("region-" + juce::Uuid().toString().substring(0, 8) + ".wav");
+    PendingRegion pending;
+    pending.path = file.getFullPathName();
+    pending.deck = deck;
+    pending.region = {row.regionTrackId, row.regionStartMs, row.regionEndMs, {}};
+    pendingRegions.push_back(pending);
+    auto* o = new juce::DynamicObject();
+    o->setProperty("outputPath", file.getFullPathName());
+    o->setProperty("format", "wav");
+    o->setProperty("sampleRate", state.sampleRate > 0.0 ? juce::roundToInt(state.sampleRate) : 48000);
+    o->setProperty("bitDepth", 24);
+    o->setProperty("lengthMode", "range");
+    o->setProperty("startMs", row.regionStartMs);
+    o->setProperty("lengthMs", row.regionEndMs); // where the render ends
+    if (row.regionTrackId.isNotEmpty()) o->setProperty("onlyTrackId", row.regionTrackId);
+    if (ctx.toast) ctx.toast("Rendering " + row.title + " (" + row.artist + ") for deck " + juce::String(deck) + "...", true);
+    ctx.engine.send("MIXDOWN_START", juce::var(o));
+}
+
+void PerformanceView::regionRendered(const juce::var& payload)
+{
+    const auto path = payload.getProperty("filePath", "").toString();
+    const auto it = std::find_if(pendingRegions.begin(), pendingRegions.end(),
+                                 [&](const PendingRegion& p) { return juce::File(p.path) == juce::File(path); });
+    if (it == pendingRegions.end()) return;
+    const auto pending = *it;
+    pendingRegions.erase(it);
+    juce::Component::SafePointer<PerformanceView> safe(this);
+    ctx.importer.import(juce::Array<juce::File>{juce::File(path)},
+                        [safe, pending](const juce::StringArray& ids)
+                        {
+                            if (safe == nullptr || ids.isEmpty()) return;
+                            auto& v = *safe;
+                            v.ctx.mirror.refreshNow();
+                            if (v.driver.boundTrack(pending.deck).isNotEmpty())
+                                v.targetBoxes[static_cast<size_t>(pending.deck - 1)]->setSelectedId(1);
+                            v.loadItem(ids[0], pending.deck);
+                            auto region = pending.region;
+                            region.itemId = ids[0];
+                            v.deckRegions[static_cast<size_t>(pending.deck - 1)] = region;
+                            // A take lands where the stretch was.
+                            if (v.ctx.seekTimeline) v.ctx.seekTimeline(region.fromMs);
+                        });
+}
+
+void PerformanceView::clearRegion(const juce::String& trackId, double fromMs, double toMs)
+{
+    // The stretch empties (the clips split at its edges), nothing after it moves.
+    for (const double edge : {fromMs, toMs})
+    {
+        ctx.mirror.refreshNow();
+        std::vector<juce::String> toSplit;
+        for (const auto& t : ctx.mirror.model().tracks)
+            if (trackId.isEmpty() || t.id == trackId)
+                for (const auto& c : t.clips)
+                    if (c.offsetMs < edge - 0.5 && c.endMs() > edge + 0.5) toSplit.push_back(c.id);
+        for (const auto& id : toSplit) ctx.actions.splitClipAt(id, edge);
+    }
+    ctx.mirror.refreshNow();
+    std::vector<juce::String> inside;
+    for (const auto& t : ctx.mirror.model().tracks)
+        if (trackId.isEmpty() || t.id == trackId)
+            for (const auto& c : t.clips)
+                if (c.offsetMs >= fromMs - 0.5 && c.endMs() <= toMs + 0.5) inside.push_back(c.id);
+    if (!inside.empty()) ctx.actions.removeClips(inside);
+}
+
+void PerformanceView::refreshTargets()
+{
+    targetIds.clear();
+    for (const auto& t : ctx.mirror.model().tracks) targetIds.push_back(t.id);
+    for (int d = 1; d <= kDecks; ++d)
+    {
+        auto& box = *targetBoxes[static_cast<size_t>(d - 1)];
+        const auto bound = driver.boundTrack(d);
+        box.clear(juce::dontSendNotification);
+        box.addItem("Deck " + juce::String(d), 1);
+        int selected = 1;
+        for (size_t i = 0; i < targetIds.size(); ++i)
+        {
+            const auto* t = ctx.mirror.model().findTrack(targetIds[i]);
+            box.addItem("Timeline: " + (t != nullptr ? t->name : targetIds[i]), static_cast<int>(i) + 2);
+            if (targetIds[i] == bound) selected = static_cast<int>(i) + 2;
+        }
+        box.setSelectedId(selected, juce::dontSendNotification);
+    }
+}
+
 void PerformanceView::finishTake(std::function<void()> then)
 {
     auto* o = new juce::DynamicObject();
@@ -424,9 +550,23 @@ void PerformanceView::finishTake(std::function<void()> then)
         if (safe != nullptr)
         {
             auto& v = *safe;
-            const double startMs = v.ctx.playheadMs ? v.ctx.playheadMs() : 0.0;
+            double startMs = v.ctx.playheadMs ? v.ctx.playheadMs() : 0.0;
             const double lengthMs = v.take.lengthSec() * 1000.0;
-            if (v.take.hasAudio() && v.take.write(v.ctx.engine, v.ctx.mirror, v.ctx.actions, startMs, ++v.takeNumber))
+            std::vector<Region> regions;
+            for (const auto& r : v.deckRegions)
+                if (r.has_value()) regions.push_back(*r);
+            // A take with a timeline stretch on a deck lines up with where that stretch came from.
+            for (const auto& r : regions)
+                if (const auto aligned = v.take.alignedStart(r.itemId, r.fromMs); aligned.has_value())
+                {
+                    startMs = *aligned;
+                    break;
+                }
+            auto replace = [&v, regions]
+            {
+                for (const auto& r : regions) v.clearRegion(r.trackId, r.fromMs, r.toMs);
+            };
+            if (v.take.hasAudio() && v.take.write(v.ctx.engine, v.ctx.mirror, v.ctx.actions, startMs, ++v.takeNumber, replace))
             {
                 // The next take follows this one.
                 if (v.ctx.seekTimeline) v.ctx.seekTimeline(startMs + lengthMs);
@@ -561,6 +701,22 @@ void PerformanceView::timerCallback()
     {
         auto& d = decks[static_cast<size_t>(i)];
         const auto& s = state.decks[static_cast<size_t>(i)];
+        if (const auto& track = driver.boundTrack(i + 1); track.isNotEmpty())
+        {
+            std::vector<DeckDisplay::TrackClip> clips;
+            juce::String name;
+            if (const auto* t = ctx.mirror.model().findTrack(track))
+            {
+                name = t->name;
+                for (const auto& c : t->clips)
+                {
+                    const auto* item = ctx.mirror.model().findLibraryItem(c.libraryItemId);
+                    clips.push_back({c.offsetMs, c.endMs(), c.inMs, c.effectiveTempoRatio, item != nullptr ? item->audioPath() : juce::String()});
+                }
+            }
+            d.display->showTrack(name, std::move(clips), ctx.live.positionMs, ctx.mirror.model().contentEndMs(), ctx.live.playing);
+            continue;
+        }
         const bool moving = s.playing || s.previewing || s.touched;
         const double pos = d.posAt + (moving ? (now - d.receivedAt) / 1000.0 * s.rate : 0.0);
         d.display->update(s, infos[static_cast<size_t>(i)], pos, state.masterDeck == i + 1);
@@ -568,7 +724,11 @@ void PerformanceView::timerCallback()
     repaint(mixerArea);
 }
 
-void PerformanceView::changeListenerCallback(juce::ChangeBroadcaster*) { browser.refresh(); }
+void PerformanceView::changeListenerCallback(juce::ChangeBroadcaster*)
+{
+    browser.refresh();
+    refreshTargets();
+}
 
 bool PerformanceView::keyPressed(const juce::KeyPress& key)
 {
@@ -628,6 +788,8 @@ void PerformanceView::layoutDeck(int deck, juce::Rectangle<int> area)
     // The tempo slider on the outer edge, as on the unit.
     auto tempoCol = left ? area.removeFromLeft(34) : area.removeFromRight(34);
     d.tempo->setBounds(tempoCol.reduced(4, 8));
+    targetBoxes[static_cast<size_t>(deck - 1)]->setBounds(area.removeFromTop(24).withWidth(juce::jmin(320, area.getWidth())).reduced(0, 1));
+    area.removeFromTop(2);
     d.display->setBounds(area.removeFromTop(juce::jmax(150, area.getHeight() - 170)));
     area.removeFromTop(6);
     auto row1 = area.removeFromTop(30);

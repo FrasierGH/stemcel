@@ -754,6 +754,19 @@ void PerformanceEngine::apply(const Queued& q) noexcept
         case Control::padShift:
             applyPad(d, e, true);
             break;
+        case Control::channelBind:
+            c.bound = e.value > 0.5F;
+            if (c.bound)
+            {
+                // The deck stops; its channel's knobs now drive a timeline track (the app).
+                Event stop;
+                stop.deck = e.deck;
+                stop.control = Control::faderStartCue;
+                stop.value = 1.0F;
+                player.handle(stop);
+                c.fx.reset();
+            }
+            break;
         case Control::sync:
             if (press) syncButton(d, false);
             break;
@@ -940,6 +953,12 @@ void PerformanceEngine::renderBlock(float* const* out, int numOutChannels, int n
         auto& player = *decks[static_cast<size_t>(d - 1)];
         auto& c = channels[static_cast<size_t>(d - 1)];
         float* buf[2] = {deckBuffer.getWritePointer((d - 1) * 2), deckBuffer.getWritePointer((d - 1) * 2 + 1)};
+        if (c.bound)
+        {
+            // The channel drives a timeline track: no deck audio, nothing recorded here.
+            c.wasMoving = false;
+            continue;
+        }
         const double target = channelGain(d);
         const bool audible = target > 1.0e-4;
         if (restart) player.announce(); // a new take: the deck states where it is
@@ -1028,6 +1047,7 @@ void PerformanceEngine::publishView() noexcept
         cv.keyPage = c.keyPage;
         cv.keyboardCue = c.keyboardCue;
         cv.padFxHeld = c.padFxHeld;
+        cv.bound = c.bound;
     }
     v.fxType = fxType;
     v.fxStep = fxStep;

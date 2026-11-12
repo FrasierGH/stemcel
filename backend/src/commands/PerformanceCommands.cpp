@@ -230,6 +230,52 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
 
     void route(const perf::Event& e)
     {
+        if (e.control == perf::Control::channelBind && e.deck >= 1 && e.deck <= perf::kDecks)
+            boundDecks[static_cast<size_t>(e.deck - 1)] = e.value > 0.5F;
+        // A channel driving a timeline track: its transport and jog work the timeline (the
+        // app), its deck's own controls rest; the mixer, Pad FX and sampler work as ever.
+        if (e.deck >= 1 && e.deck <= perf::kDecks && boundDecks[static_cast<size_t>(e.deck - 1)])
+        {
+            switch (e.control)
+            {
+                case perf::Control::play:
+                case perf::Control::playShift:
+                case perf::Control::cue:
+                case perf::Control::cueShift:
+                case perf::Control::jogScratch:
+                case perf::Control::jogBend:
+                case perf::Control::jogSearch:
+                {
+                    const juce::SpinLock::ScopedLockType lock(appLock);
+                    appEvents.push_back(e);
+                    return;
+                }
+                case perf::Control::sync:
+                case perf::Control::syncLong:
+                case perf::Control::syncShift:
+                case perf::Control::tempo:
+                case perf::Control::loopIn:
+                case perf::Control::loopInLong:
+                case perf::Control::loopOut:
+                case perf::Control::reloopExit:
+                case perf::Control::reloopShift:
+                case perf::Control::callPrev:
+                case perf::Control::callNext:
+                case perf::Control::callPrevShift:
+                case perf::Control::callNextShift:
+                case perf::Control::jogTouch:
+                case perf::Control::faderStartPlay:
+                case perf::Control::faderStartCue:
+                    return;
+                case perf::Control::pad:
+                case perf::Control::padShift:
+                    if (e.mode != perf::PadMode::padFx1 && e.mode != perf::PadMode::padFx2 && e.mode != perf::PadMode::sampler)
+                        return;
+                    break;
+                default:
+                    break;
+            }
+        }
         if (perf::isAppControl(e.control))
         {
             const juce::SpinLock::ScopedLockType lock(appLock);
@@ -595,6 +641,7 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
             x->setProperty("keyPage", cv.keyPage);
             x->setProperty("keyboardCue", cv.keyboardCue);
             x->setProperty("padFxHeld", cv.padFxHeld);
+            x->setProperty("bound", cv.bound);
             x->setProperty("peak", peaks[static_cast<size_t>(d)]);
             decks.add(juce::var(x));
         }
@@ -744,6 +791,7 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
     std::array<float, perf::kDecks> lastPeaks{};
     int serials = 0;
     int tick = 0;
+    std::array<std::atomic<bool>, perf::kDecks> boundDecks{};
 };
 
 std::unique_ptr<PerformanceHost> PerformanceHost::g_host;
@@ -766,6 +814,19 @@ bool dispatchPerformanceCommand(const juce::String& type, const juce::var& paylo
     else if (type == "PERF_CLOSE") h.close();
     else if (type == "PERF_LOAD") h.load(payload, project, decodedCache, pool);
     else if (type == "PERF_SAMPLER_LOAD") h.loadSample(payload, project, decodedCache, pool);
+    else if (type == "PERF_TRACK_LIVE")
+    {
+        // A timeline track driven from a performance channel: live values, and those let go.
+        const auto trackId = payload.getProperty("trackId", "").toString();
+        std::vector<std::pair<juce::String, float>> values;
+        if (const auto* o = payload.getProperty("values", {}).getDynamicObject())
+            for (const auto& p : o->getProperties()) values.emplace_back(p.name.toString(), static_cast<float>(static_cast<double>(p.value)));
+        juce::StringArray clear;
+        if (const auto* list = payload.getProperty("clear", {}).getArray())
+            for (const auto& id : *list) clear.add(id.toString());
+        if (static_cast<bool>(payload.getProperty("all", false))) engine.clearTrackLive(trackId);
+        else engine.setTrackLive(trackId, values, clear);
+    }
     else if (type == "PERF_CAPTURE")
     {
         // Tests: a deck channel's live output, written to `path` (mono float WAV) when stopped.

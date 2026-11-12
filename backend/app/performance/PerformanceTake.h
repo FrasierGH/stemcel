@@ -14,6 +14,7 @@
 #include <juce_core/juce_core.h>
 
 #include <map>
+#include <optional>
 #include <vector>
 
 namespace stemcel::native::perf
@@ -66,6 +67,11 @@ struct TakeEdits
     std::map<juce::String, std::vector<std::pair<double, double>>> master; // the master's Beat FX
 };
 
+// A control's recorded (time ms, value) changes as an automation curve: held between changes,
+// thinned (whole-number parameters keep their steps), running to `endMs`.
+std::vector<std::pair<double, double>> shapeCurve(const std::vector<std::pair<double, double>>& points,
+                                                  const juce::String& param, double endMs);
+
 class PerformanceTake
 {
   public:
@@ -78,8 +84,14 @@ class PerformanceTake
     double sampleRate() const { return rate; }
 
     TakeEdits edits(double startMs) const;
+    // Where the take must start for `itemId` (a rendered timeline stretch) to land where it came
+    // from: its first played moment at `regionFromMs` + the position it was played from (which
+    // can be before 0 when the take began earlier). Empty when the take never played it.
+    std::optional<double> alignedStart(const juce::String& itemId, double regionFromMs) const;
     // Writes it as tracks, clips and automation (one undo step); false when nothing was heard.
-    bool write(EngineClient& engine, ProjectMirror& mirror, TimelineActions& actions, double startMs, int takeNumber) const;
+    // `before` runs first in the same undo step (a region's stretch cleared).
+    bool write(EngineClient& engine, ProjectMirror& mirror, TimelineActions& actions, double startMs, int takeNumber,
+               const std::function<void()>& before = {}) const;
 
   private:
     double startAt = -1.0, lastAt = 0.0, rate = 44100.0;

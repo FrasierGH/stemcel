@@ -94,7 +94,7 @@ double DeckPlayer::gridBeat(double p) const noexcept
     return period > 0.0 ? (sec - loaded->anchorSec) / period : 0.0;
 }
 
-double DeckPlayer::gridPos(double k) const noexcept
+double DeckPlayer::gridPos(double beat) const noexcept
 {
     if (loaded == nullptr) return 0.0;
     const auto& b = loaded->beats;
@@ -102,13 +102,13 @@ double DeckPlayer::gridPos(double k) const noexcept
     if (b.size() >= 2)
     {
         const auto n = b.size();
-        if (k <= 0.0) return (b.front() + k * (period > 0.0 ? period : b[1] - b[0])) * sr();
-        if (k >= static_cast<double>(n - 1))
-            return (b.back() + (k - static_cast<double>(n - 1)) * (period > 0.0 ? period : b[n - 1] - b[n - 2])) * sr();
-        const auto i = static_cast<size_t>(std::floor(k));
-        return (b[i] + (k - static_cast<double>(i)) * (b[i + 1] - b[i])) * sr();
+        if (beat <= 0.0) return (b.front() + beat * (period > 0.0 ? period : b[1] - b[0])) * sr();
+        if (beat >= static_cast<double>(n - 1))
+            return (b.back() + (beat - static_cast<double>(n - 1)) * (period > 0.0 ? period : b[n - 1] - b[n - 2])) * sr();
+        const auto i = static_cast<size_t>(std::floor(beat));
+        return (b[i] + (beat - static_cast<double>(i)) * (b[i + 1] - b[i])) * sr();
     }
-    return (loaded->anchorSec + k * period) * sr();
+    return (loaded->anchorSec + beat * period) * sr();
 }
 
 // Quantize: only with Q on, to the analysed beats.
@@ -296,7 +296,7 @@ void DeckPlayer::handle(const Event& e) noexcept
                 size_t i = 0;
                 while (i < kRanges.size() && kRanges[i] < range - 1.0e-6) ++i;
                 range = kRanges[(i + 1) % kRanges.size()];
-                if (!(syncEnabled && !isMaster)) holdTempo(now);
+                if (!syncEnabled || isMaster) holdTempo(now);
             }
             break;
         case Control::keyLock:

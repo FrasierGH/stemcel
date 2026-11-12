@@ -9,6 +9,7 @@
 #include "TrackAutomationSnapshot.h"
 #include "TrackChain.h"
 
+#include <array>
 #include <atomic>
 #include <algorithm>
 #include <cmath>
@@ -32,6 +33,11 @@ public:
     {
         juce::String trackId;
         TrackChain chain;
+        // Live values (performance mode controlling this track): while set, a parameter
+        // follows them instead of its automation curve.
+        std::array<std::atomic<float>, TrackAutomationSnapshot::kNumParams> liveValue{};
+        std::array<std::atomic<bool>, TrackAutomationSnapshot::kNumParams> liveOn{};
+        std::atomic<bool> anyLive{false};
         // The track's plugin chain, for plugin parameter automation on the audio thread.
         std::atomic<plugins::PluginChain*> pluginChain{nullptr};
         // Aligns this track with every other one when a plugin reports latency (ADR 0026).
@@ -252,6 +258,11 @@ public:
      *  memory is owned + retired by the caller (AudioEngine). Resets the sampling
      *  cursor when the pointer changes so the next block re-seeks cleanly. */
     void setTrackAutomationPtr(const juce::String& trackId, const TrackAutomationSnapshot* snap);
+    // Live values for a track's parameters (message thread): each overrides its curve until
+    // cleared; `clear` lists the ones to let go. False when the track has no runtime yet.
+    bool setTrackLive(const juce::String& trackId, const std::vector<std::pair<AutomationParam, float>>& values,
+                      const std::vector<AutomationParam>& clear);
+    void clearTrackLive(const juce::String& trackId);
 
     /** Publish a message-thread-owned immutable beat-repeat snapshot for one track. */
     void setTrackBeatRepeatPtr(const juce::String& trackId, const BeatRepeatSnapshot* snap);

@@ -13,6 +13,7 @@
 #include "PerfState.h"
 #include "DeckDisplay.h"
 #include "PerformanceTake.h"
+#include "TrackDriver.h"
 #include "ProjectModel.h"
 #include "TimelineActions.h"
 #include "WaveformStore.h"
@@ -20,6 +21,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include <array>
+#include <optional>
 #include <memory>
 
 namespace stemcel::native::perf
@@ -41,6 +43,7 @@ class PerformanceView final : public juce::Component, private juce::Timer, priva
         std::function<void(double)> seekTimeline; // after a take: the playhead to its end
         std::function<void(const juce::String&, bool)> toast;
         std::function<void()> exit;
+        LiveState& live;
     };
 
     explicit PerformanceView(Context context);
@@ -58,6 +61,24 @@ class PerformanceView final : public juce::Component, private juce::Timer, priva
     PerfBrowser& browserForTest() { return browser; }
     void loadForTest(const juce::String& itemId, int deck) { loadItem(itemId, deck); }
     const PerformanceTake& takeForTest() const { return take; }
+    void bindForTest(int deck, const juce::String& trackId)
+    {
+        int id = 1;
+        for (size_t i = 0; i < targetIds.size(); ++i)
+            if (targetIds[i] == trackId) id = static_cast<int>(i) + 2;
+        targetBoxes[static_cast<size_t>(deck - 1)]->setSelectedId(id, juce::sendNotificationSync); // as the picker does
+    }
+    void loadRegionForTest(const juce::String& trackId, double fromMs, double toMs, int deck)
+    {
+        BrowserRow row;
+        row.isRegion = true;
+        row.regionTrackId = trackId;
+        row.regionStartMs = fromMs;
+        row.regionEndMs = toMs;
+        row.title = "region";
+        renderRegion(row, deck);
+    }
+    bool hasRegionForTest(int deck) const { return deckRegions[static_cast<size_t>(deck - 1)].has_value(); }
 
   private:
     struct DeckControls
@@ -84,6 +105,10 @@ class PerformanceView final : public juce::Component, private juce::Timer, priva
     void loadItem(const juce::String& itemId, int deck);
     void loadButton(int deck);
     void loadSampleSlot(int slot);
+    void renderRegion(const BrowserRow& row, int deck);
+    void regionRendered(const juce::var& payload);
+    void refreshTargets();
+    void clearRegion(const juce::String& trackId, double fromMs, double toMs);
     void buildFx();
     void enableControllers(const juce::var& devices);
     void restoreControllers();
@@ -110,6 +135,24 @@ class PerformanceView final : public juce::Component, private juce::Timer, priva
     juce::Label status, midiLine;
     juce::Rectangle<int> mixerArea, topBar;
     PerformanceTake take;
+    TrackDriver driver;
+    std::array<std::unique_ptr<juce::ComboBox>, kDecks> targetBoxes;
+    std::vector<juce::String> targetIds; // combo id - 2 → track id
+    // A deck playing a stretch of the timeline: a take with it replaces that stretch.
+    struct Region
+    {
+        juce::String trackId; // "" = the whole mix
+        double fromMs = 0.0, toMs = 0.0;
+        juce::String itemId;
+    };
+    std::array<std::optional<Region>, kDecks> deckRegions;
+    struct PendingRegion
+    {
+        juce::String path;
+        int deck = 1;
+        Region region;
+    };
+    std::vector<PendingRegion> pendingRegions;
     bool shiftHeld = false;
     bool controllersEnabled = false;
     int takeNumber = 0;

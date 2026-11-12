@@ -87,6 +87,7 @@ constexpr ControlName kControlNames[] = {
     {Control::samplerBank, "samplerBank"},
     {Control::samplerVolume, "samplerVolume"},
     {Control::samplerLoad, "samplerLoad"},
+    {Control::channelBind, "channelBind"},
 };
 
 constexpr const char* kPadModeNames[] = {"hotCue",   "padFx1", "beatJump", "sampler",

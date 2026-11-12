@@ -4090,6 +4090,156 @@ void SmokeTest::addTempoJourney()
                          return r > 0.95 && std::abs(offsetDb) < 1.0;
                      }});
     steps.back().timeoutMs = 60000.0;
+    // A second visit: the deck channel on a timeline track, then a stretch of the timeline on a deck.
+    steps.push_back({"performance reopens",
+                     [this, perfWorkspace]
+                     {
+                         if (auto* w = perfWorkspace()) w->togglePerformance();
+                         auto* rec = new juce::DynamicObject();
+                         rec->setProperty("on", true);
+                         engine.send("PERF_RECORD", juce::var(rec));
+                     },
+                     {},
+                     [perfWorkspace](const juce::var&)
+                     {
+                         auto* view = perfWorkspace() != nullptr ? perfWorkspace()->performanceView() : nullptr;
+                         return view != nullptr && view->stateForTest().open && view->stateForTest().recording;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 10000.0;
+    // A channel driving a timeline track: deck 1 bound to a track, the timeline started from
+    // deck 1's PLAY, EQ LOW killed while it plays with REC on, then stopped: the kill is written
+    // into that track's automation over the stretch it was held for, and nowhere else.
+    steps.push_back({"performance drives a timeline track",
+                     [this, perfWorkspace, inject]
+                     {
+                         auto* view = perfWorkspace() != nullptr ? perfWorkspace()->performanceView() : nullptr;
+                         if (view == nullptr) return;
+                         mirror.refreshNow();
+                         perfBoundTrack.clear();
+                         for (const auto& t : model().tracks)
+                             if (perfBoundTrack.isEmpty() && !t.clips.empty() && !t.name.startsWith("Deck")) perfBoundTrack = t.id;
+                         inject({0xB0, 0x0F, 0x40, 0xB0, 0x2F, 0x00}); // EQ LOW to the centre first (the capture killed it)
+                         inject({0xB6, 0x17, 0x40, 0xB6, 0x37, 0x00}); // and the filter
+                         view->bindForTest(1, perfBoundTrack);
+                         actions.seek(0.0);
+                         inject({0x90, 0x0B, 0x7F, 0x90, 0x0B, 0x00}); // PLAY: the timeline starts
+                     },
+                     {},
+                     [this, perfWorkspace, inject](const juce::var&)
+                     {
+                         auto* w = perfWorkspace();
+                         if (w == nullptr || !w->liveState().playing || w->liveState().positionMs < 800.0) return false;
+                         perfKillAtMs = w->liveState().positionMs;
+                         inject({0xB0, 0x0F, 0x00, 0xB0, 0x2F, 0x00}); // EQ LOW killed
+                         return true;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 10000.0;
+    steps.push_back({"performance writes the track's automation",
+                     [] {},
+                     {},
+                     [this, perfWorkspace, inject](const juce::var&)
+                     {
+                         auto* w = perfWorkspace();
+                         if (w == nullptr) return false;
+                         if (w->liveState().playing)
+                         {
+                             if (w->liveState().positionMs > perfKillAtMs + 1000.0) inject({0x90, 0x0B, 0x7F, 0x90, 0x0B, 0x00}); // PLAY: stops
+                             return false;
+                         }
+                         mirror.refreshNow();
+                         const auto* track = model().findTrack(perfBoundTrack);
+                         if (track == nullptr) return false;
+                         const auto bass = automation::pointsOf(*track, "toneBass");
+                         if (bass.empty()) return false;
+                         const double before = automation::valueAt(bass, perfKillAtMs - 200.0, 0.0);
+                         const double during = automation::valueAt(bass, perfKillAtMs + 500.0, 0.0);
+                         report.add("performance on a track: toneBass " + juce::String(before, 1) + " dB before the kill, "
+                                    + juce::String(during, 1) + " dB while held (" + juce::String(static_cast<int>(bass.size())) + " points)");
+                         return std::abs(before) < 0.5 && during < -39.0;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 10000.0;
+    // A stretch of the timeline onto a deck: the selected range's mix rendered onto deck 2, played
+    // with REC on, and the take replaces that stretch.
+    steps.push_back({"performance loads a timeline region",
+                     [this, perfWorkspace, inject]
+                     {
+                         auto* view = perfWorkspace() != nullptr ? perfWorkspace()->performanceView() : nullptr;
+                         if (view == nullptr) return;
+                         view->bindForTest(1, {});
+                         inject({0xB0, 0x0F, 0x40, 0xB0, 0x2F, 0x00}); // EQ LOW back to the centre
+                         actions.setTimelineSelection(std::pair<double, double>{1000.0, 4000.0}, false);
+                         mirror.refreshNow();
+                         view->loadRegionForTest({}, 1000.0, 4000.0, 2);
+                     },
+                     {},
+                     [this, perfWorkspace](const juce::var&)
+                     {
+                         auto* view = perfWorkspace() != nullptr ? perfWorkspace()->performanceView() : nullptr;
+                         if (view == nullptr) return false;
+                         const auto& d = view->stateForTest().decks[1];
+                         if (!d.loaded || !view->hasRegionForTest(2)) return false;
+                         perfRegionCueMs = d.cueSec * 1000.0;
+                         report.add("performance region: deck 2 holds 1-4 s of the mix, " + juce::String(d.lengthSec, 2) + " s, cue at "
+                                    + juce::String(d.cueSec, 3) + " s");
+                         return std::abs(d.lengthSec - 3.0) < 0.1;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 30000.0;
+    steps.push_back({"performance plays the region",
+                     [this, inject]
+                     {
+                         inject({0xB1, 0x13, 0x7F, 0xB1, 0x33, 0x7F}); // deck 2 fader up
+                         inject({0xB6, 0x1F, 0x40, 0xB6, 0x3F, 0x00}); // crossfader centre
+                         inject({0x91, 0x0B, 0x7F, 0x91, 0x0B, 0x00}); // deck 2 PLAY
+                     },
+                     {},
+                     [this, perfWorkspace](const juce::var&)
+                     {
+                         auto* view = perfWorkspace() != nullptr ? perfWorkspace()->performanceView() : nullptr;
+                         return view != nullptr && view->stateForTest().decks[1].playing && view->stateForTest().decks[1].posSec > 1.5;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 10000.0;
+    steps.push_back({"performance closes with the region take",
+                     [perfWorkspace]
+                     {
+                         if (auto* w = perfWorkspace()) w->togglePerformance();
+                     },
+                     {},
+                     [perfWorkspace](const juce::var&) { return perfWorkspace() != nullptr && perfWorkspace()->performanceView() == nullptr; }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 10000.0;
+    steps.push_back({"performance region replaced",
+                     [] {},
+                     {},
+                     [this, perfWorkspace](const juce::var&)
+                     {
+                         auto* w = perfWorkspace();
+                         if (w == nullptr || w->performanceView() != nullptr) return false;
+                         mirror.refreshNow();
+                         int inside = 0, deck2 = 0;
+                         double deck2At = -1.0;
+                         for (const auto& t : model().tracks)
+                             for (const auto& c : t.clips)
+                             {
+                                 if (t.name.startsWith("Deck 2"))
+                                 {
+                                     ++deck2;
+                                     if (deck2At < 0.0) deck2At = c.offsetMs;
+                                 }
+                                 else if (!t.name.startsWith("Deck") && c.offsetMs < 3999.0 && c.endMs() > 1001.0)
+                                     ++inside;
+                             }
+                         report.add("performance region take: " + juce::String(deck2) + " Deck 2 clip(s) from " + juce::String(deck2At, 0)
+                                    + " ms, " + juce::String(inside) + " other clip(s) left in 1-4 s");
+                         // Deck 2's clip starts where the region's audio was: 1 s plus where its cue was.
+                         return deck2 > 0 && std::abs(deck2At - (1000.0 + perfRegionCueMs)) < 15.0 && inside == 0;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 10000.0;
     // Two files dropped at once: the prompt, answered "as dropped", mixes them on two decks.
     steps.push_back({"auto mix on drop",
                      [this]

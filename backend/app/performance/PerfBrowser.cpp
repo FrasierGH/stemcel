@@ -31,6 +31,8 @@ void PerfBrowser::buildTree()
         nodes.push_back({"Stems", "stems", {}, 1, false});
         nodes.push_back({"Samples & clips", "samples", {}, 1, false});
     }
+    nodes.push_back({mirror.model().timelineSelection.has_value() ? "Timeline: the selected range" : "Timeline (select a range to narrow it)",
+                     "timeline", {}, 0, false});
     const auto* snapshot = rekordbox ? rekordbox() : nullptr;
     nodes.push_back({snapshot != nullptr && snapshot->ok ? "rekordbox" : "rekordbox (open its tab to connect)", "folder", "rekordbox", 0, true});
     if (snapshot != nullptr && snapshot->ok && expanded.count("rekordbox") != 0)
@@ -74,6 +76,45 @@ void PerfBrowser::buildRows()
             row.path = item.filePath;
             rows.push_back(std::move(row));
         }
+        return;
+    }
+    if (node.kind == "timeline")
+    {
+        // The selected range (or the whole arrangement): the mix, then each track playing in it.
+        const auto& model = mirror.model();
+        double from = 0.0, to = model.contentEndMs();
+        if (model.timelineSelection.has_value())
+        {
+            from = model.timelineSelection->first;
+            to = model.timelineSelection->second;
+        }
+        if (to - from < 100.0) return;
+        auto stamp = [](double ms)
+        {
+            const int s = juce::roundToInt(ms / 1000.0);
+            return juce::String(s / 60) + ":" + juce::String(s % 60).paddedLeft('0', 2);
+        };
+        auto region = [&](const juce::String& title, const juce::String& trackId)
+        {
+            BrowserRow row;
+            row.isRegion = true;
+            row.regionTrackId = trackId;
+            row.regionStartMs = from;
+            row.regionEndMs = to;
+            row.title = title;
+            row.artist = stamp(from) + " - " + stamp(to);
+            row.durationSec = (to - from) / 1000.0;
+            row.bpm = model.tempoCurve().bpmAt(from);
+            rows.push_back(std::move(row));
+        };
+        region("The mix", {});
+        for (const auto& t : model.tracks)
+            for (const auto& c : t.clips)
+                if (c.offsetMs < to && c.endMs() > from)
+                {
+                    region(t.name, t.id);
+                    break;
+                }
         return;
     }
     const auto* snapshot = rekordbox ? rekordbox() : nullptr;

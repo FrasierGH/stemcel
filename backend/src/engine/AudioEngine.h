@@ -534,6 +534,20 @@ class AudioEngine : private AudioEngineGraphState,
     // outputs for it — master on 1–2 and the headphone cue on 3–4 when there are four (true
     // when the cue has its outputs). Message thread.
     perf::PerformanceEngine& performanceEngine() noexcept { return performance; }
+    // A timeline track's parameters driven live from performance mode (ids as automation
+    // lanes); `clear` lets those go back to their curves. Message thread.
+    bool setTrackLive(const juce::String& trackId, const std::vector<std::pair<juce::String, float>>& values,
+                      const juce::StringArray& clear)
+    {
+        std::vector<std::pair<AutomationParam, float>> set;
+        std::vector<AutomationParam> release;
+        for (const auto& [id, value] : values)
+            if (AutomationParam p{}; automationParamFromString(id, p)) set.emplace_back(p, value);
+        for (const auto& id : clear)
+            if (AutomationParam p{}; automationParamFromString(id, p)) release.push_back(p);
+        return busGraph.setTrackLive(trackId, set, release);
+    }
+    void clearTrackLive(const juce::String& trackId) { busGraph.clearTrackLive(trackId); }
     bool setPerformanceOutputs(bool withCue);
 
     // Avoid full device scans on startup; ASIO probing can block for hundreds of ms.

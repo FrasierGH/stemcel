@@ -9,8 +9,8 @@ to return to the timeline.
 
 ## Recording into the timeline
 
-Recording is on as soon as the mode opens; **REC** pauses it. A take is written when you
-turn REC off or leave the mode. It lands at the timeline playhead, as one undo step
+Press **REC** to record (it is off when the mode opens). A take is written when you turn
+REC off or leave the mode. It lands at the timeline playhead, as one undo step
 (**Edit ▸ Undo** removes it). The playhead then moves to the end of the take, so the next
 take follows it.
 
@@ -36,6 +36,40 @@ Each take adds:
 All of it can be edited afterwards like anything else in the timeline. Played back, the
 take sounds as it did live. The same EQ, filter and effects process the timeline track,
 and the smoke test checks a take against the live output.
+
+## Playing over the timeline
+
+Each deck has a picker above its screen: **Deck 1 / Deck 2**, or any track in the timeline.
+
+### A channel on a timeline track
+
+Pick a track, and that channel works the timeline instead of its deck:
+
+- **Transport:** PLAY starts and stops the timeline from the playhead. CUE stops it and goes
+  back to where it started. With the timeline stopped, the jog wheel moves the playhead
+  (SHIFT for faster).
+- **Mixer and effects:** the trim, EQ, filter or Sound Color FX, the channel fader, the
+  crossfader, and Beat FX and Pad FX all act on the track as it plays.
+- **Holding:** a control you move holds where you left it, as a knob does, until the
+  timeline stops. The track then goes back to its own automation.
+- **Writing:** with **REC** on, what you moved while the timeline played is written into the
+  track's automation when it stops, as one undo step. It covers the stretch from where you
+  first moved each control to where the timeline stopped. Before and after that stretch the
+  track keeps its own automation, and a control you set while stopped is written from where
+  the timeline starts.
+
+### A stretch of the timeline on a deck
+
+In the browser, the **Timeline** folder lists the selected range (or the whole arrangement
+if nothing is selected): **The mix**, then each track playing in it. **LOAD** renders that
+stretch, as it sounds, onto the deck.
+
+With REC on, the take replaces that stretch:
+
+- **Lining up:** the take is placed so the deck's audio lines up with where it came from.
+- **Clearing:** the stretch is cleared in the arrangement. For a track, only that track;
+  for the mix, every track. Clips are split at its edges and nothing after it moves.
+- **Undo:** it's one undo step.
 
 ## Headphones
 

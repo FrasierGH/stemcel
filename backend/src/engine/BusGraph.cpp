@@ -321,6 +321,36 @@ void BusGraph::setTrackAutomationPtr(const juce::String& trackId,
     }
 }
 
+bool BusGraph::setTrackLive(const juce::String& trackId, const std::vector<std::pair<AutomationParam, float>>& values,
+                            const std::vector<AutomationParam>& clear)
+{
+    const juce::ScopedLock sl(lock);
+    auto it = runtimes.find(trackId);
+    if (it == runtimes.end()) return false;
+    auto& rt = *it->second;
+    for (const auto& [param, value] : values)
+    {
+        if (param >= AutomationParam::colorFxType && param <= AutomationParam::fxBpm) rt.chain.ensureDjFx();
+        const auto i = static_cast<size_t>(param);
+        rt.liveValue[i].store(value, std::memory_order_relaxed);
+        rt.liveOn[i].store(true, std::memory_order_release);
+    }
+    for (const auto param : clear) rt.liveOn[static_cast<size_t>(param)].store(false, std::memory_order_release);
+    bool any = false;
+    for (const auto& on : rt.liveOn) any = any || on.load(std::memory_order_relaxed);
+    rt.anyLive.store(any, std::memory_order_release);
+    return true;
+}
+
+void BusGraph::clearTrackLive(const juce::String& trackId)
+{
+    const juce::ScopedLock sl(lock);
+    auto it = runtimes.find(trackId);
+    if (it == runtimes.end()) return;
+    for (auto& on : it->second->liveOn) on.store(false, std::memory_order_release);
+    it->second->anyLive.store(false, std::memory_order_release);
+}
+
 void BusGraph::setTrackBeatRepeatPtr(const juce::String& trackId,
                                      const BeatRepeatSnapshot* snap)
 {

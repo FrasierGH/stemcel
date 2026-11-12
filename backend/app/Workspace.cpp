@@ -381,7 +381,8 @@ void Workspace::togglePerformance()
                                                [this] { return live.positionMs; },
                                                [this](double ms) { actions.seek(ms); },
                                                toast,
-                                               [this] { togglePerformance(); }};
+                                               [this] { togglePerformance(); },
+                                               live};
         performance = std::make_unique<perf::PerformanceView>(std::move(context));
         addAndMakeVisible(*performance);
         showTimeline(false);

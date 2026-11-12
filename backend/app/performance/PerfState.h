@@ -37,6 +37,7 @@ struct DeckState
     bool hpCue = false;
     juce::String padMode = "hotCue";
     int beatJumpPage = 1, keyPage = 0, keyboardCue = -1, padFxHeld = -1;
+    bool bound = false; // the channel drives a timeline track
     float peak = 0.0F;
 };
 
@@ -172,6 +173,7 @@ inline void readState(const juce::var& p, State& s)
         x.keyPage = static_cast<int>(d.getProperty("keyPage", 0));
         x.keyboardCue = static_cast<int>(d.getProperty("keyboardCue", -1));
         x.padFxHeld = static_cast<int>(d.getProperty("padFxHeld", -1));
+        x.bound = static_cast<bool>(d.getProperty("bound", false));
         x.peak = static_cast<float>(num("peak", 0.0));
     }
 }

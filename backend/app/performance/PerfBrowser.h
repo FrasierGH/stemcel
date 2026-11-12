@@ -23,6 +23,10 @@ struct BrowserRow
     juce::String rekordboxId; // a rekordbox track (imported on load)
     juce::String title, artist, key, path;
     double bpm = 0.0, durationSec = 0.0;
+    // A stretch of the timeline (rendered onto the deck when loaded): one track, or "" the mix.
+    bool isRegion = false;
+    juce::String regionTrackId;
+    double regionStartMs = 0.0, regionEndMs = 0.0;
 };
 
 class PerfBrowser final : public juce::Component

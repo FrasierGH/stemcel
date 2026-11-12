@@ -95,6 +95,15 @@ std::vector<std::pair<double, double>> changesOnly(const std::vector<std::pair<d
 }
 } // namespace
 
+std::vector<std::pair<double, double>> shapeCurve(const std::vector<std::pair<double, double>>& points,
+                                                  const juce::String& param, double endMs)
+{
+    const auto held = heldCurve(points, endMs);
+    auto out = stepped(param) ? changesOnly(held) : thin(held, tolerance(param));
+    if (out.size() == 1) out.push_back({endMs, out.front().second});
+    return out;
+}
+
 void PerformanceTake::clear()
 {
     startAt = -1.0;
@@ -158,6 +167,15 @@ void PerformanceTake::add(const juce::var& payload)
         else if (kind == "param")
             params[deck][e.getProperty("param", "").toString()].push_back({at, static_cast<double>(e.getProperty("value", 0.0))});
     }
+}
+
+std::optional<double> PerformanceTake::alignedStart(const juce::String& itemId, double regionFromMs) const
+{
+    if (startAt < 0.0) return std::nullopt;
+    for (const auto& s : segments)
+        if (s.itemId == itemId && s.moving && s.audible)
+            return regionFromMs + s.startPos * 1000.0 - (s.at - startAt) / rate * 1000.0;
+    return std::nullopt;
 }
 
 bool PerformanceTake::hasAudio() const
@@ -284,7 +302,7 @@ TakeEdits PerformanceTake::edits(double startMs) const
 }
 
 bool PerformanceTake::write(EngineClient& engine, ProjectMirror& mirror, TimelineActions& actions, double startMs,
-                            int takeNumber) const
+                            int takeNumber, const std::function<void()>& before) const
 {
     const auto e = edits(startMs);
     if (e.clips.empty() && e.samples.empty()) return false;
@@ -292,6 +310,7 @@ bool PerformanceTake::write(EngineClient& engine, ProjectMirror& mirror, Timelin
         "Live performance",
         [&]
         {
+            if (before) before();
             std::map<int, juce::String> tracks;
             for (const int deck : e.decksUsed)
             {
@@ -299,8 +318,17 @@ bool PerformanceTake::write(EngineClient& engine, ProjectMirror& mirror, Timelin
                 actions.renameTrack(id, "Deck " + juce::String(deck) + (takeNumber > 1 ? " (take " + juce::String(takeNumber) + ")" : ""));
                 tracks[deck] = id;
             }
-            for (const auto& c : e.clips)
+            for (auto c : e.clips)
             {
+                // A take lined up with a timeline stretch can begin before 0: what falls there goes.
+                if (c.positionMs < 0.0)
+                {
+                    const double cutSource = -c.positionMs * c.tempoRatio;
+                    if (cutSource >= c.durationMs - 1.0) continue;
+                    if (!c.reversed) c.inMs += cutSource;
+                    c.durationMs -= cutSource;
+                    c.positionMs = 0.0;
+                }
                 const auto clipId = EngineClient::newId("clip");
                 engine.send("CLIP_ADD", obj({{"trackId", tracks[c.deck]},
                                              {"clipId", clipId},
@@ -364,7 +392,7 @@ bool PerformanceTake::write(EngineClient& engine, ProjectMirror& mirror, Timelin
                                              {"inMs", 0.0},
                                              {"durationMs", h.durationMs}}));
             }
-            actions.addMarker(startMs);
+            actions.addMarker(std::max(0.0, startMs));
         });
     mirror.refreshNow();
     return true;

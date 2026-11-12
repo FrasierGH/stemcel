@@ -11,6 +11,8 @@
   - **Sampler**: 16 slots in each of 4 banks.
   - **Browser**: the library and rekordbox playlists, driven by the BROWSE knob and LOAD (twice for Instant Doubles).
   - **Recording**: what you play is written into the timeline as one undo step. Each deck gets a track whose clips are the stretches you played, with automation for the level, EQ, filter and effects, and the sampler's hits get tracks of their own. It plays back as it sounded.
+  - **On the timeline**: a deck channel can drive a timeline track instead. Its transport works the timeline, its knobs and FX act on the track live, and with REC on what you move is written into the track's automation.
+  - **Timeline stretches on decks**: a stretch of the timeline (the mix, or one track, over the selected range) can be loaded onto a deck. A take with it replaces that stretch.
 - Hot and memory cues set in performance mode are kept with the library track.
 - DJ effects are automatable on any track and on the master.
 

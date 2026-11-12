@@ -110,6 +110,7 @@ struct ChannelView
     PadMode padMode = PadMode::hotCue;
     int beatJumpPage = 1, keyPage = 0, keyboardCue = -1;
     int padFxHeld = -1; // a Pad FX pad held (0..15), or -1
+    bool bound = false;
 };
 
 struct EngineView
@@ -190,7 +191,8 @@ class PerformanceEngine final : public juce::AudioSource
         PadMode padMode = PadMode::hotCue;
         int beatJumpPage = 1, keyPage = 0, keyboardCue = -1;
         int padFxHeld = -1;
-        int padFxRestoreStep = -1; // BEAT ◁/▷ during a held pad changes it until it is let go
+        int padFxRestoreStep = -1;
+        bool bound = false; // driving a timeline track: the deck is silent and not recorded // BEAT ◁/▷ during a held pad changes it until it is let go
         djfx::DjFxChain fx;
         bool wasMoving = false;
         // The recorder's last values per param, and when they went out.
