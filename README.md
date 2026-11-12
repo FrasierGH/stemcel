@@ -261,6 +261,11 @@ Stemcel is built around a single idea: **arranging audio should be simple.**
   End. Choose any audio output device and hot-swap it without leaving the
   timeline, relink moved source files in one step, and undo or redo any edit.
   **Help ▸ Keyboard Shortcuts** opens the full shortcut reference.
+- **Performance mode.** Two decks, a DJ mixer, Beat FX, Sound Color FX, Pad FX, a
+  sampler and a browser, played with a Pioneer DJ DDJ-400 (as with rekordbox) or the
+  mouse, with the headphone cue on outputs 3–4. Everything you play is recorded into
+  the timeline as clips and automation you can edit. See
+  **[performance mode](docs/performance-mode.md)**.
 - **Supported MIDI deck control.** Use a recognised deck controller for
   transport, timeline and marker navigation, clip browsing, selected-track
   mixer controls, platter holding and scratching, plus supported lights and

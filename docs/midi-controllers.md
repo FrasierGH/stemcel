@@ -17,10 +17,10 @@ time.
 > need refinement; please report any issue with the device name and MIDI Monitor
 > output.
 
-Stemcel remains a studio creation tool. MIDI deck control edits and navigates
-the arrangement, including recording editable scratch patterns into a mix; it
-is not a live-performance mode and does not sequence MIDI notes or control
-virtual instruments.
+MIDI deck control edits and navigates the arrangement, including recording editable
+scratch patterns into a mix. To play live with two decks and record it into the
+timeline, use **[performance mode](performance-mode.md)** (the Pioneer DJ DDJ-400 so
+far). Stemcel does not sequence MIDI notes or control virtual instruments.
 
 ## Connect and enable a controller
 
