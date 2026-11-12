@@ -38,6 +38,7 @@ struct DeckTrack
     double sampleRate = 44100.0; // of `audio`
     double bpm = 0.0;            // 0 = no beat grid
     double anchorSec = 0.0;      // a downbeat
+    std::vector<double> beats;   // the analysed beats (seconds); the grid follows them where known
     double cueSec = -1.0;        // the cue point to start at; < 0 = the first beat
     std::array<Cue, kHotCues> hotCues{};
     std::array<Cue, kMemoryCues> memoryCues{};
@@ -87,6 +88,8 @@ struct DeckView
     float slider = 0.5F;
     double range = 0.10, tempo = 1.0, bpm = 0.0, effectiveBpm = 0.0, rate = 0.0;
     int semitones = 0;
+    bool tempoHeld = false;     // the tempo is held until the slider reaches `takeover`
+    float takeover = 0.5F;
     std::array<Cue, kHotCues> hotCues{};
     std::array<Cue, kMemoryCues> memoryCues{};
     int cueRevision = 0; // bumps when hot or memory cues change, for saving them
@@ -107,7 +110,7 @@ class DeckPlayer
     void load(const DeckTrack* track, const DeckPlayer* copy) noexcept;
     void handle(const Event& e) noexcept;
     void setSync(bool on) noexcept;
-    void setMaster(bool on) noexcept { isMaster = on; }
+    void setMaster(bool on) noexcept;
     bool syncOn() const noexcept { return syncEnabled; }
     void syncPhaseNow(const SyncSource& master) noexcept; // a SYNC press: line up now
     // Renders `n` samples (pre-mixer) into out[0..1]; `audible` = it reaches the master now.
@@ -139,8 +142,12 @@ class DeckPlayer
     double sr() const noexcept;
     double beatLen() const noexcept; // samples per beat (0 = no grid)
     double anchor() const noexcept;
+    bool hasGrid() const noexcept;
+    double gridBeat(double p) const noexcept;  // beats (fractional) at a position, along the analysed beats
+    double gridPos(double beat) const noexcept; // and back
     double snapNearest(double p) const noexcept;
     double snapFloor(double p, double gridLen) const noexcept;
+    void holdTempo(double tempo) noexcept;
     double tempoFactor() const noexcept;
     void jumpTo(double p) noexcept;          // a discontinuity, cross-faded and recorded
     void startPlaying() noexcept;
@@ -182,8 +189,11 @@ class DeckPlayer
 
     float slider = 0.5F;
     double range = 0.10;
-    double heldTempo = 1.0; // the tempo when sync was switched off, until the slider moves
+    // A tempo kept when the range changes, sync ends or the deck becomes the master: it holds
+    // until the slider is brought to where that tempo is (the pickup), as on CDJs.
+    double heldTempo = 1.0;
     bool tempoHeld = false;
+    float takeover = 0.5F, lastSlider = 0.5F;
     bool syncEnabled = false, isMaster = false, keyLockOn = false, quantizeOn = true;
     double syncTempo = 1.0;
     int semitones = 0;

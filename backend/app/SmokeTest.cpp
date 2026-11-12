@@ -3794,13 +3794,17 @@ void SmokeTest::addTempoJourney()
                              if (perfItem.isEmpty() && item.kind == "source" && item.bpm > 0.0 && item.durationMs > 8000.0)
                                  perfItem = item.id;
                          if (auto* w = perfWorkspace()) w->togglePerformance();
+                         // REC, as the button does (it starts off).
+                         auto* rec = new juce::DynamicObject();
+                         rec->setProperty("on", true);
+                         engine.send("PERF_RECORD", juce::var(rec));
                      },
                      {},
                      [this, perfWorkspace](const juce::var&)
                      {
                          auto* w = perfWorkspace();
                          auto* view = w != nullptr ? w->performanceView() : nullptr;
-                         if (view == nullptr || !view->stateForTest().open) return false;
+                         if (view == nullptr || !view->stateForTest().open || !view->stateForTest().recording) return false;
                          report.add("performance mode: open, item " + perfItem + (view->stateForTest().cueOutput ? ", cue on 3-4" : ", no cue outputs"));
                          return perfItem.isNotEmpty();
                      }});

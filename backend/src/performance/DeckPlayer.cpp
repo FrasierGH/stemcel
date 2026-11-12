@@ -72,17 +72,73 @@ double DeckPlayer::beatLen() const noexcept
 }
 double DeckPlayer::anchor() const noexcept { return loaded != nullptr ? loaded->anchorSec * sr() : 0.0; }
 
+bool DeckPlayer::hasGrid() const noexcept
+{
+    return loaded != nullptr && (loaded->bpm > 0.0 || loaded->beats.size() >= 2);
+}
+
+double DeckPlayer::gridBeat(double p) const noexcept
+{
+    if (loaded == nullptr) return 0.0;
+    const auto& b = loaded->beats;
+    const double sec = p / sr();
+    const double period = loaded->bpm > 0.0 ? 60.0 / loaded->bpm : 0.0;
+    if (b.size() >= 2)
+    {
+        if (sec <= b.front()) return (sec - b.front()) / (period > 0.0 ? period : b[1] - b[0]);
+        const auto n = b.size();
+        if (sec >= b.back()) return static_cast<double>(n - 1) + (sec - b.back()) / (period > 0.0 ? period : b[n - 1] - b[n - 2]);
+        const auto i = static_cast<size_t>(std::upper_bound(b.begin(), b.end(), sec) - b.begin()) - 1;
+        return static_cast<double>(i) + (sec - b[i]) / std::max(1.0e-6, b[i + 1] - b[i]);
+    }
+    return period > 0.0 ? (sec - loaded->anchorSec) / period : 0.0;
+}
+
+double DeckPlayer::gridPos(double k) const noexcept
+{
+    if (loaded == nullptr) return 0.0;
+    const auto& b = loaded->beats;
+    const double period = loaded->bpm > 0.0 ? 60.0 / loaded->bpm : 0.0;
+    if (b.size() >= 2)
+    {
+        const auto n = b.size();
+        if (k <= 0.0) return (b.front() + k * (period > 0.0 ? period : b[1] - b[0])) * sr();
+        if (k >= static_cast<double>(n - 1))
+            return (b.back() + (k - static_cast<double>(n - 1)) * (period > 0.0 ? period : b[n - 1] - b[n - 2])) * sr();
+        const auto i = static_cast<size_t>(std::floor(k));
+        return (b[i] + (k - static_cast<double>(i)) * (b[i + 1] - b[i])) * sr();
+    }
+    return (loaded->anchorSec + k * period) * sr();
+}
+
+// Quantize: only with Q on, to the analysed beats.
 double DeckPlayer::snapNearest(double p) const noexcept
 {
-    const double b = beatLen();
-    if (!quantizeOn || b <= 0.0) return p;
-    return anchor() + std::round((p - anchor()) / b) * b;
+    if (!quantizeOn || !hasGrid()) return p;
+    return gridPos(std::round(gridBeat(p)));
 }
 
 double DeckPlayer::snapFloor(double p, double grid) const noexcept
 {
-    if (!quantizeOn || grid <= 0.0) return p;
-    return anchor() + std::floor((p - anchor()) / grid + 1.0e-6) * grid;
+    if (!quantizeOn || !hasGrid() || grid <= 0.0 || beatLen() <= 0.0) return p;
+    const double fraction = std::min(1.0, grid / beatLen()); // in beats
+    return gridPos(std::floor(gridBeat(p) / fraction + 1.0e-6) * fraction);
+}
+
+void DeckPlayer::holdTempo(double tempo) noexcept
+{
+    heldTempo = tempo;
+    tempoHeld = true;
+    // Where this tempo sits on the slider in the current range (its end when out of range).
+    takeover = static_cast<float>(std::clamp(((tempo - 1.0) / range + 1.0) * 0.5, 0.0, 1.0));
+    lastSlider = slider;
+}
+
+void DeckPlayer::setMaster(bool on) noexcept
+{
+    // A synced deck that becomes the master keeps the tempo it was synced to.
+    if (on && !isMaster && syncEnabled && loaded != nullptr) holdTempo(syncTempo);
+    isMaster = on;
 }
 
 double DeckPlayer::beatSeconds() const noexcept { return loaded != nullptr && loaded->bpm > 0.0 ? 60.0 / loaded->bpm : 0.5; }
@@ -101,8 +157,7 @@ double DeckPlayer::effectiveBpm() const noexcept
 
 double DeckPlayer::beatPhase() const noexcept
 {
-    const double b = beatLen();
-    return b > 0.0 ? (pos - anchor()) / b : 0.0;
+    return hasGrid() ? gridBeat(pos) : 0.0;
 }
 
 bool DeckPlayer::moving() const noexcept { return loaded != nullptr && (playing || preview != Preview::none); }
@@ -138,6 +193,7 @@ void DeckPlayer::load(const DeckTrack* track, const DeckPlayer* copy) noexcept
     // The cue starts on the saved cue point, else the first beat (rekordbox's auto cue).
     double first = 0.0;
     if (track->cueSec >= 0.0) first = track->cueSec * sr();
+    else if (!track->beats.empty()) first = track->beats.front() * sr();
     else if (beatLen() > 0.0) first = anchor() - std::floor(anchor() / beatLen()) * beatLen();
     cuePoint = std::clamp(first, 0.0, length());
     pos = cuePoint;
@@ -151,8 +207,7 @@ void DeckPlayer::load(const DeckTrack* track, const DeckPlayer* copy) noexcept
         loopOut = copy->loopOut;
         slider = copy->slider;
         range = copy->range;
-        tempoHeld = true;
-        heldTempo = copy->tempoFactor();
+        holdTempo(copy->tempoFactor());
         keyLockOn = copy->keyLockOn;
         semitones = copy->semitones;
         if (playing) fadeInLeft = kTailSamples;
@@ -165,9 +220,8 @@ void DeckPlayer::setSync(bool on) noexcept
 {
     if (syncEnabled && !on)
     {
-        // Off: keep the synced tempo until the slider is moved.
-        heldTempo = tempoFactor();
-        tempoHeld = true;
+        // Off: keep the synced tempo until the slider is brought to it.
+        holdTempo(tempoFactor());
     }
     syncEnabled = on;
 }
@@ -222,15 +276,27 @@ void DeckPlayer::handle(const Event& e) noexcept
             }
             break;
         case Control::tempo:
-            slider = std::clamp(e.value, 0.0F, 1.0F);
-            tempoHeld = false;
+        {
+            const float v = std::clamp(e.value, 0.0F, 1.0F);
+            if (tempoHeld)
+            {
+                // The pickup: the slider takes over once it reaches (or passes) the held tempo.
+                const bool crossed = (lastSlider - takeover) * (v - takeover) <= 0.0F;
+                if (crossed || std::abs(v - takeover) < 0.01F) tempoHeld = false;
+                lastSlider = v;
+            }
+            slider = v;
             break;
+        }
         case Control::syncShift:
             if (press)
             {
+                // A new range keeps the tempo; the slider picks it up from there.
+                const double now = tempoFactor();
                 size_t i = 0;
                 while (i < kRanges.size() && kRanges[i] < range - 1.0e-6) ++i;
                 range = kRanges[(i + 1) % kRanges.size()];
+                if (!(syncEnabled && !isMaster)) holdTempo(now);
             }
             break;
         case Control::keyLock:
@@ -430,7 +496,6 @@ void DeckPlayer::hotCueButton(int index, bool pressed) noexcept
     {
         setLoop(at, cue.end * sr(), false);
         jumpTo(at);
-        if (!playing) cuePoint = at;
         return;
     }
     if (playing)
@@ -449,7 +514,6 @@ void DeckPlayer::hotCueButton(int index, bool pressed) noexcept
     }
     // Paused: plays from the hot cue while held, back to it on release.
     jumpTo(at);
-    cuePoint = at;
     preview = Preview::hotCue;
     previewHotCue = index;
     previewReturn = at;
@@ -481,20 +545,20 @@ void DeckPlayer::beatLoop(double beats) noexcept
     // shorter), so the playhead is already inside it.
     const double grid = beatLen() > 0.0 ? std::min(beatLen(), len) : 0.0;
     const double in = grid > 0.0 ? snapFloor(pos, grid) : pos;
-    setLoop(in, in + len, false);
+    const double out = quantizeOn && hasGrid() ? gridPos(gridBeat(in) + beats) : in + len;
+    setLoop(in, out > in + 1.0 ? out : in + len, false);
 }
 
 void DeckPlayer::beatJump(double beats) noexcept
 {
     if (loaded == nullptr || beats == 0.0) return;
-    const double shift = beats * (beatLen() > 0.0 ? beatLen() : 0.5 * sr());
+    const double shift = hasGrid() ? gridPos(gridBeat(pos) + beats) - pos : beats * 0.5 * sr();
     if (loopActive)
     {
         loopIn = std::clamp(loopIn + shift, 0.0, length());
         loopOut = std::clamp(loopOut + shift, loopIn + 1.0, length());
     }
     jumpTo(pos + shift);
-    if (!playing && preview == Preview::none) cuePoint = pos;
 }
 
 void DeckPlayer::loopResize(double factor) noexcept
@@ -584,7 +648,6 @@ void DeckPlayer::jog(Control control, double ticks) noexcept
     if (control == Control::jogSearch)
     {
         jumpTo(pos + ticks * kSearchSecondsPerTick * sr());
-        if (!moving()) cuePoint = pos;
         return;
     }
     if (control == Control::jogScratch && touched)
@@ -596,9 +659,8 @@ void DeckPlayer::jog(Control control, double ticks) noexcept
         bendTicks += ticks; // the side: a nudge
     else
     {
-        // Paused: the wheel moves the position (as cue search).
+        // Paused: the wheel moves the position; CUE then sets the cue point there.
         jumpTo(pos + ticks * perTick);
-        cuePoint = pos;
     }
 }
 
@@ -913,6 +975,8 @@ void DeckPlayer::fillView(DeckView& v) const noexcept
     v.effectiveBpm = effectiveBpm();
     v.rate = currentRate;
     v.semitones = semitones;
+    v.tempoHeld = tempoHeld;
+    v.takeover = takeover;
     v.hotCues = hotCues;
     v.memoryCues = memoryCues;
     v.cueRevision = cueRevision;

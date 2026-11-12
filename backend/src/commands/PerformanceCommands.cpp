@@ -137,14 +137,28 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
 
     void open()
     {
-        if (perfEngine().isOpen()) return;
-        perfEngine().setOpen(true);
-        cueOutput = engine.setPerformanceOutputs(true);
-        setMidiPerformanceSink(this);
-        startTimerHz(60);
+        if (!perfEngine().isOpen())
+        {
+            perfEngine().setOpen(true);
+            cueOutput = engine.setPerformanceOutputs(true);
+            setMidiPerformanceSink(this);
+            startTimerHz(60);
+        }
         auto* o = new juce::DynamicObject();
         o->setProperty("cueOutput", cueOutput);
         bridge.broadcast("PERF_OPENED", juce::var(o));
+        // What the decks and the sampler still hold from last time, for the view to show.
+        for (const auto& [deck, track] : loadedTracks)
+            if (track != nullptr) broadcastLoaded(deck, track);
+        for (const auto& [slot, sample] : loadedSamples)
+            if (sample != nullptr)
+            {
+                auto* s = new juce::DynamicObject();
+                s->setProperty("slot", slot);
+                s->setProperty("libraryItemId", sample->itemId);
+                s->setProperty("title", sample->title);
+                bridge.broadcast("PERF_SAMPLE_LOADED", juce::var(s));
+            }
     }
 
     void close()
@@ -155,7 +169,6 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
         lightsOff();
         setMidiPerformanceSink(nullptr);
         perfEngine().setOpen(false);
-        engine.setPerformanceOutputs(false);
         stopTimer();
         bridge.broadcast("PERF_CLOSED", juce::var(new juce::DynamicObject()));
     }
@@ -273,6 +286,7 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
                         sample->audio = audio;
                         sample->sampleRate = rate;
                         self->perfEngine().loadSample(slot, sample);
+                        self->loadedSamples[slot] = sample;
                         auto* o = new juce::DynamicObject();
                         o->setProperty("slot", slot);
                         o->setProperty("libraryItemId", sample->itemId);
@@ -318,6 +332,8 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
         track->anchorSec = payload.hasProperty("beatAnchorSec") ? static_cast<double>(payload["beatAnchorSec"])
                                                                  : project.getLibraryItemBeatAnchorSec(itemId);
         track->cueSec = static_cast<double>(payload.getProperty("cueSec", -1.0));
+        if (const auto* beats = payload.getProperty("beats", {}).getArray())
+            for (const auto& b : *beats) track->beats.push_back(static_cast<double>(b));
         cuesFromVar(payload.getProperty("hotCues", {}), track->hotCues, false);
         cuesFromVar(payload.getProperty("memoryCues", {}), track->memoryCues, true);
         stemcel::log::info("performance", "load deck " + juce::String(deck) + ": " + itemId);
@@ -721,7 +737,7 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
     juce::StringArray monitor;
     bool monitorChanged = false;
     std::vector<perf::RecEvent> recBuffer;
-    std::map<int, std::shared_ptr<const perf::DeckTrack>> loadedTracks;
+    std::map<int, std::shared_ptr<const perf::DeckTrack>> loadedTracks, loadedSamples;
     std::map<int, juce::String> itemBySerial; // every track loaded, for the take log
     std::map<int, int> loadRequests;
     std::array<std::pair<int, int>, perf::kDecks> cueSeen{};

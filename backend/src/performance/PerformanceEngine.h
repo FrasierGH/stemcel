@@ -252,7 +252,7 @@ class PerformanceEngine final : public juce::AudioSource
 
     std::atomic<bool> opened{false}, recordingOn{false}, recordingRestart{false};
     std::atomic<bool> cueOutputAvailable{false};
-    std::atomic<int> crossfaderCurve{static_cast<int>(curves::CrossfaderCurve::smooth)};
+    std::atomic<int> crossfaderCurve{static_cast<int>(curves::CrossfaderCurve::full)};
 
     // Controls in (many writers, the audio thread reads)
     static constexpr int kQueueSize = 4096;

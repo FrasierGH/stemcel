@@ -149,8 +149,30 @@ void DeckDisplay::paintCloseUp(juce::Graphics& g, juce::Rectangle<float> area)
         g.setColour(colours::amber400.withAlpha(0.18F));
         g.fillRect(juce::Rectangle<float>(xAt(state.loopInSec), area.getY(), xAt(state.loopOutSec) - xAt(state.loopInSec), area.getHeight()));
     }
-    // The beat grid: bars brighter than beats.
-    if (info.bpm > 0.0)
+    // The beat grid: the analysed beats (bars brighter), carried on at the tempo past them.
+    if (info.beats.size() >= 2)
+    {
+        const auto& b = info.beats;
+        const double period = info.bpm > 0.0 ? 60.0 / info.bpm : b[1] - b[0];
+        // Bars count from the downbeat (the anchor).
+        long long downbeat = 0;
+        for (size_t i = 0; i < b.size(); ++i)
+            if (std::abs(b[i] - info.anchorSec) < std::abs(b[static_cast<size_t>(downbeat)] - info.anchorSec)) downbeat = static_cast<long long>(i);
+        auto drawBeat = [&](double t, long long k)
+        {
+            if (t < from || t > from + span || t < 0.0 || t > state.lengthSec) return;
+            const bool bar = (((k - downbeat) % 4) + 4) % 4 == 0;
+            g.setColour(bar ? colours::text.withAlpha(0.55F) : colours::textDim.withAlpha(0.3F));
+            g.fillRect(xAt(t), area.getY(), bar ? 1.5F : 1.0F, area.getHeight());
+        };
+        for (size_t i = 0; i < b.size(); ++i) drawBeat(b[i], static_cast<long long>(i));
+        const auto n = static_cast<long long>(b.size());
+        for (long long k = n; b.back() + static_cast<double>(k - n + 1) * period <= from + span; ++k)
+            drawBeat(b.back() + static_cast<double>(k - n + 1) * period, k);
+        for (long long k = -1; b.front() + static_cast<double>(k) * period >= from - period; --k)
+            drawBeat(b.front() + static_cast<double>(k) * period, k);
+    }
+    else if (info.bpm > 0.0)
     {
         const double beat = 60.0 / info.bpm;
         const auto first = static_cast<long long>(std::floor((from - info.anchorSec) / beat));

@@ -274,7 +274,7 @@ void testEngineSyncAndRecordingParams()
         if (r.kind == RecEvent::Kind::param && r.deck == 2 && r.param == static_cast<std::uint8_t>(RecParam::levelDb))
         {
             const double expected = curves::gainToDb(curves::faderGain(0.7) *
-                                                     curves::crossfaderGain(0.5, 1, curves::CrossfaderCurve::smooth));
+                                                     curves::crossfaderGain(0.5, 1, curves::CrossfaderCurve::full));
             if (std::abs(r.a - expected) < 0.05) level = true;
         }
         if (r.kind == RecEvent::Kind::segment && r.deck == 2 && (r.flags & 3) == 3) audible = true;
@@ -324,6 +324,94 @@ void testDdj400Mapping()
             "pad LEDs should resolve per deck");
     require(mapping->leds("play", 2).size() == 2, "PLAY should light its plain and SHIFT addresses");
 }
+void testCueStaysWhereCueSetIt()
+{
+    DeckRig rig;
+    const double cue = rig.view().cueSec;
+    rig.press(Control::jogBend, 300.0F); // paused: the wheel moves the position
+    rig.run(0.05);
+    require(rig.view().posSec > cue + 0.5, "the jog should move a paused deck");
+    rig.press(Control::jogSearch, 50.0F);
+    rig.press(Control::beatJump, 4.0F);
+    require(std::abs(rig.view().cueSec - cue) < 1.0e-9, "the jog and beat jump should not move the cue point");
+    rig.press(Control::play);
+    rig.run(0.5);
+    rig.press(Control::cue);
+    rig.press(Control::cue, 0.0F);
+    rig.run(0.02);
+    require(std::abs(rig.view().posSec - cue) < 1.0e-6, "CUE while playing should go back to where CUE set the cue point");
+    // Quantize off: the cue point is set exactly where the deck is.
+    rig.press(Control::quantize, 0.0F);
+    rig.press(Control::seek, 2.26F);
+    rig.press(Control::cue);
+    rig.press(Control::cue, 0.0F);
+    require(std::abs(rig.view().cueSec - 2.26) < 1.0e-4, "without quantize the cue point should not snap");
+}
+
+void testQuantizeFollowsAnalysedBeats()
+{
+    // Beats that drift from a rigid grid: the cue snaps to the analysed beat.
+    auto track = makeTrack(30.0, 120.0);
+    for (int k = 0; k < 40; ++k) track->beats.push_back(0.1 + k * 0.5 + (k >= 10 ? 0.07 : 0.0));
+    DeckPlayer deck(1);
+    deck.prepare(kRate, kBlock);
+    deck.load(track.get(), nullptr);
+    Event e;
+    e.deck = 1;
+    e.control = Control::seek;
+    e.value = 6.2F; // near the 13th beat, 6.17 s
+    deck.handle(e);
+    e.control = Control::cue;
+    e.value = 1.0F;
+    deck.handle(e);
+    DeckView v;
+    deck.fillView(v);
+    require(std::abs(v.cueSec - 6.17) < 1.0e-6, "quantize should snap to the analysed beat, not a rigid grid");
+}
+
+void testTempoRangeHoldsTempoUntilPickup()
+{
+    DeckRig rig;
+    rig.press(Control::tempo, 0.75F); // +5% at ±10%
+    require(std::abs(rig.view().tempo - 1.05) < 1.0e-6, "the slider should set the tempo");
+    rig.press(Control::syncShift); // ±16%
+    require(std::abs(rig.view().tempo - 1.05) < 1.0e-6, "a new range should keep the tempo");
+    rig.press(Control::tempo, 0.70F); // towards where +5% is in ±16% (0.656), not there yet
+    require(std::abs(rig.view().tempo - 1.05) < 1.0e-6, "the slider should not take over before it reaches the tempo");
+    rig.press(Control::tempo, 0.66F);
+    require(std::abs(rig.view().tempo - (1.0 + 0.16 * 0.32)) < 1.0e-6, "past the pickup the slider should take over");
+}
+
+void testSyncedDeckKeepsTempoWhenItPlays()
+{
+    PerformanceEngine engine;
+    engine.prepareToPlay(kBlock, kRate);
+    engine.setOpen(true);
+    engine.load(1, makeTrack(20.0, 120.0, 1));
+    engine.load(2, makeTrack(20.0, 125.0, 2));
+    juce::AudioBuffer<float> out(2, kBlock);
+    auto render = [&](double seconds)
+    {
+        for (int i = 0; i < static_cast<int>(seconds * kRate / kBlock); ++i)
+            engine.getNextAudioBlock(juce::AudioSourceChannelInfo(&out, 0, kBlock));
+    };
+    auto post = [&](Control c, int deck)
+    {
+        Event e;
+        e.control = c;
+        e.deck = static_cast<std::int16_t>(deck);
+        e.value = 1.0F;
+        engine.post(e);
+    };
+    render(0.05);
+    post(Control::sync, 2); // both paused: deck 1 leads
+    render(0.05);
+    require(std::abs(engine.view().decks[1].effectiveBpm - 120.0) < 1.0e-6, "sync should match deck 1");
+    post(Control::play, 2); // deck 2 plays alone and takes the master
+    render(0.5);
+    require(std::abs(engine.view().decks[1].effectiveBpm - 120.0) < 1.0e-6, "the deck should keep its synced tempo when it plays");
+}
+
 bool finite(const std::vector<float>& v)
 {
     for (const float x : v)
@@ -459,6 +547,10 @@ void testEffectsAndSamplerAreRecorded()
 
 void addPerformanceTests(std::vector<TestCase>& tests)
 {
+    tests.push_back({"Performance cue stays where CUE set it", testCueStaysWhereCueSetIt});
+    tests.push_back({"Performance quantize follows analysed beats", testQuantizeFollowsAnalysedBeats});
+    tests.push_back({"Performance tempo range holds tempo until pickup", testTempoRangeHoldsTempoUntilPickup});
+    tests.push_back({"Performance synced deck keeps tempo when it plays", testSyncedDeckKeepsTempoWhenItPlays});
     tests.push_back({"Performance Beat FX units", testBeatFxUnits});
     tests.push_back({"Performance Sound Color FX units", testColorFxUnits});
     tests.push_back({"Performance effects and sampler are recorded", testEffectsAndSamplerAreRecorded});

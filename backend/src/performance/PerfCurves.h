@@ -50,6 +50,7 @@ inline double faderGain(double v) noexcept
 
 enum class CrossfaderCurve
 {
+    full,   // both full at the centre, each fading out over the other half (the default)
     smooth, // constant power: −3 dB each at the centre
     cut     // both full until the last few millimetres (scratch)
 };
@@ -60,6 +61,7 @@ inline double crossfaderGain(double x, int side, CrossfaderCurve curve) noexcept
     if (side < 0) return 1.0;
     x = std::clamp(x, 0.0, 1.0);
     const double towardOther = side == 0 ? x : 1.0 - x; // 0 = fully on this side
+    if (curve == CrossfaderCurve::full) return std::clamp(2.0 * (1.0 - towardOther), 0.0, 1.0);
     if (curve == CrossfaderCurve::cut)
     {
         constexpr double kCutLag = 0.04;

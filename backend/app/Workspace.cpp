@@ -755,6 +755,7 @@ void Workspace::duplicateSelectedTrack()
 
 bool Workspace::keyPressed(const juce::KeyPress& key)
 {
+    if (performance != nullptr) return false; // the timeline's keys are asleep in performance mode
     const auto mods = key.getModifiers();
     const int code = key.getKeyCode();
     const bool plain = !mods.isCommandDown() && !mods.isCtrlDown() && !mods.isAltDown();

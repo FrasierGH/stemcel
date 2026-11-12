@@ -64,6 +64,7 @@ struct DeckTrackInfo
     int serial = 0;
     juce::String itemId, title, artist, key, audioPath;
     double bpm = 0.0, lengthSec = 0.0, anchorSec = 0.0;
+    std::vector<double> beats; // the analysed beats (seconds), as the deck quantizes to them
 };
 
 struct State

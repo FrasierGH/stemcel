@@ -34,7 +34,7 @@ PerformanceView::PerformanceView(Context context)
     exitButton.onClick = [this] { if (ctx.exit) ctx.exit(); };
     addAndMakeVisible(recButton);
     recButton.setClickingTogglesState(true);
-    recButton.setToggleState(true, juce::dontSendNotification);
+    recButton.setToggleState(false, juce::dontSendNotification);
     recButton.setTooltip("Record into the timeline: turning it off writes the take");
     recButton.onClick = [this]
     {
@@ -73,9 +73,6 @@ PerformanceView::PerformanceView(Context context)
     ctx.engine.send("PERF_OPEN");
     ctx.engine.send("MIDI_DEVICES_REQUEST");
     take.clear();
-    auto* rec = new juce::DynamicObject();
-    rec->setProperty("on", true);
-    ctx.engine.send("PERF_RECORD", juce::var(rec));
     startTimerHz(60);
 }
 
@@ -303,6 +300,7 @@ void PerformanceView::onLoaded(const juce::var& p)
     {
         info.audioPath = item->audioPath();
         info.anchorSec = item->beatAnchorSec;
+        info.beats = item->beats;
     }
 }
 
@@ -398,6 +396,12 @@ void PerformanceView::loadItem(const juce::String& itemId, int deck)
     {
         o->setProperty("bpm", item->bpm);
         o->setProperty("beatAnchorSec", item->beatAnchorSec);
+    }
+    if (!item->beats.empty())
+    {
+        juce::Array<juce::var> beats;
+        for (const double b : item->beats) beats.add(b);
+        o->setProperty("beats", beats);
     }
     const auto cues = item->raw.getProperty("perfCues", {});
     if (cues.isObject())
@@ -573,7 +577,7 @@ bool PerformanceView::keyPressed(const juce::KeyPress& key)
         if (ctx.exit) ctx.exit();
         return true;
     }
-    return true; // the timeline's shortcuts stay out of the way here
+    return false; // on to the app's shortcuts (the workspace leaves its own out while we show)
 }
 
 // --- Layout -----------------------------------------------------------------------------------
