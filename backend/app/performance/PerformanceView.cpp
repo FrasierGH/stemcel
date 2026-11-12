@@ -438,7 +438,34 @@ void PerformanceView::finishTake(std::function<void()> then)
 
 void PerformanceView::enableControllers(const juce::var& envelope)
 {
-    if (controllersEnabled) return;
+    if (controllersEnabled)
+    {
+        // The list after enabling: was the controller's port opened? Another program holding it
+        // (rekordbox, or its helper for a moment after it quits) keeps it from us; try again.
+        if (openAttempts == 0 || controllerOpened) return;
+        const auto* inputs = envelope.getProperty("inputs", {}).getArray();
+        if (inputs == nullptr) return;
+        bool allOpen = true;
+        for (const auto& input : *inputs)
+            if (controllerIds.contains(input.getProperty("identifier", "").toString()) && !static_cast<bool>(input.getProperty("enabled", false)))
+                allOpen = false;
+        if (allOpen)
+        {
+            controllerOpened = true;
+            if (ctx.toast) ctx.toast("Controller: " + controllerNames, true);
+            return;
+        }
+        if (openAttempts >= 4)
+        {
+            if (ctx.toast)
+                ctx.toast("Couldn't open the " + controllerNames + ": another program has it (rekordbox?). Close it, then leave and reopen Performance Mode", false);
+            openAttempts = 0;
+            return;
+        }
+        juce::Component::SafePointer<PerformanceView> safe(this);
+        juce::Timer::callAfterDelay(1500, [safe] { if (safe != nullptr) safe->openControllers(); });
+        return;
+    }
     // A smoke test drives the decks with injected MIDI; a real controller on the desk stays out.
     if (juce::JUCEApplicationBase::getCommandLineParameters().contains("--smoke-test")) return;
     const auto* inputs = envelope.getProperty("inputs", {}).getArray();
@@ -463,12 +490,20 @@ void PerformanceView::enableControllers(const juce::var& envelope)
         if (ctx.toast) ctx.toast("No supported DJ controller connected: the mouse works too", true);
         return;
     }
+    controllerNames = names;
+    controllerInputs = ids;
+    openControllers();
+}
+
+void PerformanceView::openControllers()
+{
+    // Answered by a MIDI_DEVICES_LIST saying which inputs opened (enableControllers above).
+    ++openAttempts;
     juce::Array<juce::var> list;
-    for (const auto& id : ids) list.add(id);
+    for (const auto& id : controllerInputs) list.add(id);
     auto* o = new juce::DynamicObject();
     o->setProperty("identifiers", list);
     ctx.engine.send("MIDI_INPUTS_SET", juce::var(o));
-    if (ctx.toast) ctx.toast("Controller: " + names, true);
 }
 
 void PerformanceView::restoreControllers()

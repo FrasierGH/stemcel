@@ -87,6 +87,7 @@ class PerformanceView final : public juce::Component, private juce::Timer, priva
     void buildFx();
     void enableControllers(const juce::var& devices);
     void restoreControllers();
+    void openControllers();
     juce::String padLabel(int deck, int pad) const;
     void layoutDeck(int deck, juce::Rectangle<int> area);
     void layoutMixer(juce::Rectangle<int> area);
@@ -112,7 +113,10 @@ class PerformanceView final : public juce::Component, private juce::Timer, priva
     bool shiftHeld = false;
     bool controllersEnabled = false;
     int takeNumber = 0;
-    juce::StringArray controllerIds;
+    juce::StringArray controllerIds, controllerInputs;
+    juce::String controllerNames;
+    int openAttempts = 0;
+    bool controllerOpened = false;
 };
 
 } // namespace stemcel::native::perf
