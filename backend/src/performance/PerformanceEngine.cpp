@@ -33,7 +33,6 @@ double paramEpsilon(RecParam p) noexcept
         case RecParam::padFxLevel:
             return 0.004;
         case RecParam::fxBpm:
-            return 0.05;
         case RecParam::levelDb:
         case RecParam::bassDb:
         case RecParam::midDb:
@@ -179,7 +178,7 @@ void PerformanceEngine::load(int deck, std::shared_ptr<const DeckTrack> track, i
         if (std::find(tracks.begin(), tracks.end(), track) == tracks.end()) tracks.push_back(std::move(track));
     }
     Event e;
-    e.deck = static_cast<std::int8_t>(deck);
+    e.deck = static_cast<std::int16_t>(deck);
     const juce::SpinLock::ScopedLockType lock(writeLock);
     int s1 = 0, n1 = 0, s2 = 0, n2 = 0;
     queueFifo.prepareToWrite(1, s1, n1, s2, n2);
@@ -257,9 +256,9 @@ void PerformanceEngine::drainRecording(std::vector<RecEvent>& out)
     recFifo.finishedRead(n1 + n2);
 }
 
-void PerformanceEngine::consumePeaks(std::array<float, kDecks>& out)
+void PerformanceEngine::consumePeaks(std::array<float, kDecks>& peaksOut)
 {
-    for (int d = 0; d < kDecks; ++d) out[static_cast<size_t>(d)] = peaks[static_cast<size_t>(d)].exchange(0.0F);
+    for (int d = 0; d < kDecks; ++d) peaksOut[static_cast<size_t>(d)] = peaks[static_cast<size_t>(d)].exchange(0.0F);
 }
 
 // --- Audio thread ---------------------------------------------------------------------------
@@ -545,7 +544,7 @@ void PerformanceEngine::applyPad(int deck, const Event& e, bool shifted) noexcep
     switch (e.mode)
     {
         case PadMode::hotCue:
-            out.index = static_cast<std::int8_t>(pad);
+            out.index = static_cast<std::int16_t>(pad);
             out.value = e.value;
             out.control = shifted ? Control::hotCueDelete : Control::hotCue;
             if (!shifted || press) player.handle(out);
@@ -606,9 +605,9 @@ void PerformanceEngine::applyPad(int deck, const Event& e, bool shifted) noexcep
                 if (!press) break;
                 c.keyboardCue = pad;
                 out.control = Control::hotCue;
-                out.index = static_cast<std::int8_t>(pad);
+                out.index = static_cast<std::int16_t>(pad);
                 out.value = 1.0F;
-                const auto before = player.track();
+                const auto* const before = player.track();
                 DeckView v;
                 player.fillView(v);
                 if (!v.hotCues[static_cast<size_t>(pad)].set() && before != nullptr) player.handle(out); // sets it
@@ -620,7 +619,7 @@ void PerformanceEngine::applyPad(int deck, const Event& e, bool shifted) noexcep
             key.value = static_cast<float>(kKeyPages[static_cast<size_t>(c.keyPage)][static_cast<size_t>(pad)]);
             if (press) player.handle(key);
             out.control = Control::hotCue;
-            out.index = static_cast<std::int8_t>(c.keyboardCue);
+            out.index = static_cast<std::int16_t>(c.keyboardCue);
             out.value = e.value;
             player.handle(out);
             break;
@@ -979,7 +978,7 @@ void PerformanceEngine::renderBlock(float* const* out, int numOutChannels, int n
             const float l = buf[0][i], r = buf[1][i];
             out[0][i] += l;
             if (numOutChannels > 1) out[1][i] += r;
-            peak = std::max(peak, std::max(std::abs(l), std::abs(r)));
+            peak = std::max({peak, std::abs(l), std::abs(r)});
         }
         float prev = peaks[static_cast<size_t>(d - 1)].load(std::memory_order_relaxed);
         while (peak > prev && !peaks[static_cast<size_t>(d - 1)].compare_exchange_weak(prev, peak)) {}

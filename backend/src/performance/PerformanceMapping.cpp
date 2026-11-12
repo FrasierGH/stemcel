@@ -127,7 +127,7 @@ bool parseAddress(const juce::String& text, int pinnedDeck, const std::vector<in
     if (tokens.size() != 2) return false;
     const int data1 = parseHexByte(tokens[1]);
     if (data1 < 0 || data1 > 127) return false;
-    const auto status = tokens[0];
+    const auto& status = tokens[0];
     const int decks = static_cast<int>(deckChannels.size());
     auto forDecks = [&](auto channelOf)
     {
@@ -219,7 +219,7 @@ std::shared_ptr<const Mapping> Mapping::fromFile(const juce::File& file, juce::S
 
 std::shared_ptr<const Mapping> Mapping::fromJson(const juce::var& json, juce::String& error)
 {
-    auto mapping = std::shared_ptr<Mapping>(new Mapping());
+    auto mapping = std::make_shared<Mapping>();
     mapping->mappingName = json.getProperty("name", "").toString();
     if (const auto* models = json.getProperty("models", {}).getArray())
         for (const auto& m : *models) mapping->models.push_back(m.toString().trim().toUpperCase());
@@ -442,8 +442,8 @@ int Mapping::Translator::translate(const juce::uint8* bytes, int size, Event* ou
         if (written >= maxEvents) break;
         Event e;
         e.control = b.control;
-        e.deck = static_cast<std::int8_t>(b.deck);
-        e.index = static_cast<std::int8_t>(b.index);
+        e.deck = static_cast<std::int16_t>(b.deck);
+        e.index = static_cast<std::int16_t>(b.index);
         e.mode = b.mode;
         switch (b.encoding)
         {

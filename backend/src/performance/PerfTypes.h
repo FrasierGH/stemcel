@@ -127,8 +127,8 @@ struct DeckTrack; // PerformanceEngine.h
 struct Event
 {
     Control control = Control::none;
-    std::int8_t deck = 0;   // 1..kDecks, 0 = global
-    std::int8_t index = 0;  // pad, fx channel
+    std::int16_t deck = 0;  // 1..kDecks, 0 = global
+    std::int16_t index = 0; // pad, fx channel, sampler slot
     PadMode mode = PadMode::hotCue;
     float value = 0.0F;     // 1/0 for buttons, 0..1 for knobs, ticks for relative controls
 };

@@ -64,7 +64,7 @@ struct DeckRig
         e.control = c;
         e.deck = 1;
         e.value = v;
-        e.index = static_cast<std::int8_t>(index);
+        e.index = static_cast<std::int16_t>(index);
         deck.handle(e);
     }
     void run(double seconds, bool audible = true)
@@ -246,7 +246,7 @@ void testEngineSyncAndRecordingParams()
     {
         Event e;
         e.control = c;
-        e.deck = static_cast<std::int8_t>(deck);
+        e.deck = static_cast<std::int16_t>(deck);
         e.value = v;
         engine.post(e);
     };
@@ -418,9 +418,9 @@ void testEffectsAndSamplerAreRecorded()
     {
         Event e;
         e.control = c;
-        e.deck = static_cast<std::int8_t>(deck);
+        e.deck = static_cast<std::int16_t>(deck);
         e.value = v;
-        e.index = static_cast<std::int8_t>(index);
+        e.index = static_cast<std::int16_t>(index);
         e.mode = mode;
         engine.post(e);
     };

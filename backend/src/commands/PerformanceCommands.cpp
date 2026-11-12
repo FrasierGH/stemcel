@@ -296,7 +296,7 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
             if (it == loadedTracks.end() || it->second == nullptr) return;
             loadedTracks[deck] = it->second;
             perfEngine().load(deck, it->second, fromDeck);
-            broadcastLoaded(deck, it->second, {});
+            broadcastLoaded(deck, it->second);
             return;
         }
         const auto itemId = payload.getProperty("libraryItemId", "").toString();
@@ -353,7 +353,7 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
                         track->sampleRate = rate;
                         self->loadedTracks[deck] = track;
                         self->perfEngine().load(deck, track, 0);
-                        self->broadcastLoaded(deck, track, {});
+                        self->broadcastLoaded(deck, track);
                     });
             });
     }
@@ -369,7 +369,7 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
         bool injected = false;
     };
 
-    void broadcastLoaded(int deck, const std::shared_ptr<const perf::DeckTrack>& track, const juce::String&)
+    void broadcastLoaded(int deck, const std::shared_ptr<const perf::DeckTrack>& track)
     {
         auto* o = new juce::DynamicObject();
         o->setProperty("deck", deck);
@@ -617,7 +617,7 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
     }
 
     // LEDs ------------------------------------------------------------------------------------
-    void setLed(Device& d, const juce::String& id, const juce::String& state, int deck, int index, int value)
+    static void setLed(Device& d, const juce::String& id, const juce::String& state, int deck, int index, int value)
     {
         for (const auto& led : d.mapping->leds(state, deck, index))
         {
@@ -781,7 +781,7 @@ bool dispatchPerformanceCommand(const juce::String& type, const juce::var& paylo
             o->setProperty("path", file.getFullPathName());
             o->setProperty("startClock", static_cast<double>(startClock));
             o->setProperty("sampleRate", rate);
-            o->setProperty("lengthSec", audio.size() / rate);
+            o->setProperty("lengthSec", static_cast<double>(audio.size()) / rate);
             bridge.broadcast("PERF_CAPTURE_DONE", juce::var(o));
         }
     }
@@ -791,8 +791,8 @@ bool dispatchPerformanceCommand(const juce::String& type, const juce::var& paylo
         perf::Event e;
         e.control = perf::controlFromName(payload.getProperty("control", "").toString());
         if (e.control == perf::Control::none) return true;
-        e.deck = static_cast<std::int8_t>(static_cast<int>(payload.getProperty("deck", 0)));
-        e.index = static_cast<std::int8_t>(static_cast<int>(payload.getProperty("index", 0)));
+        e.deck = static_cast<std::int16_t>(static_cast<int>(payload.getProperty("deck", 0)));
+        e.index = static_cast<std::int16_t>(static_cast<int>(payload.getProperty("index", 0)));
         if (payload.hasProperty("mode"))
         {
             const auto mode = perf::padModeFromName(payload.getProperty("mode", "").toString());

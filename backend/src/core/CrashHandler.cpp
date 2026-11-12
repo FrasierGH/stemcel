@@ -69,7 +69,9 @@ LONG WINAPI unhandledFilter(EXCEPTION_POINTERS* info)
         DWORD written = 0;
         WriteFile(file, buffer, static_cast<DWORD>(length), &written, nullptr);
 
-        // A C++ exception: its type (from the throw information) and message.
+        // A C++ exception: its type (from the throw information) and message. The throw
+        // information is image-relative offsets, so this is pointer arithmetic by nature.
+        // NOLINTBEGIN(performance-no-int-to-ptr)
         if (code == 0xE06D7363 && rec != nullptr && rec->NumberParameters >= 4)
         {
             const auto base = static_cast<UINT_PTR>(params[3]);
@@ -93,6 +95,7 @@ LONG WINAPI unhandledFilter(EXCEPTION_POINTERS* info)
                 }
             }
         }
+        // NOLINTEND(performance-no-int-to-ptr)
         // The stack where it happened, as module+offset (a linker map turns them into names).
         void* frames[48] = {};
         const USHORT frameCount = CaptureStackBackTrace(0, 48, frames, nullptr);

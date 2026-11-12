@@ -155,7 +155,7 @@ class PerformanceEngine final : public juce::AudioSource
     // Takes the recorder's events since the last call.
     void drainRecording(std::vector<RecEvent>& out);
     // Post-fader channel peaks since the last call (for meters and the controller's LEDs).
-    void consumePeaks(std::array<float, kDecks>& peaks);
+    void consumePeaks(std::array<float, kDecks>& peaksOut);
     void setCrossfaderCurve(curves::CrossfaderCurve c) noexcept { crossfaderCurve.store(static_cast<int>(c)); }
     void setCueOutputAvailable(bool on) noexcept { cueOutputAvailable.store(on); }
     void collectGarbage();
