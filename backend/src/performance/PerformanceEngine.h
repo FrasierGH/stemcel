@@ -159,6 +159,11 @@ class PerformanceEngine final : public juce::AudioSource
     void setCrossfaderCurve(curves::CrossfaderCurve c) noexcept { crossfaderCurve.store(static_cast<int>(c)); }
     void setCueOutputAvailable(bool on) noexcept { cueOutputAvailable.store(on); }
     void collectGarbage();
+    // For checking a take against what was heard: a deck channel's output (as it reaches the
+    // master, mono) from the next block, for up to `seconds`; stop hands it back with the
+    // performance clock it started at.
+    void startCapture(int deck, double seconds);
+    bool stopCapture(std::vector<float>& audio, juce::int64& startClock, double& sampleRate);
 
     // Audio thread ----------------------------------------------------------------------------
     void prepareToPlay(int samplesPerBlockExpected, double sampleRate) override;
@@ -261,6 +266,10 @@ class PerformanceEngine final : public juce::AudioSource
     juce::AbstractFifo recFifo{kRecSize};
     std::unique_ptr<Recorder> recorder;
     std::atomic<int> recDropped{0};
+
+    std::vector<float> captureBuffer;
+    std::atomic<int> captureDeck{0}, captureLength{0};
+    std::atomic<juce::int64> captureStart{-1};
 
     TripleBuffer<EngineView> views;
     std::array<std::atomic<float>, kDecks> peaks{};

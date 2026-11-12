@@ -74,6 +74,8 @@ class PerformanceTake
     bool hasAudio() const;
     double lengthSec() const;
     bool started() const { return startAt >= 0.0; }
+    double startClock() const { return startAt; }
+    double sampleRate() const { return rate; }
 
     TakeEdits edits(double startMs) const;
     // Writes it as tracks, clips and automation (one undo step); false when nothing was heard.

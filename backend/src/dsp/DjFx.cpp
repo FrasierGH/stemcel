@@ -207,7 +207,7 @@ void BeatFxUnit::process(float* L, float* R, int n) noexcept
     const double sr = s.sr;
     const auto fadeK = static_cast<float>(1.0 - std::exp(-1.0 / (kFadeSeconds * sr)));
     const bool trails = type == BeatFx::delay || type == BeatFx::echo || type == BeatFx::pingPong || type == BeatFx::spiral ||
-                        type == BeatFx::reverb || type == BeatFx::helix;
+                        type == BeatFx::reverb;
     const bool rising = on && !s.wasOn;
     if (static_cast<int>(type) != s.lastType)
     {
@@ -285,7 +285,8 @@ void BeatFxUnit::process(float* L, float* R, int n) noexcept
                     fr = static_cast<float>(y);
                 }
                 s.delay.push(dryL * inGain + fl, dryR * inGain + fr);
-                const float wet = type == BeatFx::helix ? 1.0F : level;
+                // Helix repeats while it is on and fades with it (no tail, as on a DJM).
+                const float wet = type == BeatFx::helix ? g : level;
                 outL = dryL + wl * wet;
                 outR = dryR + wr * wet;
                 break;

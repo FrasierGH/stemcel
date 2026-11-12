@@ -750,6 +750,41 @@ bool dispatchPerformanceCommand(const juce::String& type, const juce::var& paylo
     else if (type == "PERF_CLOSE") h.close();
     else if (type == "PERF_LOAD") h.load(payload, project, decodedCache, pool);
     else if (type == "PERF_SAMPLER_LOAD") h.loadSample(payload, project, decodedCache, pool);
+    else if (type == "PERF_CAPTURE")
+    {
+        // Tests: a deck channel's live output, written to `path` (mono float WAV) when stopped.
+        auto& perfEngine = engine.performanceEngine();
+        if (static_cast<bool>(payload.getProperty("on", false)))
+            perfEngine.startCapture(static_cast<int>(payload.getProperty("deck", 1)), static_cast<double>(payload.getProperty("seconds", 20.0)));
+        else
+        {
+            std::vector<float> audio;
+            juce::int64 startClock = 0;
+            double rate = 44100.0;
+            const juce::File file(payload.getProperty("path", "").toString());
+            bool ok = perfEngine.stopCapture(audio, startClock, rate) && file.getFullPathName().isNotEmpty();
+            if (ok)
+            {
+                file.deleteFile();
+                juce::WavAudioFormat wav;
+                std::unique_ptr<juce::AudioFormatWriter> writer(
+                    wav.createWriterFor(new juce::FileOutputStream(file), rate, 1, 32, {}, 0));
+                ok = writer != nullptr;
+                if (ok)
+                {
+                    const float* channels[1] = {audio.data()};
+                    writer->writeFromFloatArrays(channels, 1, static_cast<int>(audio.size()));
+                }
+            }
+            auto* o = new juce::DynamicObject();
+            o->setProperty("ok", ok);
+            o->setProperty("path", file.getFullPathName());
+            o->setProperty("startClock", static_cast<double>(startClock));
+            o->setProperty("sampleRate", rate);
+            o->setProperty("lengthSec", audio.size() / rate);
+            bridge.broadcast("PERF_CAPTURE_DONE", juce::var(o));
+        }
+    }
     else if (type == "PERF_RECORD") engine.performanceEngine().setRecording(static_cast<bool>(payload.getProperty("on", false)));
     else if (type == "PERF_CONTROL")
     {

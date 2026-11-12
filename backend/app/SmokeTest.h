@@ -179,6 +179,7 @@ class SmokeTest final : private juce::Timer
     juce::String perfItem;
     double perfCue = 0.0;
     int perfTracksBefore = 0;
+    double perfTakeClock = -1.0, perfTakeMs = 0.0, perfCaptureClock = 0.0, perfCaptureRate = 48000.0, perfCaptureSec = 0.0;
     double featX = 0.0, featY = 0.0;
     // The theme switched while running, and back.
     int themePhase = 0;

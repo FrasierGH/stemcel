@@ -5,6 +5,7 @@
 #include "performance/PerfCurves.h"
 #include "performance/PerformanceEngine.h"
 #include "performance/PerformanceMapping.h"
+#include "DjFx.h"
 
 #include <cmath>
 #include <vector>
@@ -323,10 +324,144 @@ void testDdj400Mapping()
             "pad LEDs should resolve per deck");
     require(mapping->leds("play", 2).size() == 2, "PLAY should light its plain and SHIFT addresses");
 }
+bool finite(const std::vector<float>& v)
+{
+    for (const float x : v)
+        if (!std::isfinite(x) || std::abs(x) > 8.0F) return false;
+    return true;
+}
+
+void testBeatFxUnits()
+{
+    // Every Beat FX: stays finite on noise, passes the signal untouched when off and idle, and
+    // the ones with tails (echo, reverb...) ring out to silence after the input stops.
+    juce::Random random(7);
+    for (int type = 0; type < static_cast<int>(djfx::BeatFx::count); ++type)
+    {
+        djfx::BeatFxUnit unit;
+        unit.allocate(kRate);
+        unit.setBpm(124.0);
+        unit.setType(type);
+        unit.setLevel(0.8F);
+        std::vector<float> l(kBlock), r(kBlock);
+        auto run = [&](bool noise, int blocks, double& peak)
+        {
+            bool ok = true;
+            for (int b = 0; b < blocks; ++b)
+            {
+                for (int i = 0; i < kBlock; ++i)
+                {
+                    l[static_cast<size_t>(i)] = noise ? random.nextFloat() * 0.5F - 0.25F : 0.0F;
+                    r[static_cast<size_t>(i)] = l[static_cast<size_t>(i)];
+                }
+                unit.process(l.data(), r.data(), kBlock);
+                ok = ok && finite(l) && finite(r);
+                for (const float x : l) peak = std::max(peak, static_cast<double>(std::abs(x)));
+            }
+            return ok;
+        };
+        double peak = 0.0;
+        // Off from the start: exactly the input.
+        std::vector<float> before(kBlock);
+        for (int i = 0; i < kBlock; ++i) before[static_cast<size_t>(i)] = l[static_cast<size_t>(i)] = r[static_cast<size_t>(i)] = 0.1F * std::sin(0.05F * i);
+        unit.process(l.data(), r.data(), kBlock);
+        require(l == before, (juce::String("Beat FX ") + djfx::beatFxName(type) + " should pass the signal when off").toRawUTF8());
+        unit.setOn(true);
+        require(run(true, 200, peak), (juce::String("Beat FX ") + djfx::beatFxName(type) + " should stay finite").toRawUTF8());
+        unit.setOn(false);
+        peak = 0.0;
+        run(false, 1500, peak); // 15 s of silence for the longest tails (Spiral, Helix)
+        peak = 0.0;
+        run(false, 200, peak); // then 2 more: nothing left
+        require(peak < 1.0e-3, (juce::String("Beat FX ") + djfx::beatFxName(type) + " should ring out to silence (peak "
+                                + juce::String(peak, 6) + ")").toRawUTF8());
+    }
+}
+
+void testColorFxUnits()
+{
+    juce::Random random(3);
+    for (int type = 0; type < static_cast<int>(djfx::ColorFx::count); ++type)
+        for (const float amount : {-0.8F, 0.8F})
+        {
+            djfx::ColorFxUnit unit;
+            unit.allocate(kRate);
+            unit.setBpm(120.0);
+            unit.setType(type);
+            unit.setAmount(amount);
+            std::vector<float> l(kBlock), r(kBlock);
+            bool ok = true;
+            for (int b = 0; b < 100; ++b)
+            {
+                for (int i = 0; i < kBlock; ++i) l[static_cast<size_t>(i)] = r[static_cast<size_t>(i)] = random.nextFloat() * 0.5F - 0.25F;
+                unit.process(l.data(), r.data(), kBlock);
+                ok = ok && finite(l) && finite(r);
+            }
+            require(ok, (juce::String("Sound Color FX ") + djfx::colorFxName(type) + " should stay finite").toRawUTF8());
+        }
+}
+
+void testEffectsAndSamplerAreRecorded()
+{
+    PerformanceEngine engine;
+    engine.prepareToPlay(kBlock, kRate);
+    engine.setOpen(true);
+    engine.load(1, makeTrack(20.0, 120.0, 1));
+    engine.loadSample(0, makeTrack(1.0, 0.0, 9));
+    juce::AudioBuffer<float> out(2, kBlock);
+    auto render = [&](double seconds)
+    {
+        for (int i = 0; i < static_cast<int>(seconds * kRate / kBlock); ++i)
+            engine.getNextAudioBlock(juce::AudioSourceChannelInfo(&out, 0, kBlock));
+    };
+    auto post = [&](Control c, int deck, float v, int index = 0, PadMode mode = PadMode::hotCue)
+    {
+        Event e;
+        e.control = c;
+        e.deck = static_cast<std::int8_t>(deck);
+        e.value = v;
+        e.index = static_cast<std::int8_t>(index);
+        e.mode = mode;
+        engine.post(e);
+    };
+    render(0.05);
+    engine.setRecording(true);
+    post(Control::play, 1, 1.0F);
+    post(Control::fxChannel, 0, 1.0F, 0); // CH1
+    post(Control::fxOn, 0, 1.0F);
+    render(0.5);
+    post(Control::fxOn, 0, 1.0F); // off
+    post(Control::pad, 1, 1.0F, 2, PadMode::padFx1); // ROLL 1/4 held
+    render(0.3);
+    post(Control::pad, 1, 0.0F, 2, PadMode::padFx1);
+    post(Control::pad, 1, 1.0F, 0, PadMode::sampler); // slot 1
+    render(0.3);
+    std::vector<RecEvent> log;
+    engine.drainRecording(log);
+    bool beatOn = false, beatOff = false, padOn = false, sampleStarted = false;
+    for (const auto& r : log)
+    {
+        if (r.kind == RecEvent::Kind::param && r.deck == 1 && r.param == static_cast<std::uint8_t>(RecParam::beatFxOn))
+        {
+            if (r.a > 0.5) beatOn = true;
+            else if (beatOn) beatOff = true;
+        }
+        if (r.kind == RecEvent::Kind::param && r.deck == 1 && r.param == static_cast<std::uint8_t>(RecParam::padFxOn) && r.a > 0.5)
+            padOn = true;
+        if (r.kind == RecEvent::Kind::sample && r.param == 0 && (r.flags & 1) != 0 && r.serial == 9) sampleStarted = true;
+    }
+    require(beatOn && beatOff, "the Beat FX on deck 1 should be recorded on and then off");
+    require(padOn, "a held Pad FX pad should be recorded");
+    require(sampleStarted, "a sampler pad should record its hit");
+    require((engine.view().samplesPlaying & 1ULL) != 0, "the sampler slot should be playing");
+}
 } // namespace
 
 void addPerformanceTests(std::vector<TestCase>& tests)
 {
+    tests.push_back({"Performance Beat FX units", testBeatFxUnits});
+    tests.push_back({"Performance Sound Color FX units", testColorFxUnits});
+    tests.push_back({"Performance effects and sampler are recorded", testEffectsAndSamplerAreRecorded});
     tests.push_back({"Performance deck CUE follows CDJ rules", testCueButtonFollowsCdjRules});
     tests.push_back({"Performance CUE hold is recorded as an audible segment", testCueHoldIsRecordedAsAudibleSegment});
     tests.push_back({"Performance loops and beat jump", testLoopsAndBeatJump});

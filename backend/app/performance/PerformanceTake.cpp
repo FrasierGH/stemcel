@@ -69,6 +69,23 @@ bool stepped(const juce::String& param)
     return param.endsWith("Type") || param.endsWith("Beats") || param.endsWith("On");
 }
 
+// A control's recorded values as a curve: the recorder only logs changes, so a value holds
+// until just before the next one (a knob moved later, not a ramp from the last change), and
+// the curve runs to the end of the take.
+constexpr double kHoldGapMs = 25.0;
+std::vector<std::pair<double, double>> heldCurve(const std::vector<std::pair<double, double>>& pts, double endMs)
+{
+    std::vector<std::pair<double, double>> out;
+    for (const auto& p : pts)
+    {
+        if (!out.empty() && p.first - out.back().first > kHoldGapMs)
+            out.push_back({p.first - 5.0, out.back().second});
+        out.push_back(p);
+    }
+    if (!out.empty() && endMs > out.back().first + 1.0) out.push_back({endMs, out.back().second});
+    return out;
+}
+
 std::vector<std::pair<double, double>> changesOnly(const std::vector<std::pair<double, double>>& pts)
 {
     std::vector<std::pair<double, double>> out;
@@ -227,7 +244,10 @@ TakeEdits PerformanceTake::edits(double startMs) const
                     if (param == "level") v = juce::jlimit(-60.0, 6.0, v);
                     curve.push_back({ms(p.at), v});
                 }
+                curve = heldCurve(curve, ms(lastAt));
                 out.automation[deck][param] = stepped(param) ? changesOnly(curve) : thin(curve, tolerance(param));
+                if (out.automation[deck][param].size() == 1)
+                    out.automation[deck][param].push_back({ms(lastAt), out.automation[deck][param].front().second});
             }
     }
     // The master's Beat FX (when it was on the master) and the sampler.
@@ -241,7 +261,9 @@ TakeEdits PerformanceTake::edits(double startMs) const
             {
                 std::vector<std::pair<double, double>> curve;
                 for (const auto& p : points) curve.push_back({ms(p.at), p.value});
+                curve = heldCurve(curve, ms(lastAt));
                 out.master[param] = stepped(param) ? changesOnly(curve) : thin(curve, tolerance(param));
+                if (out.master[param].size() == 1) out.master[param].push_back({ms(lastAt), out.master[param].front().second});
             }
     }
     for (const auto& h : sampleHits)
@@ -253,7 +275,11 @@ TakeEdits PerformanceTake::edits(double startMs) const
     }
     if (const auto pit = params.find(kDecks + 1); pit != params.end())
         if (const auto level = pit->second.find("level"); level != pit->second.end())
-            for (const auto& p : level->second) out.samplerLevel.push_back({ms(p.at), juce::jlimit(-60.0, 6.0, p.value)});
+        {
+            std::vector<std::pair<double, double>> curve;
+            for (const auto& p : level->second) curve.push_back({ms(p.at), juce::jlimit(-60.0, 6.0, p.value)});
+            out.samplerLevel = heldCurve(curve, ms(lastAt));
+        }
     return out;
 }
 

@@ -439,6 +439,8 @@ void PerformanceView::finishTake(std::function<void()> then)
 void PerformanceView::enableControllers(const juce::var& envelope)
 {
     if (controllersEnabled) return;
+    // A smoke test drives the decks with injected MIDI; a real controller on the desk stays out.
+    if (juce::JUCEApplicationBase::getCommandLineParameters().contains("--smoke-test")) return;
     const auto* inputs = envelope.getProperty("inputs", {}).getArray();
     if (inputs == nullptr) return;
     juce::StringArray ids;

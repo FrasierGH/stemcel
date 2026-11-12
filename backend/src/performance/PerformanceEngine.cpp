@@ -208,6 +208,27 @@ void PerformanceEngine::loadSample(int slot, std::shared_ptr<const DeckTrack> sa
     queueFifo.finishedWrite(1);
 }
 
+void PerformanceEngine::startCapture(int deck, double seconds)
+{
+    captureDeck.store(0);
+    captureBuffer.assign(static_cast<size_t>(std::max(1.0, seconds) * rate), 0.0F);
+    captureLength.store(0);
+    captureStart.store(-1);
+    captureDeck.store(deck, std::memory_order_release);
+}
+
+bool PerformanceEngine::stopCapture(std::vector<float>& audio, juce::int64& startClock, double& sampleRate)
+{
+    captureDeck.store(0, std::memory_order_release);
+    // The audio thread may be finishing a block: wait it out.
+    juce::Thread::sleep(30);
+    const int n = captureLength.load(std::memory_order_acquire);
+    audio.assign(captureBuffer.begin(), captureBuffer.begin() + n);
+    startClock = captureStart.load();
+    sampleRate = rate;
+    return n > 0;
+}
+
 void PerformanceEngine::collectGarbage()
 {
     // A track can go once no deck shows it and no load of it is still queued.
@@ -944,6 +965,14 @@ void PerformanceEngine::renderBlock(float* const* out, int numOutChannels, int n
             buf[1][i] *= g;
         }
         c.fx.processBeat(view, 0, n);
+        if (captureDeck.load(std::memory_order_acquire) == d)
+        {
+            if (captureStart.load(std::memory_order_relaxed) < 0) captureStart.store(clock, std::memory_order_relaxed);
+            const int at = captureLength.load(std::memory_order_relaxed);
+            const int room = std::min(n, static_cast<int>(captureBuffer.size()) - at);
+            for (int i = 0; i < room; ++i) captureBuffer[static_cast<size_t>(at + i)] = 0.5F * (buf[0][i] + buf[1][i]);
+            captureLength.store(at + std::max(0, room), std::memory_order_release);
+        }
         float peak = 0.0F;
         for (int i = 0; i < n; ++i)
         {
