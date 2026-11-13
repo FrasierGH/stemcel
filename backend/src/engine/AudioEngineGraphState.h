@@ -68,7 +68,9 @@ protected:
     // Live performance mode's decks and DJ mixer (silent unless the mode is open), summed into
     // the master like the timeline; its headphone cue goes to outputs 3–4 through the router.
     perf::PerformanceEngine performance;
-    perf::OutputRouter outputRouter{masterMeter, performance};
+    // The headphone cue on the controller's own sound card when the master plays elsewhere.
+    perf::CueOutput cueOutput;
+    perf::OutputRouter outputRouter{masterMeter, performance, cueOutput};
     juce::AudioFormatManager formatManager;
     // Created on first use: constructing it touches the on-disk plugin catalogue, which a
     // headless run that never mentions plugins has no reason to read or write.

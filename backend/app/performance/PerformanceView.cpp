@@ -289,7 +289,8 @@ void PerformanceView::onState(const juce::var& p)
     repaint(fxArea);
     if (state.midi.size() > 0) midiLine.setText("MIDI  " + state.midi[state.midi.size() - 1], juce::dontSendNotification);
     juce::String text;
-    text << (state.cueOutput ? "Headphones: outputs 3-4" : "Headphones: this output has no 3-4");
+    text << (state.cueOutput ? "Headphones: " + state.cueDevice
+                             : juce::String("Headphones: no cue output (connect the controller, or an output with 4 channels)"));
     if (state.recording) text << "   |   Recording " << juce::String(take.lengthSec(), 0) << " s";
     else text << "   |   Not recording";
     status.setText(text, juce::dontSendNotification);

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Performance mode headphones**: when the master plays on another device (speakers on the computer, an interface), the headphone cue now goes to the DJ controller's own sound card, so headphones plugged into the controller hear it. The master goes to its outputs 1–2 too, so its HEADPHONES MIX knob still blends them.
+
 ## 0.4.0
 
 ### Added

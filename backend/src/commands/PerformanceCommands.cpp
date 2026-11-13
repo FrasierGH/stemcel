@@ -140,12 +140,14 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
         if (!perfEngine().isOpen())
         {
             perfEngine().setOpen(true);
-            cueOutput = engine.setPerformanceOutputs(true);
+            cueDevice = engine.openPerformanceCue(perf::Mapping::allModels());
+            cueOutput = cueDevice.isNotEmpty();
             setMidiPerformanceSink(this);
             startTimerHz(60);
         }
         auto* o = new juce::DynamicObject();
         o->setProperty("cueOutput", cueOutput);
+        o->setProperty("cueDevice", cueDevice);
         bridge.broadcast("PERF_OPENED", juce::var(o));
         // What the decks and the sampler still hold from last time, for the view to show.
         for (const auto& [deck, track] : loadedTracks)
@@ -169,6 +171,7 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
         lightsOff();
         setMidiPerformanceSink(nullptr);
         perfEngine().setOpen(false);
+        engine.closePerformanceCue();
         stopTimer();
         bridge.broadcast("PERF_CLOSED", juce::var(new juce::DynamicObject()));
     }
@@ -591,6 +594,7 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
         o->setProperty("crossfader", v.crossfader);
         o->setProperty("masterDeck", v.masterDeck);
         o->setProperty("cueOutput", v.cueOutput);
+        o->setProperty("cueDevice", cueDevice);
         o->setProperty("recording", v.recording);
         std::array<float, perf::kDecks> peaks{};
         perfEngine().consumePeaks(peaks);
@@ -778,6 +782,7 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
     AudioEngine& engine;
     BridgeServer& bridge;
     bool cueOutput = false;
+    juce::String cueDevice; // where the headphone cue goes
     juce::SpinLock devicesLock, appLock;
     std::map<juce::String, Device> devices;
     std::vector<perf::Event> appEvents;

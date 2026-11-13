@@ -169,6 +169,47 @@ bool AudioEngine::setPerformanceOutputs(bool withCue)
     return cue;
 }
 
+juce::String AudioEngine::openPerformanceCue(const juce::StringArray& controllerModels)
+{
+    auto* device = deviceManager.getCurrentAudioDevice();
+    if (device == nullptr) return {};
+    if (setPerformanceOutputs(true))
+    {
+        cueOutput.close();
+        return "outputs 3-4 of " + device->getName();
+    }
+    // The master plays on another device: look for the controller's own sound card.
+    auto* type = deviceManager.getCurrentDeviceTypeObject();
+    if (type == nullptr) return {};
+    const auto mainName = device->getName();
+    for (const auto& name : type->getDeviceNames(false))
+    {
+        if (name == mainName) continue;
+        bool isController = false;
+        for (const auto& model : controllerModels)
+            isController = isController || name.containsIgnoreCase(model);
+        if (!isController) continue;
+        juce::String error;
+        if (cueOutput.isOpen() && cueOutput.deviceName() == name)
+        {
+            performance.setCueOutputAvailable(true);
+            return (cueOutput.hasMasterPair() ? "outputs 3-4 of " : "") + name;
+        }
+        if (cueOutput.open(type->getTypeName(), name, device->getCurrentSampleRate(), error))
+        {
+            performance.setCueOutputAvailable(true);
+            return (cueOutput.hasMasterPair() ? "outputs 3-4 of " : "") + name;
+        }
+        stemcel::log::warn("audio", "cue output on " + name + ": " + error);
+    }
+    return {};
+}
+
+void AudioEngine::closePerformanceCue()
+{
+    cueOutput.close();
+}
+
 juce::String AudioEngine::openDefaultOutputOnly()
 {
     // Request the default output with NO input endpoint: an empty input device plus

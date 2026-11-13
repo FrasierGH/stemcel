@@ -420,6 +420,7 @@ add_library(stemcel_backend_core STATIC
     src/core/Log.cpp
     src/core/NativeApplication.cpp
     # performance (live DJ mode)
+    src/performance/CueOutput.cpp
     src/performance/DeckPlayer.cpp
     src/performance/PerformanceEngine.cpp
     src/performance/PerformanceMapping.cpp

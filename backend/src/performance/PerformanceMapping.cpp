@@ -380,9 +380,28 @@ std::vector<Mapping::Led> Mapping::leds(const juce::String& state, int deck, int
     return result;
 }
 
-std::shared_ptr<const Mapping> Mapping::forDevice(const juce::String& deviceName)
+namespace
+{
+std::vector<std::shared_ptr<const Mapping>>& loadedMappings()
 {
     static std::vector<std::shared_ptr<const Mapping>> loaded;
+    return loaded;
+}
+} // namespace
+
+juce::StringArray Mapping::allModels()
+{
+    forDevice({}); // loads them
+    juce::StringArray models;
+    const std::scoped_lock lock(cacheMutex());
+    for (const auto& m : loadedMappings())
+        for (const auto& model : m->models) models.addIfNotAlreadyThere(model);
+    return models;
+}
+
+std::shared_ptr<const Mapping> Mapping::forDevice(const juce::String& deviceName)
+{
+    auto& loaded = loadedMappings();
     static bool scanned = false;
     {
         const std::scoped_lock lock(cacheMutex());

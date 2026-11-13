@@ -74,7 +74,13 @@ With REC on, the take replaces that stretch:
 ## Headphones
 
 When the output device has four channels or more, the master plays on outputs 1–2 and
-the headphone cue on 3–4. The DDJ-400's built-in sound card works this way. The DDJ-400's
+the headphone cue on 3–4. The DDJ-400's built-in sound card works this way.
+
+When the master plays on another device (speakers on the computer's sound card, an
+interface), the cue still goes to the controller's own sound card, its outputs 3–4, so
+headphones plugged into the controller hear it. A copy of the master goes to its outputs 1–2,
+so the HEADPHONES MIX knob still blends the two. The status line above the decks says where
+the headphones are. The DDJ-400's
 own MASTER LEVEL, HEADPHONES MIX and HEADPHONES LEVEL knobs act in its hardware.
 
 ## Pioneer DJ DDJ-400

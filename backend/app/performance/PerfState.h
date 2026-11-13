@@ -78,6 +78,7 @@ struct State
     FxState fx;
     SamplerState sampler;
     juce::StringArray midi; // the controller monitor's last lines
+    juce::String cueDevice; // where the headphone cue goes
 };
 
 inline CuePoint cueFromVar(const juce::var& v)
@@ -91,6 +92,7 @@ inline void readState(const juce::var& p, State& s)
     s.open = static_cast<bool>(p.getProperty("open", false));
     s.cueOutput = static_cast<bool>(p.getProperty("cueOutput", false));
     s.recording = static_cast<bool>(p.getProperty("recording", false));
+    s.cueDevice = p.getProperty("cueDevice", "").toString();
     s.clock = static_cast<double>(p.getProperty("clock", 0.0));
     s.sampleRate = static_cast<double>(p.getProperty("sampleRate", 44100.0));
     s.crossfader = static_cast<float>(static_cast<double>(p.getProperty("crossfader", 0.5)));
