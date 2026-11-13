@@ -10,6 +10,11 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <array>
+#include <atomic>
+#include <memory>
+#include <vector>
+
 namespace stemcel::native
 {
 class WaveformStore;

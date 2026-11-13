@@ -3,6 +3,7 @@
 #include "Rekordbox.h"
 #include "Theme.h"
 
+#include <algorithm>
 #include <cmath>
 #include <set>
 
