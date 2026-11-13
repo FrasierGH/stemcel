@@ -1090,6 +1090,26 @@ void Collection::importRekordbox(Rekordbox& rekordbox, const RekordboxSource& so
 // ---------------------------------------------------------------------------------------
 // To a USB stick
 
+juce::var Collection::linkRequest(const juce::String& interfaceName) const
+{
+    std::vector<juce::int64> lists;
+    for (const auto* p : childrenOf(0, false)) lists.push_back(p->id);
+    auto request = exportRequest(lists, {}, false);
+    auto* o = request.getDynamicObject();
+    o->removeProperty("root");
+    o->removeProperty("sync");
+    o->setProperty("action", "link");
+    o->setProperty("libraryDir", folder().getChildFile("link").getFullPathName());
+    o->setProperty("interface", interfaceName);
+    // Tracks in no playlist are served too, under the library's All Tracks.
+    auto* tracks = o->getProperty("tracks").getArray();
+    std::set<juce::int64> listed;
+    for (const auto& t : *tracks) listed.insert(static_cast<juce::int64>(t.getProperty("id", 0)));
+    for (const auto& t : trackList)
+        if (listed.count(t.id) == 0 && juce::File(t.path).existsAsFile()) tracks->add(entryFor(t));
+    return request;
+}
+
 juce::var Collection::exportRequest(const std::vector<juce::int64>& lists, const juce::File& stick, bool sync) const
 {
     auto* request = new juce::DynamicObject();
@@ -1120,6 +1140,34 @@ juce::var Collection::exportRequest(const std::vector<juce::int64>& lists, const
         if (const auto it = indexOf.find(id); it != indexOf.end()) return it->second;
         const auto* t = find(id);
         if (t == nullptr || !juce::File(t->path).existsAsFile()) return -1;
+        const int index = trackArray.size();
+        trackArray.add(entryFor(*t));
+        indexOf[id] = index;
+        return index;
+    };
+    for (const auto* p : chosen)
+    {
+        auto* o = new juce::DynamicObject();
+        o->setProperty("id", p->id);
+        o->setProperty("name", p->name);
+        o->setProperty("parent", taken.count(p->parent) > 0 ? p->parent : 0);
+        o->setProperty("folder", p->isFolder());
+        juce::Array<juce::var> indices;
+        if (!p->isFolder())
+            for (const auto id : p->tracks)
+                if (const int i = trackIndex(id); i >= 0) indices.add(i);
+        o->setProperty("tracks", indices);
+        listArray.add(juce::var(o));
+    }
+    request->setProperty("tracks", trackArray);
+    request->setProperty("playlists", listArray);
+    return held;
+}
+
+juce::var Collection::entryFor(const Track& track)
+{
+    const auto* t = &track;
+    {
         auto* o = new juce::DynamicObject();
         const juce::var entry(o);
         o->setProperty("id", t->id);
@@ -1147,28 +1195,11 @@ juce::var Collection::exportRequest(const std::vector<juce::int64>& lists, const
         for (const auto& c : t->cues) cues.add(cueJson(c));
         o->setProperty("cues", cues);
         if (t->artwork.isNotEmpty() && juce::File(t->artwork).existsAsFile()) o->setProperty("artwork", t->artwork);
-        const int index = trackArray.size();
-        trackArray.add(entry);
-        indexOf[id] = index;
-        return index;
-    };
-    for (const auto* p : chosen)
-    {
-        auto* o = new juce::DynamicObject();
-        o->setProperty("id", p->id);
-        o->setProperty("name", p->name);
-        o->setProperty("parent", taken.count(p->parent) > 0 ? p->parent : 0);
-        o->setProperty("folder", p->isFolder());
-        juce::Array<juce::var> indices;
-        if (!p->isFolder())
-            for (const auto id : p->tracks)
-                if (const int i = trackIndex(id); i >= 0) indices.add(i);
-        o->setProperty("tracks", indices);
-        listArray.add(juce::var(o));
+        juce::Array<juce::var> tags;
+        for (const auto& tag : t->tags) tags.add(tag);
+        o->setProperty("tags", tags);
+        return entry;
     }
-    request->setProperty("tracks", trackArray);
-    request->setProperty("playlists", listArray);
-    return held;
 }
 
 } // namespace stemcel::native::dj

@@ -269,7 +269,8 @@ Stemcel is built around a single idea: **arranging audio should be simple.**
 - **Library mode, a DJ library without rekordbox.** Your collection across projects, with
   playlists, beat grids, hot and memory cues, ratings, colours and My Tags. Bring in your
   rekordbox library, fix grids and cues, and export playlists to a USB stick for CDJs and
-  XDJs (or sync one). Read back the players' play histories. See
+  XDJs (or sync one), or serve it to them over the network (Link Export). Read back the
+  players' play histories. See
   **[library mode](docs/dj-library.md)**.
 - **Supported MIDI deck control.** Use a recognised deck controller for
   transport, timeline and marker navigation, clip browsing, selected-track

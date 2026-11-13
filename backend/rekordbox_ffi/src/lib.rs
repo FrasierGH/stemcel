@@ -1388,7 +1388,50 @@ fn read_one_lenient(path: &Path) -> Result<device_library::Library, String> {
 }
 
 mod analyse;
+mod link;
 mod stick;
+
+/// The network interfaces Link could run on: `{ok, interfaces: [{name, address}]}`.
+#[no_mangle]
+pub extern "C" fn rbx_link_interfaces_json() -> *mut c_char {
+    guarded(|| link::interfaces().to_string())
+}
+
+/// Starts Link Export of Stemcel's collection (see `link::start` for the request; the same
+/// tracks and playlists as an export, plus libraryDir and interface). Blocking while the
+/// library is built; progress as for an export. `{ok, tracks, interface, address, failed}`.
+///
+/// # Safety
+/// As `rbx_export_json`.
+#[no_mangle]
+pub unsafe extern "C" fn rbx_link_start_json(
+    request: *const c_char, progress: Option<ExportProgressFn>, ctx: *mut std::ffi::c_void,
+) -> *mut c_char {
+    let Some(request) = opt_str(request).and_then(|text| serde_json::from_str::<Value>(text).ok()) else {
+        return to_c(&error_json("bad request"));
+    };
+    let ctx = ctx as usize;
+    guarded(move || {
+        let mut tell = |value: Value| {
+            if let (Some(f), Ok(text)) = (progress, CString::new(value.to_string())) {
+                f(ctx as *mut std::ffi::c_void, text.as_ptr());
+            }
+        };
+        link::start(&request, &mut tell).unwrap_or_else(|e| json!({ "ok": false, "error": e })).to_string()
+    })
+}
+
+/// What Link sees: `{ok, running, interface?, address?, state?, players?, mounted?}`.
+#[no_mangle]
+pub extern "C" fn rbx_link_status_json() -> *mut c_char {
+    guarded(|| link::status().to_string())
+}
+
+/// Stops Link Export.
+#[no_mangle]
+pub extern "C" fn rbx_link_stop() {
+    link::stop();
+}
 
 /// Every mounted drive: `{ok, volumes: [{name, root, removable, fileSystem, totalBytes,
 /// freeBytes, hasExport, exportTracks, exportPlaylists}]}`.

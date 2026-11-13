@@ -85,7 +85,7 @@ fn export_cue(cue: &Value) -> Option<ExportCue> {
 
 /// The analysis files of one track: from the cache when the file and grid are as they
 /// were, else made (and cached).
-fn analysis_files(entry: &Value, path: &Path, cache: &Path) -> Result<Vec<(String, Vec<u8>)>, String> {
+pub(crate) fn analysis_files(entry: &Value, path: &Path, cache: &Path) -> Result<Vec<(String, Vec<u8>)>, String> {
     let beats: Vec<f64> = entry
         .get("beats")
         .and_then(Value::as_array)

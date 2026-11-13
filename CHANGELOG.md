@@ -9,6 +9,7 @@
   - **Grid and cue editor**: the waveform with numbered beats. Set the tempo, halve or double it, nudge the grid, put beat 1 at the playhead, or tap the tempo. Set hot cues A–H (with loops and names) and memory cues, quantized to the beat. Preview the track as you edit.
   - **From rekordbox**: brings this computer's rekordbox library in, with every track's grid, key, cues, rating and colour, and every playlist.
   - **Export to USB**: playlists go onto a stick or SD card as a rekordbox export that CDJs and XDJs read: both libraries, the audio, analysis from Stemcel's grid, and the cues. Sync makes the stick hold exactly the choice; Add puts it beside what's there. The stick is verified afterwards and can be ejected.
+  - **Link Export**: LINK serves the collection to players on the same network, as rekordbox's LINK does.
   - **Play histories**: read back from a stick into the collection.
   - **Performance mode**: its browser lists the collection. Cues set on a deck are saved back to the collection.
 - **Auto gain** in performance mode: each deck's track is evened out by its loudness, which is measured as it loads. A recorded take keeps it.

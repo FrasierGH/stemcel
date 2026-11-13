@@ -23,6 +23,8 @@ rbl-analysis = { git = "https://github.com/chrisle/rbxport", rev = "b739d369665b
 rbl-audio = { git = "https://github.com/chrisle/rbxport", rev = "b739d369665b492534dc2eae0733322c040a26d5" }
 # The libraries on a USB or SD export (Device Library and OneLibrary), and finding them.
 rbl-export = { git = "https://github.com/chrisle/rbxport", rev = "b739d369665b492534dc2eae0733322c040a26d5" }
+# Link Export: the collection served to players over the network.
+rbl-link = { git = "https://github.com/chrisle/rbxport", rev = "b739d369665b492534dc2eae0733322c040a26d5" }
 rbl-devices = { git = "https://github.com/chrisle/rbxport", rev = "b739d369665b492534dc2eae0733322c040a26d5" }
 # Reading a OneLibrary whose text isn't valid UTF-8 (rbxport's reader stops at it): the
 # same SQLCipher build rbxport uses, so nothing extra is compiled.

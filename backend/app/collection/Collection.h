@@ -177,6 +177,9 @@ class Collection final : public juce::ChangeBroadcaster, private juce::Timer
     // The request the rekordbox module's export takes (`rbx_export_json`): these
     // playlists (folders with what they hold) and their tracks, with grids, cues and tags.
     juce::var exportRequest(const std::vector<juce::int64>& playlists, const juce::File& stick, bool sync) const;
+    // Link Export's: every track and every playlist, served from a library of its own in the
+    // collection folder, on the network interface named (the first when empty).
+    juce::var linkRequest(const juce::String& interfaceName) const;
 
     // Smoke-test support: true once nothing is waiting for analysis.
     bool idle() const { return queued == 0; }
@@ -187,6 +190,7 @@ class Collection final : public juce::ChangeBroadcaster, private juce::Timer
     void changed(bool save = true);
     void queueAnalysis(juce::int64 id, bool force);
     juce::int64 nextId() { return ++lastId; }
+    static juce::var entryFor(const Track& track); // one track of an export or Link request
     void read(const juce::File& file);
     juce::var toJson() const;
     void reindex();

@@ -187,7 +187,7 @@ LibraryView::LibraryView(Context context)
     addAndMakeVisible(trackEditor);
 
     search.setTextToShowWhenEmpty("Search title, artist, album, genre, key, tags", colours::textFaint);
-    search.onTextChange = [this] { startTimer(150); };
+    search.onTextChange = [this] { search.getProperties().set("dirty", true); };
     addAndMakeVisible(search);
 
     addFilesButton.onClick = [this] { addFiles(); };
@@ -201,6 +201,11 @@ LibraryView::LibraryView(Context context)
     exportButton.setTooltip("Put playlists on a USB stick or SD card for CDJs and XDJs, without rekordbox");
     exportButton.setEnabled(ctx.rekordbox.isAvailable());
     historyButton.onClick = [this] { readHistories(); };
+    linkButton.setTooltip("Link Export: players on the same network browse and load the collection, with no USB stick (as rekordbox's LINK)");
+    linkButton.setClickingTogglesState(false);
+    linkButton.onClick = [this] { toggleLink(); };
+    linkButton.setEnabled(ctx.rekordbox.isAvailable());
+    addAndMakeVisible(linkButton);
     historyButton.setTooltip("Read the play histories a player kept on a USB stick");
     closeButton.onClick = [this]
     {
@@ -215,6 +220,8 @@ LibraryView::LibraryView(Context context)
     setWantsKeyboardFocus(true);
     rebuildTree();
     showList(0);
+    showLinkStatus();
+    startTimer(250);
 }
 
 LibraryView::~LibraryView()
@@ -266,8 +273,115 @@ void LibraryView::showList(juce::int64 playlist)
 
 void LibraryView::timerCallback()
 {
-    stopTimer();
-    rebuildRows();
+    // The search box's debounce, and Link's status every second.
+    if (search.getProperties().getWithDefault("dirty", false))
+    {
+        search.getProperties().set("dirty", false);
+        rebuildRows();
+    }
+    if (++ticks % 4 == 0) showLinkStatus();
+}
+
+void LibraryView::showLinkStatus()
+{
+    if (linkStarting || !ctx.rekordbox.isAvailable()) return;
+    const auto s = ctx.rekordbox.linkStatus();
+    const bool running = static_cast<bool>(s.getProperty("running", false));
+    linkButton.setToggleState(running, juce::dontSendNotification);
+    linkButton.setColour(juce::TextButton::buttonOnColourId, colours::accent.withAlpha(0.7F));
+    if (!running)
+    {
+        if (linkText.isNotEmpty())
+        {
+            linkText = {};
+            updateStatus();
+        }
+        return;
+    }
+    juce::StringArray players;
+    if (const auto* list = s.getProperty("players", {}).getArray())
+        for (const auto& p : *list)
+            players.add(p.getProperty("name", "Player").toString() + " " + p.getProperty("number", 0).toString()
+                        + (static_cast<bool>(p.getProperty("playing", false)) ? " (playing)" : ""));
+    linkText = "LINK on " + s.getProperty("address", "").toString() + ", " + s.getProperty("state", "").toString()
+               + (players.isEmpty() ? juce::String() : ": " + players.joinIntoString(", "));
+    updateStatus();
+}
+
+void LibraryView::toggleLink()
+{
+    if (linkStarting) return;
+    if (linkButton.getToggleState())
+    {
+        ctx.rekordbox.linkStop();
+        showLinkStatus();
+        if (ctx.notify) ctx.notify("Link Export stopped", false);
+        return;
+    }
+    const auto found = ctx.rekordbox.linkInterfaces();
+    const auto* list = found.getProperty("interfaces", {}).getArray();
+    if (list == nullptr || list->isEmpty())
+    {
+        if (ctx.notify) ctx.notify("No network to run Link on: connect the computer to the players' network (Ethernet or a LINK hub)", true);
+        return;
+    }
+    if (list->size() == 1)
+    {
+        startLink((*list)[0].getProperty("name", "").toString());
+        return;
+    }
+    juce::PopupMenu menu;
+    menu.addSectionHeader("Run Link on");
+    for (const auto& i : *list)
+        menu.addItem(i.getProperty("name", "").toString() + "  (" + i.getProperty("address", "").toString() + ")",
+                     [this, name = i.getProperty("name", "").toString()] { startLink(name); });
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(linkButton));
+}
+
+void LibraryView::startLink(const juce::String& interfaceName)
+{
+    linkStarting = true;
+    linkText = "LINK: preparing the library...";
+    updateStatus();
+    collection.setPaused(true);
+    const auto request = collection.linkRequest(interfaceName);
+    auto& rekordbox = ctx.rekordbox;
+    juce::Thread::launch(
+        [this, request, &rekordbox, alive = alive]
+        {
+            const auto result = rekordbox.linkStart(request,
+                                                    [this, alive](const juce::var& p)
+                                                    {
+                                                        const auto text = "LINK: preparing " + p.getProperty("done", 0).toString() + " of "
+                                                                          + p.getProperty("total", 0).toString();
+                                                        juce::MessageManager::callAsync(
+                                                            [this, alive, text]
+                                                            {
+                                                                if (!alive->load()) return;
+                                                                linkText = text;
+                                                                updateStatus();
+                                                            });
+                                                    });
+            juce::MessageManager::callAsync(
+                [this, alive, result]
+                {
+                    Collection::shared().setPaused(false);
+                    if (!alive->load()) return;
+                    linkStarting = false;
+                    if (!static_cast<bool>(result.getProperty("ok", false)))
+                    {
+                        linkText = {};
+                        if (ctx.notify) ctx.notify("Link Export: " + result.getProperty("error", "couldn't start").toString(), true);
+                    }
+                    else if (ctx.notify)
+                    {
+                        ctx.notify("Link Export on " + result.getProperty("interface", "").toString() + ": "
+                                       + result.getProperty("tracks", 0).toString() + " tracks for the players",
+                                   false);
+                    }
+                    showLinkStatus();
+                });
+        });
 }
 
 void LibraryView::changeListenerCallback(juce::ChangeBroadcaster*)
@@ -287,6 +401,7 @@ void LibraryView::updateStatus()
     juce::String text = juce::String(static_cast<int>(rows.size())) + " tracks";
     if (const int pending = collection.analysisPending(); pending > 0) text << ", analysing " << pending << "...";
     if (importing) text << ", reading rekordbox...";
+    if (linkText.isNotEmpty()) text = linkText + "   |   " + text;
     status.setText(text, juce::dontSendNotification);
 }
 
@@ -951,7 +1066,7 @@ void LibraryView::resized()
     bar.removeFromLeft(10);
     search.setBounds(bar.removeFromLeft(std::min(320, bar.getWidth() / 3)));
     bar.removeFromLeft(10);
-    for (auto* b : {&addFilesButton, &addFolderButton, &rekordboxButton, &exportButton, &historyButton})
+    for (auto* b : {&addFilesButton, &addFolderButton, &rekordboxButton, &exportButton, &historyButton, &linkButton})
     {
         b->setBounds(bar.removeFromLeft(b->getBestWidthForHeight(bar.getHeight()) + 14));
         bar.removeFromLeft(6);

@@ -500,3 +500,42 @@ fn the_collection_exports_to_a_stick_a_player_can_read() {
     assert_eq!(history["ok"], true, "{history}");
     assert!(history["histories"].as_array().unwrap().is_empty());
 }
+
+#[test]
+fn the_collection_is_served_over_link() {
+    let source = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let audio = source.path().join("linked.wav");
+    std::fs::write(&audio, wav_of(44_100 * 4)).unwrap();
+    let beats: Vec<f64> = (0..9).map(|i| 0.12 + f64::from(i) * 60.0 / 128.0).collect();
+    let request = json!({
+        "libraryDir": dir.path().join("link").to_string_lossy(), "cacheDir": dir.path().join("anlz").to_string_lossy(),
+        "loopback": true,
+        "tracks": [{ "id": 5, "path": audio.to_string_lossy(), "title": "Linked", "artist": "Stemcel", "key": "A minor",
+            "bpm": 128.0, "firstBeat": 1, "beats": beats, "durationSec": 4.0, "rating": 4,
+            "cues": [{ "slot": 1, "pos": 0.59, "name": "Drop" }, { "slot": -1, "pos": 0.12 }] }],
+        "playlists": [{ "id": 9, "name": "Linked list", "parent": 0, "folder": false, "tracks": [0] }]
+    });
+    let started = crate::link::start(&request, &mut |_| {}).unwrap();
+    assert_eq!(started["ok"], true, "{started}");
+    assert_eq!(started["tracks"], 1, "{started}");
+    let status = crate::link::status();
+    assert_eq!(status["running"], true, "{status}");
+    crate::link::stop();
+    assert_eq!(crate::link::status()["running"], false);
+
+    // The library it served holds the track, analysed, with its cues and the playlist.
+    let location = rbl_db::LibraryLocation {
+        master_db: dir.path().join("link").join("master.db"),
+        share_root: dir.path().join("link").join("share"),
+        passphrase: rbl_db::fixture::FIXTURE_PASSPHRASE.to_owned(),
+        is_real_install: false,
+    };
+    let db = rbl_db::Library::open(location, rbl_db::OpenMode::ReadOnly).unwrap();
+    let (analysed, cues): (i64, i64) = db
+        .connection()
+        .query_row("SELECT c.Analysed, (SELECT COUNT(*) FROM djmdCue q WHERE q.ContentID = c.ID) FROM djmdContent c", [], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap();
+    assert_eq!(analysed, 105);
+    assert_eq!(cues, 2);
+}

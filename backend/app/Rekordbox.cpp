@@ -87,6 +87,8 @@ struct Rekordbox::Functions
     using ExportProgress = void (*)(void*, const char*);
     using ExportCancelled = int (*)(void*);
     using Export = char* (*)(const char*, ExportProgress, ExportCancelled, void*);
+    using LinkStart = char* (*)(const char*, ExportProgress, void*);
+    using LinkStop = void (*)();
 
     Open open = nullptr;
     Close close = nullptr;
@@ -110,6 +112,10 @@ struct Rekordbox::Functions
     ByRoot eject = nullptr;
     ByRoot history = nullptr;
     Export exportStick = nullptr;
+    Volumes linkInterfaces = nullptr;
+    LinkStart linkStart = nullptr;
+    Volumes linkStatus = nullptr;
+    LinkStop linkStop = nullptr;
 };
 
 const RekordboxTrack* RekordboxSnapshot::findTrack(const juce::String& id) const
@@ -189,6 +195,10 @@ Rekordbox::Rekordbox()
     f->eject = reinterpret_cast<Functions::ByRoot>(library.getFunction("rbx_eject_json"));
     f->history = reinterpret_cast<Functions::ByRoot>(library.getFunction("rbx_stick_history_json"));
     f->exportStick = reinterpret_cast<Functions::Export>(library.getFunction("rbx_export_json"));
+    f->linkInterfaces = reinterpret_cast<Functions::Volumes>(library.getFunction("rbx_link_interfaces_json"));
+    f->linkStart = reinterpret_cast<Functions::LinkStart>(library.getFunction("rbx_link_start_json"));
+    f->linkStatus = reinterpret_cast<Functions::Volumes>(library.getFunction("rbx_link_status_json"));
+    f->linkStop = reinterpret_cast<Functions::LinkStop>(library.getFunction("rbx_link_stop"));
     if (f->open == nullptr || f->close == nullptr || f->freeString == nullptr || f->snapshot == nullptr
         || f->track == nullptr || f->tags == nullptr || f->picture == nullptr)
     {
@@ -202,6 +212,8 @@ Rekordbox::Rekordbox()
 
 Rekordbox::~Rekordbox()
 {
+    // Link's threads live in the module: stopped before anything else goes.
+    if (functions != nullptr && functions->linkStop != nullptr) functions->linkStop();
     std::scoped_lock lock(mutex);
     if (functions != nullptr && handle != nullptr) functions->close(handle);
     handle = nullptr;
@@ -787,6 +799,34 @@ juce::var Rekordbox::exportToStick(const juce::var& request, std::function<void(
     log::info("rekordbox", "export to " + request.getProperty("root", "").toString() + ": "
                                + juce::JSON::toString(result, true).substring(0, 2000));
     return result;
+}
+
+juce::var Rekordbox::linkInterfaces()
+{
+    if (functions == nullptr || functions->linkInterfaces == nullptr) return failure("This build can't run Link Export.");
+    return juce::JSON::parse(callJson([&] { return functions->linkInterfaces(); }));
+}
+
+juce::var Rekordbox::linkStart(const juce::var& request, std::function<void(const juce::var&)> progress)
+{
+    if (functions == nullptr || functions->linkStart == nullptr) return failure("This build can't run Link Export.");
+    ExportCallbacks callbacks{std::move(progress), {}};
+    const auto text = juce::JSON::toString(request, true);
+    auto result = juce::JSON::parse(callJson([&] { return functions->linkStart(text.toRawUTF8(), exportProgress, &callbacks); }));
+    if (!result.isObject()) return failure("Link gave no answer.");
+    log::info("rekordbox", "link: " + juce::JSON::toString(result, true).substring(0, 1000));
+    return result;
+}
+
+juce::var Rekordbox::linkStatus()
+{
+    if (functions == nullptr || functions->linkStatus == nullptr) return failure("This build can't run Link Export.");
+    return juce::JSON::parse(callJson([&] { return functions->linkStatus(); }));
+}
+
+void Rekordbox::linkStop()
+{
+    if (functions != nullptr && functions->linkStop != nullptr) functions->linkStop();
 }
 
 Rekordbox& sharedRekordbox()

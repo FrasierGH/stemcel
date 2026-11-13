@@ -108,7 +108,13 @@ class LibraryView final : public juce::Component,
     TrackEditor trackEditor;
     juce::TextEditor search;
     juce::TextButton addFilesButton{"Add Files..."}, addFolderButton{"Add Folder..."}, rekordboxButton{"From rekordbox..."},
-        exportButton{"Export to USB..."}, historyButton{"Histories from USB"}, closeButton{"Back to Timeline"};
+        exportButton{"Export to USB..."}, historyButton{"Histories from USB"}, closeButton{"Back to Timeline"}, linkButton{"LINK"};
+    void toggleLink();
+    void startLink(const juce::String& interfaceName);
+    void showLinkStatus();
+    bool linkStarting = false;
+    juce::String linkText;
+    int ticks = 0;
     juce::Label status;
     juce::int64 listId = 0;
     std::vector<juce::int64> rows;

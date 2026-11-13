@@ -139,6 +139,31 @@ Neither has been tried on your players. Before relying on a stick at a gig, chec
 2. Check the grid, the waveform and the hot cues.
 3. Check that the playlists browse.
 
+## Link Export: players on the network
+
+**LINK** in library mode serves the collection to players on the same network, as
+rekordbox's LINK button does. Connect the computer to the players' network (a LINK hub, a
+switch, or a player's LINK port), press **LINK**, and pick the network if there is more than
+one.
+
+The players see Stemcel as a rekordbox library:
+
+- all tracks and every playlist;
+- grids, waveforms and cues from the same analysis as a USB export.
+
+The status line shows the players on the network and which are playing. Link keeps running
+when you go back to the timeline or into performance mode. Press **LINK** again to stop it.
+
+To serve the collection, Stemcel builds a rekordbox-format copy of it in its own folder
+(`~/Stemcel/Collection/link`), made afresh each time Link starts. rekordbox's own library is
+never used. rekordbox can't run Link at the same time: the players expect the same network
+ports.
+
+The serving is done by rbxport's Link code. Its authors test the network protocol against
+captured player traffic, but say outright that this isn't the same as testing on players'
+firmware. Neither they nor Stemcel's tests have tried it on your players: check it with
+yours before a gig, and keep a USB stick as a backup.
+
 ## Play histories
 
 The players keep a history of what was played on the stick. **Histories from USB** reads

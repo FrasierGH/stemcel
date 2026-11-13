@@ -149,6 +149,12 @@ class Rekordbox final
     // the caller's thread; `progress` and `cancelled` are called on it too.
     juce::var exportToStick(const juce::var& request, std::function<void(const juce::var&)> progress,
                             std::function<bool()> cancelled);
+    // Link Export of Stemcel's collection to players on the network (dj::Collection::
+    // linkRequest). Start blocks while it builds the library it serves.
+    juce::var linkInterfaces();
+    juce::var linkStart(const juce::var& request, std::function<void(const juce::var&)> progress);
+    juce::var linkStatus();
+    void linkStop();
     // The library open now (what write() changes).
     RekordboxSource currentSource();
     // This computer's library first, then libraries on drives and on connected USB/SD
