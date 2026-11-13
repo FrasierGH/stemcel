@@ -429,6 +429,29 @@ void SmokeTest::addSteps()
                          if (found != 3 || detail.cues.size() != 3)
                              return fail("cues reread", juce::var(juce::String(found) + " of 3, " + juce::String(static_cast<int>(detail.cues.size())) + " cues"));
 
+                         // A file added with Stemcel's analysis: a 120 BPM grid from 0.1 s, so
+                         // rekordbox has its grid, BPM and waveforms without analysing it.
+                         const auto analysedFile = workDir.getChildFile("Files").getChildFile("analysed track.wav");
+                         juce::File(fixtureTrack->path).copyFileTo(analysedFile);
+                         auto* known = new juce::DynamicObject();
+                         const juce::var knownVar(known);
+                         known->setProperty("path", analysedFile.getFullPathName());
+                         known->setProperty("bpm", 120.0);
+                         known->setProperty("anchorSec", 0.1);
+                         const auto imported = rb.write(object({{"action", "importFiles"},
+                                                                {"paths", juce::var(juce::Array<juce::var>{analysedFile.getFullPathName()})},
+                                                                {"analyse", true},
+                                                                {"analysis", juce::var(juce::Array<juce::var>{knownVar})}}));
+                         if (!ok(imported) || static_cast<int>(imported.getProperty("analysed", 0)) != 1) return fail("analysed import", imported);
+                         const auto analysedId = imported["trackIds"][0].toString();
+                         rb.open(rekordboxFixtureDb, rekordboxFixturePassphrase);
+                         const auto grid = rb.trackDetail(analysedId);
+                         if (grid.beats.size() < 2 || std::abs(grid.beats.front().timeMs - 100.0) > 1.0
+                             || std::abs(grid.beats[1].timeMs - grid.beats.front().timeMs - 500.0) > 1.0)
+                             return fail("analysed grid", juce::var(juce::String(static_cast<int>(grid.beats.size())) + " beats"));
+                         report.add("rekordbox analysed import: " + juce::String(static_cast<int>(grid.beats.size())) + " beats from "
+                                    + juce::String(grid.beats.front().timeMs, 0) + " ms");
+
                          // A USB export: OneLibrary and Device Library, edited separately.
                          const auto audio = workDir.getChildFile("Files").getChildFile("rekordbox track.wav");
                          const auto stick = workDir.getChildFile("stick");

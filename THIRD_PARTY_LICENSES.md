@@ -162,11 +162,12 @@ SOFTWARE.
 - **Licence**: GPL-2.0-or-later.
 - **Source**: <https://github.com/chrisle/rbxport>, pinned by git revision in
   `backend/rekordbox_ffi/Cargo.toml`.
-- **Notice**: The crates `rbl-db`, `rbl-index`, `rbl-anlz`, `rbl-export` and
-  `rbl-devices` are built, unmodified, into the `stemcel_rekordbox` library
-  the app loads at runtime: they read a rekordbox library (SQLCipher
-  `master.db`, ANLZ analysis files, a USB export's `export.pdb` and
-  `exportLibrary.db`) and apply its playlist edits. As with MiniBPM, the
+- **Notice**: The crates `rbl-db`, `rbl-index`, `rbl-anlz`, `rbl-export`,
+  `rbl-devices`, `rbl-analysis` and `rbl-audio` are built, unmodified, into the
+  `stemcel_rekordbox` library the app loads at runtime: they read a rekordbox
+  library (SQLCipher `master.db`, ANLZ analysis files, a USB export's
+  `export.pdb` and `exportLibrary.db`), apply its playlist edits, and analyse
+  tracks added to it. As with MiniBPM, the
   **or later** clause lets the code be taken under GPL-3.0, which AGPL-3.0 §13
   permits combining with.
 

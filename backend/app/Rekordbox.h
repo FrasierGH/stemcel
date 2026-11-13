@@ -149,7 +149,11 @@ class Rekordbox final
     juce::var write(const juce::var& request);
     // Adds audio files to this computer's library (and to the playlist named `playlist`,
     // made if missing), whatever library is open. Same refusal and backup as write().
-    juce::var addToComputerLibrary(const juce::Array<juce::File>& files, const juce::String& playlist);
+    // `analysis` (an array of {path, bpm, beats: [s], anchorSec, key}, or void) adds them
+    // analysed: each track rekordbox hasn't analysed gets its beat grid, BPM, key and
+    // waveforms, Stemcel's where an entry has them.
+    juce::var addToComputerLibrary(const juce::Array<juce::File>& files, const juce::String& playlist,
+                                   const juce::var& analysis = {});
     // Stemcel's hot and memory cues onto `file`'s track in this computer's library (the file
     // added first when the collection hasn't got it). `cues` is a library item's perfCues
     // ({hot: [null | {pos, end?}] x8, memory: [{pos, end?}]}, seconds). rekordbox's own hot
@@ -187,6 +191,7 @@ class Rekordbox final
     // Refusal, backup, write against `target` (the open handle or a temporary one).
     juce::var writeTo(void* target, const RekordboxSource& source, const juce::File& database, const juce::var& request);
     juce::var writeToComputerLibrary(const juce::var& request);
+    static void pruneBackups();
     bool backUp(const RekordboxSource& source, const juce::File& database, juce::String& error);
 
     juce::DynamicLibrary library;

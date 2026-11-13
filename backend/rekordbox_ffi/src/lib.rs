@@ -916,9 +916,11 @@ fn write_refusal(library: &RbxLibrary) -> Option<&'static str> {
 ///
 /// Actions: `createPlaylist {name, parentId?, folder?}`, `rename {id, name}`, `delete {id}`,
 /// `addTracks {playlistId, trackIds}`, `removeTracks {playlistId, trackIds}`, and, for a
-/// desktop library only, `importFiles {paths, playlistId? | playlist?}` (adds audio files
-/// to the collection, and to that playlist, or to the playlist of that name at the top
-/// level, made if missing) and `setCues {trackId, hot: [{slot, posMs, endMs?}], memory:
+/// desktop library only, `importFiles {paths, playlistId? | playlist?, analyse?, analysis?}`
+/// (adds audio files to the collection, and to that playlist, or to the playlist of that
+/// name at the top level, made if missing; with `analyse`, each track rekordbox hasn't
+/// analysed gets its analysis files and is registered as analysed, from `analysis:
+/// [{path, bpm, beats: [s], anchorSec, key}]` where Stemcel has one) and `setCues {trackId, hot: [{slot, posMs, endMs?}], memory:
 /// [{posMs, endMs?}], replaceHot?}` (Stemcel's cues onto a track; hot cues fill empty
 /// slots unless replaceHot; `path` in place of `trackId` finds the track by its file, adding
 /// the file to the collection when it isn't there yet).
@@ -1008,17 +1010,36 @@ fn desktop_write(location: &LibraryLocation, request: &Value) -> Result<String, 
             let paths: Vec<PathBuf> = id_list(request, "paths").into_iter().map(PathBuf::from).collect();
             let outcomes = writer.import_files(&paths).map_err(e)?;
             let (mut ids, mut added, mut existing, mut refused) = (Vec::new(), 0, 0, Vec::new());
+            let mut tracks = Vec::new();
             for (path, outcome) in paths.iter().zip(outcomes) {
                 match outcome {
                     ImportOutcome::Added(id) => {
                         added += 1;
+                        tracks.push((path.clone(), id.clone()));
                         ids.push(id);
                     }
                     ImportOutcome::Existing(id) => {
                         existing += 1;
+                        tracks.push((path.clone(), id.clone()));
                         ids.push(id);
                     }
                     ImportOutcome::Refused(why) => refused.push(format!("{}: {why}", path.display())),
+                }
+            }
+            let (mut analysed, mut kept, mut unanalysed) = (0u32, 0u32, Vec::new());
+            if request.get("analyse").and_then(Value::as_bool).unwrap_or(false) {
+                let known = request.get("analysis").and_then(Value::as_array).cloned().unwrap_or_default();
+                for (path, id) in &tracks {
+                    let theirs = known
+                        .iter()
+                        .find(|k| k.get("path").and_then(Value::as_str).is_some_and(|p| Path::new(p) == path.as_path()))
+                        .map(analyse::Known::from_json)
+                        .unwrap_or_default();
+                    match analyse::analyse_track(&mut writer, location, id, path, &theirs) {
+                        Ok(analyse::Outcome::Analysed) => analysed += 1,
+                        Ok(analyse::Outcome::Kept) => kept += 1,
+                        Err(why) => unanalysed.push(format!("{}: {why}", path.display())),
+                    }
                 }
             }
             let named = request.get("playlist").and_then(Value::as_str).filter(|s| !s.is_empty());
@@ -1036,7 +1057,8 @@ fn desktop_write(location: &LibraryLocation, request: &Value) -> Result<String, 
                 writer.add_tracks(id, &ids).map_err(e)?;
             }
             let playlist = target.map_or(Value::Null, Value::String);
-            json!({ "ok": true, "added": added, "existing": existing, "refused": refused, "trackIds": ids, "id": playlist, "changed": added })
+            json!({ "ok": true, "added": added, "existing": existing, "refused": refused, "trackIds": ids, "id": playlist,
+                    "analysed": analysed, "keptAnalysis": kept, "unanalysed": unanalysed, "changed": added + analysed })
         }
         "setCues" => {
             // Stemcel's hot and memory cues onto a track. Hot cues fill empty slots, unless
@@ -1364,6 +1386,8 @@ fn read_one_lenient(path: &Path) -> Result<device_library::Library, String> {
     tracks.sort_by_key(|t| t.id);
     Ok(device_library::Library { format: Format::OneLibrary, nodes: tree_order(nodes), tracks })
 }
+
+mod analyse;
 
 #[cfg(test)]
 mod tests;

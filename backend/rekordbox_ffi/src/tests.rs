@@ -126,7 +126,11 @@ fn bad_open_reports_an_error() {
 
 /// 0.5 s of 16-bit stereo silence at 44.1 kHz.
 fn wav_bytes() -> Vec<u8> {
-    let samples = 22_050u32;
+    wav_of(22_050)
+}
+
+/// `samples` frames of 16-bit stereo silence at 44.1 kHz.
+fn wav_of(samples: u32) -> Vec<u8> {
     let data_len = samples * 4;
     let mut wav = Vec::new();
     wav.extend_from_slice(b"RIFF");
@@ -325,6 +329,64 @@ fn a_drive_with_both_export_folders_opens_the_newer() {
         assert_eq!(refusal["ok"], false, "{format}: writes are refused while both folders hold exports");
         unsafe { rbx_close(library) };
     }
+}
+
+#[test]
+fn files_added_with_stemcels_analysis_arrive_analysed() {
+    let dir = tempfile::tempdir().unwrap();
+    let location = fixture_library(dir.path());
+    let library = open_fixture(&location);
+    if rbl_db::is_rekordbox_app_running() {
+        return;
+    }
+    let audio = dir.path().join("analysed.wav");
+    std::fs::write(&audio, wav_of(44_100 * 4)).unwrap();
+    let path = audio.to_string_lossy().into_owned();
+    // A steady 128 BPM grid from 0.12 s over the four seconds.
+    let beats: Vec<f64> = (0..9).map(|i| 0.12 + f64::from(i) * 60.0 / 128.0).collect();
+    let request = json!({ "action": "importFiles", "paths": [path], "analyse": true,
+        "analysis": [{ "path": path, "bpm": 128.0, "beats": beats, "key": "A minor" }] });
+    let reply = take_json(unsafe { rbx_write_json(library, c(&request.to_string()).as_ptr()) });
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert_eq!(reply["analysed"], 1, "{reply}");
+    let id = reply["trackIds"][0].as_str().unwrap().to_owned();
+
+    // Added again: rekordbox now has an analysis, so it is kept.
+    let again = take_json(unsafe { rbx_write_json(library, c(&request.to_string()).as_ptr()) });
+    assert_eq!(again["analysed"], 0, "{again}");
+    assert_eq!(again["keptAnalysis"], 1, "{again}");
+    unsafe { rbx_close(library) };
+
+    let library = open_fixture(&location);
+    let detail = take_json(unsafe { rbx_track_json(library, c(&id).as_ptr()) });
+    let grid = detail["beats"].as_array().unwrap();
+    assert_eq!(grid.len(), beats.len(), "{detail}");
+    assert_eq!(grid[0][0], 120, "{detail}");
+    assert_eq!(grid[0][2], 128.0, "{detail}");
+    let snapshot = take_json(unsafe { rbx_snapshot_json(library) });
+    let track = snapshot["tracks"].as_array().unwrap().iter().find(|t| t["id"] == id.as_str()).unwrap().clone();
+    assert!((track["bpm"].as_f64().unwrap() - 128.0).abs() < 0.01, "{track}");
+    unsafe { rbx_close(library) };
+
+    let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
+    let (analysed, relative): (i64, String) = db
+        .connection()
+        .query_row("SELECT Analysed, AnalysisDataPath FROM djmdContent WHERE ID = ?1", [&id], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap();
+    assert_eq!(analysed, 105);
+    let dat = rbl_anlz::resolve(&location.share_root, &relative);
+    for extension in ["DAT", "EXT", "2EX"] {
+        assert!(dat.with_extension(extension).exists(), "{extension}");
+    }
+}
+
+#[test]
+fn keys_are_spelled_as_rekordbox_spells_them() {
+    assert_eq!(crate::analyse::key_spellings("A minor"), ["Am"]);
+    assert_eq!(crate::analyse::key_spellings("Eb major"), ["Eb", "D#"]);
+    assert_eq!(crate::analyse::key_spellings("C# minor"), ["C#m", "Dbm"]);
+    assert_eq!(crate::analyse::key_spellings("B minor"), ["Bm"]);
+    assert!(crate::analyse::key_spellings("").is_empty());
 }
 
 #[test]

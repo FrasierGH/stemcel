@@ -79,12 +79,32 @@ puts the selected items into the collection and a "Stemcel" playlist (stems and 
 are first copied out of the temporary media store to `~/Stemcel/rekordbox`). New audio
 does not go onto a USB export from here: rekordbox's export or sync does that.
 
+Add to rekordbox has two choices:
+
+- **With Stemcel's Analysis** adds the tracks already analysed. rekordbox then shows them
+  analysed and doesn't analyse them again.
+  - The beat grid and BPM are the ones Stemcel shows. The bars (which beat is the
+    downbeat) and the waveforms come from rbxport's analyser, which also gives the whole
+    grid for an item Stemcel hasn't analysed.
+  - The key is filled in when the collection already uses that key, as most do. rekordbox's
+    key list can't safely be added to.
+  - The analysis files are written into rekordbox's own analysis folder first, and the
+    track is pointed at them after. A track rekordbox has analysed itself is left as it is.
+  - When rekordbox exports or syncs these tracks to a USB stick, the analysis goes with
+    them as with any analysed track.
+- **For rekordbox to Analyse** adds them as before, for rekordbox to analyse when it loads
+  them.
+
 Every change is refused while rekordbox is running (and, for a computer or drive library,
 its agent too, which syncs it with the cloud). Before the first change to a library in a
 session, its database files are copied to `~/Stemcel/Backups/rekordbox/<time> <library>/`
 (`master.db` with its `-wal` and `-shm`; for a USB export, `export.pdb`, `exportExt.pdb`
 and `exportLibrary.db` together), with a README saying where they came from. To undo,
-quit rekordbox and copy them back. The playlist edits on an export go through rbxport's
+quit rekordbox and copy them back. The newest 20 backups are kept. Each is a few MB, since
+only the database is copied, never audio or analysis files.
+
+Analysis files written by With Stemcel's Analysis stay in rekordbox's analysis folder after
+such a restore. Nothing names them, and rekordbox ignores them. The playlist edits on an export go through rbxport's
 publication journal, so an interrupted edit is finished or rolled back on the next read.
 
 ## Stem separation

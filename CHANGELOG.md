@@ -4,9 +4,13 @@
 
 ### Added
 
+- **Add to rekordbox ▸ With Stemcel's Analysis**: tracks go into rekordbox already analysed, with Stemcel's beat grid, BPM and key plus waveforms and bars from rbxport's analyser, so rekordbox doesn't analyse them again. A track rekordbox analysed itself is left alone. **For rekordbox to Analyse** adds them as before.
+
 - **Send Cues to rekordbox** (library item menu): the hot and memory cues set in performance mode go onto the track in this computer's rekordbox collection, which gets the file first if it hasn't got it. Hot cues fill only empty slots unless you choose to replace rekordbox's. Like Add to rekordbox, it waits for rekordbox to be closed and backs its database up first.
 
 ### Changed
+
+- Only the newest 20 rekordbox database backups are kept in `~/Stemcel/Backups/rekordbox`.
 
 - Fusion is now the default theme for new installs. A theme already chosen in Preferences stays.
 

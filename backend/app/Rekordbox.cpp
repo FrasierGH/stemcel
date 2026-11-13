@@ -492,6 +492,24 @@ juce::File Rekordbox::backupFolder()
         .getChildFile("rekordbox");
 }
 
+// Only the newest backups are kept: each is a copy of one database (a few MB, more for a
+// very large collection), one per library per app session. Only folders this app made (with
+// its README) are ever removed.
+void Rekordbox::pruneBackups()
+{
+    constexpr int kKeep = 20;
+    auto folders = backupFolder().findChildFiles(juce::File::findDirectories, false);
+    folders.removeIf([](const juce::File& f)
+                     { return !f.getChildFile("README.txt").loadFileAsString().startsWith("Stemcel copied these files"); });
+    // Named from the time they were taken, so the names sort oldest first.
+    std::sort(folders.begin(), folders.end(), [](const juce::File& a, const juce::File& b) { return a.getFileName() < b.getFileName(); });
+    for (int i = 0; i < folders.size() - kKeep; ++i)
+    {
+        log::info("rekordbox", "removing the old backup " + folders[i].getFullPathName());
+        folders.getReference(i).deleteRecursively();
+    }
+}
+
 // Copies the database files of `source` aside, once per library (a stick's two together)
 // per app session. Writes
 // are refused while rekordbox is running, so the files are at rest while they're copied.
@@ -544,6 +562,7 @@ bool Rekordbox::backUp(const RekordboxSource& source, const juce::File& database
                          + " in this session.\n\nFrom: " + dir.getFullPathName()
                          + "\n\nTo put them back, quit rekordbox and copy them over the files there.\n");
     backedUp.insert(id);
+    pruneBackups();
     log::info("rekordbox", "backed up " + juce::String(copied) + " file(s) of " + dir.getFullPathName() + " to "
                                + folder.getFullPathName());
     return true;
@@ -582,7 +601,8 @@ juce::var Rekordbox::write(const juce::var& request)
     return writeTo(handle, openSource, openDatabase, request);
 }
 
-juce::var Rekordbox::addToComputerLibrary(const juce::Array<juce::File>& files, const juce::String& playlist)
+juce::var Rekordbox::addToComputerLibrary(const juce::Array<juce::File>& files, const juce::String& playlist,
+                                          const juce::var& analysis)
 {
     if (functions == nullptr) return failure(loadError);
     if (functions->write == nullptr || functions->refusal == nullptr || functions->location == nullptr)
@@ -593,6 +613,11 @@ juce::var Rekordbox::addToComputerLibrary(const juce::Array<juce::File>& files, 
     request->setProperty("action", "importFiles");
     request->setProperty("paths", paths);
     if (playlist.isNotEmpty()) request->setProperty("playlist", playlist);
+    if (analysis.isArray())
+    {
+        request->setProperty("analyse", true);
+        request->setProperty("analysis", analysis);
+    }
     return writeToComputerLibrary(juce::var(request));
 }
 

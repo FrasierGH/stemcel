@@ -83,8 +83,8 @@ void CueOutput::push(const float* masterL, const float* masterR, const float* cu
     written.store(at, std::memory_order_release);
 }
 
-void CueOutput::audioDeviceIOCallbackWithContext(const float* const*, int, float* const* outputs, int numOutputs, int n,
-                                                 const juce::AudioIODeviceCallbackContext&)
+void CueOutput::audioDeviceIOCallbackWithContext(const float* const* /*inputs*/, int /*numInputs*/, float* const* outputs, int numOutputs, int n,
+                                                 const juce::AudioIODeviceCallbackContext& /*context*/)
 {
     for (int c = 0; c < numOutputs; ++c)
         if (outputs[c] != nullptr) std::fill(outputs[c], outputs[c] + n, 0.0F);

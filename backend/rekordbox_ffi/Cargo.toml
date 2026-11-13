@@ -18,6 +18,9 @@ crate-type = ["cdylib", "rlib"]
 rbl-db = { git = "https://github.com/chrisle/rbxport", rev = "b739d369665b492534dc2eae0733322c040a26d5" }
 rbl-index = { git = "https://github.com/chrisle/rbxport", rev = "b739d369665b492534dc2eae0733322c040a26d5" }
 rbl-anlz = { git = "https://github.com/chrisle/rbxport", rev = "b739d369665b492534dc2eae0733322c040a26d5" }
+# Analysing tracks added to a library (waveforms, bars, and the grid when Stemcel has none).
+rbl-analysis = { git = "https://github.com/chrisle/rbxport", rev = "b739d369665b492534dc2eae0733322c040a26d5" }
+rbl-audio = { git = "https://github.com/chrisle/rbxport", rev = "b739d369665b492534dc2eae0733322c040a26d5" }
 # The libraries on a USB or SD export (Device Library and OneLibrary), and finding them.
 rbl-export = { git = "https://github.com/chrisle/rbxport", rev = "b739d369665b492534dc2eae0733322c040a26d5" }
 rbl-devices = { git = "https://github.com/chrisle/rbxport", rev = "b739d369665b492534dc2eae0733322c040a26d5" }

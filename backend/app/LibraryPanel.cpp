@@ -956,9 +956,11 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
 
     // The selected files into this computer's rekordbox collection and its "Stemcel"
     // playlist (Rekordbox::addToComputerLibrary: refused while rekordbox runs, and the
-    // database is backed up before the session's first change).
-    void addToRekordbox()
+    // database is backed up before the session's first change). `analysed`: with Stemcel's
+    // beat grid, BPM and key, and waveforms, so rekordbox doesn't analyse them again.
+    void addToRekordbox(bool analysed)
     {
+        juce::Array<juce::var> analysis;
         const auto lasting = juce::File::getSpecialLocation(juce::File::userHomeDirectory)
                                  .getChildFile(appFolderName())
                                  .getChildFile("rekordbox");
@@ -987,20 +989,39 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
                 file = target;
             }
             files.add(file);
+            if (analysed)
+            {
+                auto* known = new juce::DynamicObject();
+                const juce::var held(known);
+                known->setProperty("path", file.getFullPathName());
+                if (item->bpm > 0.0) known->setProperty("bpm", item->bpm);
+                if (!item->beats.empty())
+                {
+                    juce::Array<juce::var> beats;
+                    beats.ensureStorageAllocated(static_cast<int>(item->beats.size()));
+                    for (const double t : item->beats) beats.add(t);
+                    known->setProperty("beats", beats);
+                }
+                if (item->raw.hasProperty("beatAnchorSec")) known->setProperty("anchorSec", item->beatAnchorSec);
+                if (item->key.isNotEmpty()) known->setProperty("key", item->key);
+                analysis.add(held);
+            }
         }
         if (files.isEmpty())
         {
             if (ctx.notify) ctx.notify("None of the selected items has an audio file to add to rekordbox", true);
             return;
         }
-        if (ctx.notify) ctx.notify("Adding " + juce::String(files.size()) + " file(s) to rekordbox...", false);
+        if (ctx.notify)
+            ctx.notify("Adding " + juce::String(files.size()) + " file(s) to rekordbox" + (analysed ? ", analysed..." : "..."), false);
+        const juce::var analysisVar = analysed ? juce::var(analysis) : juce::var();
         auto notify = ctx.notify;
         auto& rekordbox = ctx.rekordbox;
         juce::Component::SafePointer<juce::Component> self(this);
         juce::Thread::launch(
-            [files, notify, self, &rekordbox]
+            [files, analysisVar, notify, self, &rekordbox]
             {
-                const auto result = rekordbox.addToComputerLibrary(files, "Stemcel");
+                const auto result = rekordbox.addToComputerLibrary(files, "Stemcel", analysisVar);
                 juce::MessageManager::callAsync(
                     [result, notify, self]
                     {
@@ -1015,9 +1036,16 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
                         const auto* refused = result.getProperty("refused", {}).getArray();
                         juce::String text = "Added " + juce::String(added) + " file(s) to rekordbox's \"Stemcel\" playlist";
                         if (existing > 0) text << " (" << existing << " already in the collection)";
+                        const int analysedCount = result.getProperty("analysed", 0);
+                        const int kept = result.getProperty("keptAnalysis", 0);
+                        const auto* unanalysed = result.getProperty("unanalysed", {}).getArray();
+                        if (analysedCount > 0) text << "; analysed " << analysedCount;
+                        if (kept > 0) text << "; kept rekordbox's analysis of " << kept;
                         if (refused != nullptr && !refused->isEmpty())
                             text << "; skipped " << refused->size() << ": " << (*refused)[0].toString();
-                        notify(text, refused != nullptr && !refused->isEmpty());
+                        if (unanalysed != nullptr && !unanalysed->isEmpty())
+                            text << "; left " << unanalysed->size() << " for rekordbox to analyse: " << (*unanalysed)[0].toString();
+                        notify(text, (refused != nullptr && !refused->isEmpty()) || (unanalysed != nullptr && !unanalysed->isEmpty()));
                     });
             });
     }
@@ -1154,7 +1182,12 @@ class LibraryItemsView final : public juce::Component, private juce::ChangeListe
                          KeyWheel::show(ctx.mirror, ctx.actions, {}, ids);
                      });
         if (isFile)
-            menu.addItem("Add to rekordbox", ctx.rekordbox.isAvailable(), false, [this] { addToRekordbox(); });
+        {
+            juce::PopupMenu add;
+            add.addItem("With Stemcel's Analysis", [this] { addToRekordbox(true); });
+            add.addItem("For rekordbox to Analyse", [this] { addToRekordbox(false); });
+            menu.addSubMenu("Add to rekordbox", add, ctx.rekordbox.isAvailable());
+        }
         if (isFile && hasPerfCues(*item))
         {
             juce::PopupMenu cues;
