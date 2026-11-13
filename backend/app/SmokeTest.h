@@ -181,6 +181,8 @@ class SmokeTest final : private juce::Timer
     int perfTracksBefore = 0;
     juce::String perfBoundTrack;
     double perfKillAtMs = 0.0, perfRegionCueMs = 0.0;
+    bool perfSkip = false; // no audio device: the performance steps pass through
+    juce::uint32 perfOpenedAt = 0;
     double perfTakeClock = -1.0, perfTakeMs = 0.0, perfCaptureClock = 0.0, perfCaptureRate = 48000.0, perfCaptureSec = 0.0;
     double featX = 0.0, featY = 0.0;
     // The theme switched while running, and back.
