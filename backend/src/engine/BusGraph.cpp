@@ -25,6 +25,7 @@ void BusGraph::prepareToPlay(int samplesPerBlockExpected, double sampleRate)
     reverbSendBuf.clear();
     delaySendBuf.clear();
     sharedFx.prepare(preparedRate, preparedMax);
+    if (masterBeatFx.allocated()) masterBeatFx.allocate(preparedRate);
     for (auto& kv : trackPlugins)
         kv.second->prepare(preparedRate, preparedMax);
     for (auto& kv : runtimes)
@@ -83,7 +84,10 @@ void BusGraph::attachClip(const juce::String& trackId,
 
         auto automationIt = pendingAutomation.find(trackId);
         if (createdRuntime && automationIt != pendingAutomation.end())
+        {
             rt->publishedAutomation = automationIt->second;
+            if (automationIt->second != nullptr && automationIt->second->usesDjFx()) rt->chain.ensureDjFx();
+        }
         auto beatRepeatIt = pendingBeatRepeats.find(trackId);
         if (createdRuntime && beatRepeatIt != pendingBeatRepeats.end())
             rt->publishedBeatRepeat = beatRepeatIt->second;
@@ -292,6 +296,7 @@ void BusGraph::setTrackAutomationPtr(const juce::String& trackId,
     if (trackId == plugins::kMasterChainId)
     {
         // The master has no track runtime: its automation rides on the render snapshot.
+        if (snap != nullptr && snap->usesDjFx() && !masterBeatFx.allocated()) masterBeatFx.allocate(preparedRate > 0.0 ? preparedRate : 44100.0);
         masterAutomation = snap;
         publishRenderSnapshot();
         return;
@@ -308,11 +313,42 @@ void BusGraph::setTrackAutomationPtr(const juce::String& trackId,
     auto it = runtimes.find(trackId);
     if (it != runtimes.end())
     {
+        if (snap != nullptr && snap->usesDjFx()) it->second->chain.ensureDjFx();
         it->second->publishedAutomation = snap;
         // Automation lifetime follows the same hazard handshake as clip/runtime
         // pointers, so the caller may retire the old snapshot when this returns.
         publishRenderSnapshot();
     }
+}
+
+bool BusGraph::setTrackLive(const juce::String& trackId, const std::vector<std::pair<AutomationParam, float>>& values,
+                            const std::vector<AutomationParam>& clear)
+{
+    const juce::ScopedLock sl(lock);
+    auto it = runtimes.find(trackId);
+    if (it == runtimes.end()) return false;
+    auto& rt = *it->second;
+    for (const auto& [param, value] : values)
+    {
+        if (param >= AutomationParam::colorFxType && param <= AutomationParam::fxBpm) rt.chain.ensureDjFx();
+        const auto i = static_cast<size_t>(param);
+        rt.liveValue[i].store(value, std::memory_order_relaxed);
+        rt.liveOn[i].store(true, std::memory_order_release);
+    }
+    for (const auto param : clear) rt.liveOn[static_cast<size_t>(param)].store(false, std::memory_order_release);
+    bool any = false;
+    for (const auto& on : rt.liveOn) any = any || on.load(std::memory_order_relaxed);
+    rt.anyLive.store(any, std::memory_order_release);
+    return true;
+}
+
+void BusGraph::clearTrackLive(const juce::String& trackId)
+{
+    const juce::ScopedLock sl(lock);
+    auto it = runtimes.find(trackId);
+    if (it == runtimes.end()) return;
+    for (auto& on : it->second->liveOn) on.store(false, std::memory_order_release);
+    it->second->anyLive.store(false, std::memory_order_release);
 }
 
 void BusGraph::setTrackBeatRepeatPtr(const juce::String& trackId,

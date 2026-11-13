@@ -287,6 +287,9 @@ void BusGraph::getNextAudioBlock(const juce::AudioSourceChannelInfo& info)
         sharedFx.process(reverbSendBuf, delaySendBuf, *info.buffer, dst, n);
         // The master inserts, over the whole mix with its returns.
         if (auto* master = masterInserts.load(std::memory_order_acquire)) master->processInserts(*info.buffer, dst, n);
+        // Beat FX on the master (performance mode's CH SELECT = MASTER).
+        if (masterBeatFx.allocated() && info.buffer->getNumChannels() >= 2)
+            masterBeatFx.process(info.buffer->getWritePointer(0, dst), info.buffer->getWritePointer(1, dst), n);
         // The master's automated level, ramped across the sub-block.
         if (masterLevelGain != 1.0F || masterLevelTarget != 1.0F)
         {
@@ -317,35 +320,57 @@ void BusGraph::applyTrackAutomation(TrackRuntime& rt, const TrackAutomationSnaps
         rt.automationLastEndSamples = -1;
         rt.lastAutomationSnapshot = snap;
     }
-    if (snap == nullptr) return;
+    const bool live = rt.anyLive.load(std::memory_order_acquire);
+    if (snap == nullptr && !live) return;
 
     const bool discontinuity = (subStartSamples != rt.automationLastEndSamples);
     const double ms = static_cast<double>(subStartSamples) / rate * 1000.0;
 
+    // A live value (performance mode on this track) wins over the curve while it is held.
+    const auto isLive = [&](AutomationParam p)
+    { return live && rt.liveOn[static_cast<size_t>(p)].load(std::memory_order_relaxed); };
+    const auto has = [&](AutomationParam p) { return isLive(p) || (snap != nullptr && snap->hasParam(p)); };
     const auto sample = [&](AutomationParam p) {
         const int pi = static_cast<int>(p);
+        if (isLive(p)) return rt.liveValue[static_cast<size_t>(pi)].load(std::memory_order_relaxed);
         return snap->curve(p).valueAtMs(ms, rt.automationSegments[pi]);
     };
-    if (snap->hasParam(AutomationParam::filter)) rt.chain.setFilterTarget(sample(AutomationParam::filter), discontinuity);
-    if (snap->hasParam(AutomationParam::toneBass)) rt.chain.setBassTarget(sample(AutomationParam::toneBass), discontinuity);
-    if (snap->hasParam(AutomationParam::toneMid)) rt.chain.setMidTarget(sample(AutomationParam::toneMid), discontinuity);
-    if (snap->hasParam(AutomationParam::toneTreble)) rt.chain.setTrebleTarget(sample(AutomationParam::toneTreble), discontinuity);
-    if (snap->hasParam(AutomationParam::punch)) rt.chain.setPunchTarget(sample(AutomationParam::punch), discontinuity);
-    if (snap->hasParam(AutomationParam::saturationDrive)) rt.chain.setSaturationDriveTarget(sample(AutomationParam::saturationDrive), discontinuity);
-    if (snap->hasParam(AutomationParam::saturationMix)) rt.chain.setSaturationMixTarget(sample(AutomationParam::saturationMix), discontinuity);
-    if (snap->hasParam(AutomationParam::bitCrusherRate)) rt.chain.setBitCrusherRateTarget(sample(AutomationParam::bitCrusherRate), discontinuity);
-    if (snap->hasParam(AutomationParam::bitCrusherBits)) rt.chain.setBitCrusherBitsTarget(sample(AutomationParam::bitCrusherBits), discontinuity);
-    if (snap->hasParam(AutomationParam::bitCrusherBoost)) rt.chain.setBitCrusherBoostTarget(sample(AutomationParam::bitCrusherBoost), discontinuity);
-    if (snap->hasParam(AutomationParam::bitCrusherMix)) rt.chain.setBitCrusherMixTarget(sample(AutomationParam::bitCrusherMix), discontinuity);
-    if (snap->hasParam(AutomationParam::level)) rt.chain.setLevelTarget(sample(AutomationParam::level), discontinuity);
-    if (snap->hasParam(AutomationParam::reverbSend)) rt.reverbSend.store(sample(AutomationParam::reverbSend), std::memory_order_relaxed);
-    if (snap->hasParam(AutomationParam::delaySend)) rt.delaySend.store(sample(AutomationParam::delaySend), std::memory_order_relaxed);
-    if (snap->hasParam(AutomationParam::pan))
+    if (has(AutomationParam::filter)) rt.chain.setFilterTarget(sample(AutomationParam::filter), discontinuity);
+    if (has(AutomationParam::toneBass)) rt.chain.setBassTarget(sample(AutomationParam::toneBass), discontinuity);
+    if (has(AutomationParam::toneMid)) rt.chain.setMidTarget(sample(AutomationParam::toneMid), discontinuity);
+    if (has(AutomationParam::toneTreble)) rt.chain.setTrebleTarget(sample(AutomationParam::toneTreble), discontinuity);
+    if (has(AutomationParam::punch)) rt.chain.setPunchTarget(sample(AutomationParam::punch), discontinuity);
+    if (has(AutomationParam::saturationDrive)) rt.chain.setSaturationDriveTarget(sample(AutomationParam::saturationDrive), discontinuity);
+    if (has(AutomationParam::saturationMix)) rt.chain.setSaturationMixTarget(sample(AutomationParam::saturationMix), discontinuity);
+    if (has(AutomationParam::bitCrusherRate)) rt.chain.setBitCrusherRateTarget(sample(AutomationParam::bitCrusherRate), discontinuity);
+    if (has(AutomationParam::bitCrusherBits)) rt.chain.setBitCrusherBitsTarget(sample(AutomationParam::bitCrusherBits), discontinuity);
+    if (has(AutomationParam::bitCrusherBoost)) rt.chain.setBitCrusherBoostTarget(sample(AutomationParam::bitCrusherBoost), discontinuity);
+    if (has(AutomationParam::bitCrusherMix)) rt.chain.setBitCrusherMixTarget(sample(AutomationParam::bitCrusherMix), discontinuity);
+    if (has(AutomationParam::level)) rt.chain.setLevelTarget(sample(AutomationParam::level), discontinuity);
+    if ((snap != nullptr && snap->usesDjFx()) || live)
+    {
+        auto& fx = rt.chain.djEffects();
+        const auto whole = [&](AutomationParam p) { return static_cast<int>(std::lround(sample(p))); };
+        if (has(AutomationParam::fxBpm)) fx.setBpm(sample(AutomationParam::fxBpm));
+        if (has(AutomationParam::colorFxType)) fx.color.setType(whole(AutomationParam::colorFxType));
+        if (has(AutomationParam::colorFx)) fx.color.setAmount(sample(AutomationParam::colorFx));
+        if (has(AutomationParam::beatFxType)) fx.beat.setType(whole(AutomationParam::beatFxType));
+        if (has(AutomationParam::beatFxBeats)) fx.beat.setBeatStep(whole(AutomationParam::beatFxBeats));
+        if (has(AutomationParam::beatFxLevel)) fx.beat.setLevel(sample(AutomationParam::beatFxLevel));
+        if (has(AutomationParam::beatFxOn)) fx.beat.setOn(sample(AutomationParam::beatFxOn) > 0.5F);
+        if (has(AutomationParam::padFxType)) fx.pad.setType(whole(AutomationParam::padFxType));
+        if (has(AutomationParam::padFxBeats)) fx.pad.setBeatStep(whole(AutomationParam::padFxBeats));
+        if (has(AutomationParam::padFxLevel)) fx.pad.setLevel(sample(AutomationParam::padFxLevel));
+        if (has(AutomationParam::padFxOn)) fx.pad.setOn(sample(AutomationParam::padFxOn) > 0.5F);
+    }
+    if (has(AutomationParam::reverbSend)) rt.reverbSend.store(sample(AutomationParam::reverbSend), std::memory_order_relaxed);
+    if (has(AutomationParam::delaySend)) rt.delaySend.store(sample(AutomationParam::delaySend), std::memory_order_relaxed);
+    if (has(AutomationParam::pan))
     {
         const float p = sample(AutomationParam::pan);
         rt.pan.store(p, std::memory_order_relaxed);
     }
-    if (!snap->plugins.empty()) applyPluginAutomation(*snap, rt.pluginChain.load(std::memory_order_acquire), ms);
+    if (snap != nullptr && !snap->plugins.empty()) applyPluginAutomation(*snap, rt.pluginChain.load(std::memory_order_acquire), ms);
 
     rt.automationLastEndSamples = subStartSamples + numSamples;
 }
@@ -395,6 +420,15 @@ void BusGraph::applyMasterAutomation(const TrackAutomationSnapshot* snap, juce::
     if (masterGlue != nullptr && snap->hasParam(AutomationParam::glueMakeup))
         masterGlue->setMakeupDb(sample(AutomationParam::glueMakeup), /*snap*/ false);
     if (!snap->plugins.empty()) applyPluginAutomation(*snap, masterInserts.load(std::memory_order_acquire), ms);
+    if (snap->usesDjFx() && masterBeatFx.allocated())
+    {
+        const auto whole = [&](AutomationParam p) { return static_cast<int>(std::lround(sample(p))); };
+        if (snap->hasParam(AutomationParam::fxBpm)) masterBeatFx.setBpm(sample(AutomationParam::fxBpm));
+        if (snap->hasParam(AutomationParam::beatFxType)) masterBeatFx.setType(whole(AutomationParam::beatFxType));
+        if (snap->hasParam(AutomationParam::beatFxBeats)) masterBeatFx.setBeatStep(whole(AutomationParam::beatFxBeats));
+        if (snap->hasParam(AutomationParam::beatFxLevel)) masterBeatFx.setLevel(sample(AutomationParam::beatFxLevel));
+        if (snap->hasParam(AutomationParam::beatFxOn)) masterBeatFx.setOn(sample(AutomationParam::beatFxOn) > 0.5F);
+    }
 }
 
 } // namespace stemcel

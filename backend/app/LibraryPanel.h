@@ -99,6 +99,8 @@ class LibraryPanel final : public juce::Component, public juce::FileDragAndDropT
     void importWithDialog();
     // A line of background activity (stem separation) beside the tabs; empty clears it.
     void setActivity(const juce::String& text);
+    // The rekordbox library the rekordbox tab has open (null when none), for the performance browser.
+    const RekordboxSnapshot* rekordboxSnapshot() const;
     static constexpr int kDefaultHeight = 260;
     // For tests: the library tab's items pressed and let go as the mouse would, what a drag
     // from an item would carry, and a box dragged over a span of them (how many it selects).

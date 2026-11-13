@@ -77,6 +77,9 @@ struct MidiControllerProfile
 };
 
 const MidiControllerProfile* findMidiControllerProfile(const juce::String& deviceName);
+// Where the controller profiles are (beside the executable, in the macOS bundle's
+// Resources, or the source tree); performance mappings are in its "performance" folder.
+juce::File midiMappingDirectory();
 const MidiOutputBinding* findMidiOutputBinding(const MidiControllerProfile& profile,
                                                MidiOutputPurpose purpose) noexcept;
 

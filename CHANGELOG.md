@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Performance mode** (View ▸ Performance Mode, Ctrl/Cmd+Shift+L): two decks, a DJ mixer, effects, a sampler and a browser, played with a Pioneer DJ DDJ-400 as in rekordbox, or with the mouse.
+  - **Decks**: CDJ cue rules (hold CUE to play from the cue point, PLAY during the hold keeps playing), sync with a master deck, tempo ranges, key lock, loops (4-beat, halve and double), beat jump, hot cues, memory cues, keyboard and key shift pads, scratch and nudge on the jog wheels.
+  - **Mixer**: trim, 3-band EQ, filter, faders and crossfader. The headphone cue goes to outputs 3–4 when the device has them, as the DDJ-400's sound card does.
+  - **Effects**: Beat FX (Delay, Echo, Ping Pong, Spiral, Reverb, Trans, Filter, Flanger, Phaser, Pitch, Slip Roll, Roll, Vinyl Brake, Helix) on channel 1, 2 or the master; Sound Color FX (Space, Dub Echo, Sweep, Noise, Crush, Filter); Release FX; two banks of Pad FX.
+  - **Sampler**: 16 slots in each of 4 banks.
+  - **Browser**: the library and rekordbox playlists, driven by the BROWSE knob and LOAD (twice for Instant Doubles).
+  - **Recording**: what you play is written into the timeline as one undo step. Each deck gets a track whose clips are the stretches you played, with automation for the level, EQ, filter and effects, and the sampler's hits get tracks of their own. It plays back as it sounded.
+  - **On the timeline**: a deck channel can drive a timeline track instead. Its transport works the timeline, its knobs and FX act on the track live, and with REC on what you move is written into the track's automation.
+  - **Timeline stretches on decks**: a stretch of the timeline (the mix, or one track, over the selected range) can be loaded onto a deck. A take with it replaces that stretch.
+- Hot and memory cues set in performance mode are kept with the library track.
+- DJ effects are automatable on any track and on the master.
+
 ## 0.3.2
 
 ### Added

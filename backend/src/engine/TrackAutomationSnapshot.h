@@ -27,6 +27,19 @@ enum class AutomationParam
     bitCrusherBoost,
     bitCrusherMix,
     level,
+    // DJ effects (live performance mode): Sound Color FX on the channel, Beat FX and Pad FX
+    // after its level, timed at fxBpm. Types and beat steps are whole numbers (held, not ramped).
+    colorFxType,
+    colorFx,
+    beatFxType,
+    beatFxBeats,
+    beatFxLevel,
+    beatFxOn,
+    padFxType,
+    padFxBeats,
+    padFxLevel,
+    padFxOn,
+    fxBpm,
     // The master bus's own (on the master's automation only): the project reverb, echo and
     // glue.
     reverbMix,
@@ -58,6 +71,17 @@ inline bool automationParamFromString(const juce::String& id, AutomationParam& o
     if (id == "bitCrusherBoost") { out = AutomationParam::bitCrusherBoost; return true; }
     if (id == "bitCrusherMix") { out = AutomationParam::bitCrusherMix; return true; }
     if (id == "level") { out = AutomationParam::level; return true; }
+    if (id == "colorFxType") { out = AutomationParam::colorFxType; return true; }
+    if (id == "colorFx") { out = AutomationParam::colorFx; return true; }
+    if (id == "beatFxType") { out = AutomationParam::beatFxType; return true; }
+    if (id == "beatFxBeats") { out = AutomationParam::beatFxBeats; return true; }
+    if (id == "beatFxLevel") { out = AutomationParam::beatFxLevel; return true; }
+    if (id == "beatFxOn") { out = AutomationParam::beatFxOn; return true; }
+    if (id == "padFxType") { out = AutomationParam::padFxType; return true; }
+    if (id == "padFxBeats") { out = AutomationParam::padFxBeats; return true; }
+    if (id == "padFxLevel") { out = AutomationParam::padFxLevel; return true; }
+    if (id == "padFxOn") { out = AutomationParam::padFxOn; return true; }
+    if (id == "fxBpm") { out = AutomationParam::fxBpm; return true; }
     if (id == "reverbMix") { out = AutomationParam::reverbMix; return true; }
     if (id == "reverbSize") { out = AutomationParam::reverbSize; return true; }
     if (id == "reverbDecay") { out = AutomationParam::reverbDecay; return true; }
@@ -131,6 +155,13 @@ struct TrackAutomationSnapshot
     }
 
     bool hasParam(AutomationParam p) const noexcept { return has[static_cast<int>(p)]; }
+    // Any DJ effect lane: the track's (or master's) effects need their buffers.
+    bool usesDjFx() const noexcept
+    {
+        for (int p = static_cast<int>(AutomationParam::colorFxType); p <= static_cast<int>(AutomationParam::fxBpm); ++p)
+            if (has[p]) return true;
+        return false;
+    }
     const BreakpointCurve& curve(AutomationParam p) const noexcept
     {
         return curves[static_cast<int>(p)];

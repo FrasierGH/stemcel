@@ -1535,4 +1535,9 @@ void LibraryPanel::filesDropped(const juce::StringArray& paths, int, int)
     showTab(0);
 }
 
+const RekordboxSnapshot* LibraryPanel::rekordboxSnapshot() const
+{
+    return rekordbox != nullptr ? rekordbox->currentSnapshot() : nullptr;
+}
+
 } // namespace stemcel::native

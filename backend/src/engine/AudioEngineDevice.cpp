@@ -35,7 +35,9 @@ void AudioEngine::initialiseGraph()
     topMixer.addInputSource(&inputMonitorSource, false);
     // Latency calibration's bursts, silent unless a calibration is running.
     topMixer.addInputSource(&calibrationClickSource, false);
-    sourcePlayer.setSource(&masterMeter);
+    // Live performance decks: silent and nearly free until the mode opens.
+    topMixer.addInputSource(&performance, false);
+    sourcePlayer.setSource(&outputRouter);
 }
 
 juce::String AudioEngine::openAudioDevice(const juce::String& preferredTypeName,
@@ -134,6 +136,37 @@ void AudioEngine::finaliseAudioDevice(bool fellBack)
 
     // Publish readiness last so any thread that observes it sees the finalised device state.
     audioReady.store(true, std::memory_order_release);
+}
+
+bool AudioEngine::setPerformanceOutputs(bool withCue)
+{
+    // Outputs 3–4 carry the headphone cue when the device has them (the DDJ-400's sound card
+    // has four); otherwise, and when the mode closes, the default stereo pair.
+    auto* device = deviceManager.getCurrentAudioDevice();
+    const int available = device != nullptr ? device->getOutputChannelNames().size() : 0;
+    const bool four = withCue && available >= 4;
+    auto setup = deviceManager.getAudioDeviceSetup();
+    const int current = device != nullptr ? device->getActiveOutputChannels().countNumberOfSetBits() : 0;
+    if ((four && current != 4) || (!four && current > 2))
+    {
+        setup.useDefaultOutputChannels = !four;
+        setup.outputChannels.clear();
+        if (four) setup.outputChannels.setRange(0, 4, true);
+        else setup.outputChannels.setRange(0, 2, true);
+        const auto err = deviceManager.setAudioDeviceSetup(setup, true);
+        if (err.isNotEmpty())
+        {
+            stemcel::log::warn("audio", "performance outputs: " + err);
+            performance.setCueOutputAvailable(false);
+            return false;
+        }
+        rebuildDevicesSnapshot(/*rescan*/ false);
+    }
+    device = deviceManager.getCurrentAudioDevice();
+    const bool cue = four && device != nullptr && device->getActiveOutputChannels().countNumberOfSetBits() >= 4;
+    performance.setCueOutputAvailable(cue);
+    stemcel::log::info("audio", juce::String("performance outputs: ") + (cue ? "master 1-2, cue 3-4" : "master 1-2"));
+    return cue;
 }
 
 juce::String AudioEngine::openDefaultOutputOnly()

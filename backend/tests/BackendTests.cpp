@@ -60,6 +60,7 @@ constexpr DomainRegistrar kRegistrars[] = {
     {"PluginChain", addPluginChainTests},
     {"PluginLatency", addPluginLatencyTests},
     {"Recording", addRecordingTests},
+    {"Performance", addPerformanceTests},
 };
 
 // Structural validation of the assembled registry. Guards the failures that

@@ -1,4 +1,5 @@
 #include "EngineHost.h"
+#include "PerformanceCommands.h"
 
 #include "AudioDeviceCommands.h"
 #include "BridgeDispatch.h"
@@ -58,6 +59,7 @@ EngineHost::~EngineHost()
     bridgeServer.stop();
     log::info("main", "engine host: bridge stopped");
     shutdownRecording();
+    shutdownPerformance();
     audioEngine.shutdown();
     log::info("main", "engine host: engine shut down");
 }

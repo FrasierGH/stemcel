@@ -283,7 +283,8 @@ bool isKnownAutomationParamId(const juce::String& paramId)
            paramId == "bitCrusherBoost" || paramId == "bitCrusherMix" || paramId == "level" ||
            paramId == "reverbMix" || paramId == "reverbSize" || paramId == "reverbDecay" ||
            paramId == "delayMix" || paramId == "delayFeedback" || paramId == "reverbTone" ||
-           paramId == "delayTone" || paramId == "glue" || paramId == "glueMakeup" || isPluginParamId(paramId);
+           paramId == "delayTone" || paramId == "glue" || paramId == "glueMakeup" || isPluginParamId(paramId) ||
+           paramId == "colorFxType" || paramId == "colorFx" || paramId == "beatFxType" || paramId == "beatFxBeats" || paramId == "beatFxLevel" || paramId == "beatFxOn" || paramId == "padFxType" || paramId == "padFxBeats" || paramId == "padFxLevel" || paramId == "padFxOn" || paramId == "fxBpm";
 }
 
 juce::Array<juce::var> sanitizeAutomationLaneViews(const juce::Array<juce::var>& lanes,

@@ -802,6 +802,9 @@ class ProjectState : public juce::ValueTree::Listener
     // app sends: derived from rekordbox's phrases or Stemcel's own analysis, not undoable.
     // Empty clears them.
     bool setLibraryItemSections(const juce::String& itemId, const juce::String& sectionsJson);
+    // Live performance mode's hot and memory cues for an item ({hot: [...], memory: [...]} as
+    // JSON text; empty removes them).
+    bool setLibraryItemPerfCues(const juce::String& itemId, const juce::String& cuesJson);
     bool setLibraryItemTempoDrift(const juce::String& itemId, const juce::String& driftJson);
 
     // Per-item custom cover: the basename of an override image copied into the project's
@@ -1134,6 +1137,7 @@ class ProjectState : public juce::ValueTree::Listener
     static const juce::Identifier kCollapsed;
     static const juce::Identifier kCoverArtHidden;
     static const juce::Identifier kSections;
+    static const juce::Identifier kPerfCues;
     static const juce::Identifier kTempoDrift;
     static const juce::Identifier kCoverArtOverride;
     static const juce::Identifier kLibraryItemId;

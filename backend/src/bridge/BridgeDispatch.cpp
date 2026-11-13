@@ -16,6 +16,7 @@
 #include "PayloadHelpers.h"
 #include "PeakJobCoordinator.h"
 #include "PeaksCache.h"
+#include "PerformanceCommands.h"
 #include "PluginCommands.h"
 #include "PreviewCommands.h"
 #include "ProjectCommands.h"
@@ -246,6 +247,10 @@ bool dispatchLibrary(const DispatchContext& ctx)
     else if (type == "LIBRARY_ITEM_SET_SECTIONS")
     {
         stemcel::handleLibraryItemSetSections(payload, projectState);
+    }
+    else if (type == "LIBRARY_ITEM_SET_PERF_CUES")
+    {
+        stemcel::handleLibraryItemSetPerfCues(payload, projectState);
     }
     else if (type == "LIBRARY_ITEM_SET_TEMPO_DRIFT")
     {
@@ -957,6 +962,12 @@ bool dispatchMidi(const DispatchContext& ctx)
     return false;
 }
 
+bool dispatchPerformance(const DispatchContext& ctx)
+{
+    return stemcel::dispatchPerformanceCommand(ctx.type, ctx.payload, ctx.engine, ctx.projectState, ctx.bridge,
+                                               ctx.decodedCache, ctx.peakPool);
+}
+
 bool dispatchMixdown(const DispatchContext& ctx)
 {
     const auto& type = ctx.type;
@@ -1095,7 +1106,7 @@ void dispatchBridgeMessage(const juce::String& type, const juce::var& payload, s
                          dispatchTrack(ctx) || dispatchProjectFx(ctx) ||
                          dispatchWaveform(ctx) || dispatchProject(ctx) || dispatchMarker(ctx) ||
                          dispatchAudioDevice(ctx) || dispatchMidi(ctx) || dispatchMixdown(ctx) ||
-                         dispatchUndo(ctx) || dispatchTransition(ctx);
+                         dispatchUndo(ctx) || dispatchTransition(ctx) || dispatchPerformance(ctx);
     if (!handled)
     {
         stemcel::log::warn("bridge", "unhandled message type: " + type);

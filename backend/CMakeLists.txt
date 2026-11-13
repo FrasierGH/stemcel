@@ -419,6 +419,11 @@ add_library(stemcel_backend_core STATIC
     src/core/LamePath.cpp
     src/core/Log.cpp
     src/core/NativeApplication.cpp
+    # performance (live DJ mode)
+    src/performance/DeckPlayer.cpp
+    src/performance/PerformanceEngine.cpp
+    src/performance/PerformanceMapping.cpp
+    src/commands/PerformanceCommands.cpp
     # midi
     src/midi/MidiControllerMapping.cpp
     src/midi/MidiControllerProfiles.cpp
@@ -458,6 +463,7 @@ add_library(stemcel_backend_core STATIC
     src/dsp/LoudnessAnalyzer.cpp
     src/dsp/SafetyLimiter.cpp
     src/dsp/SharedFx.cpp
+    src/dsp/DjFx.cpp
     src/dsp/ToneEq.cpp
     src/dsp/VinylScratchProcessor.cpp
     src/dsp/VocalDenoiser.cpp
@@ -604,7 +610,8 @@ target_include_directories(stemcel_backend_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/plugins
     ${CMAKE_CURRENT_SOURCE_DIR}/src/project
     ${CMAKE_CURRENT_SOURCE_DIR}/src/recording
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/stems)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/stems
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/performance)
 
 target_link_libraries(stemcel_backend_core PUBLIC
     juce::juce_core
@@ -701,7 +708,7 @@ set(STEMCEL_MIDI_MAPPING_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/midi-mappings")
 target_compile_definitions(stemcel_backend_core PRIVATE
     STEMCEL_MIDI_MAPPING_DIR="${STEMCEL_MIDI_MAPPING_DIR}")
-file(GLOB STEMCEL_MIDI_MAPPING_FILES CONFIGURE_DEPENDS
+file(GLOB_RECURSE STEMCEL_MIDI_MAPPING_FILES CONFIGURE_DEPENDS
     "${STEMCEL_MIDI_MAPPING_DIR}/*.json")
 add_custom_target(StemcelMidiMappings
     COMMAND ${CMAKE_COMMAND} -E rm -rf
@@ -815,6 +822,11 @@ if(STEMCEL_BUILD_NATIVE_APP)
         app/TimelineActions.cpp
         app/TimelineView.cpp
         app/TimeEdit.cpp
+        app/performance/DeckDisplay.cpp
+        app/performance/PerfBrowser.cpp
+        app/performance/PerformanceTake.cpp
+        app/performance/PerformanceView.cpp
+        app/performance/TrackDriver.cpp
         app/Toasts.cpp
         app/TransitionEditor.cpp
         app/TransitionsPanel.cpp
@@ -962,7 +974,8 @@ tests/MixdownRenderTests.cpp
         tests/BpmDetectorTests.cpp
         tests/VocalDenoiserTests.cpp
         tests/LibraryCleanupTests.cpp
-        tests/DecodedCacheTests.cpp)
+        tests/DecodedCacheTests.cpp
+        tests/PerformanceTests.cpp)
     target_link_libraries(StemcelBackendTests PRIVATE
         stemcel_backend_core)
 
