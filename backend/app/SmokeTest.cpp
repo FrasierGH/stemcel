@@ -4144,6 +4144,36 @@ void SmokeTest::addTempoJourney()
                      }});
     steps.back().poll = true;
     steps.back().timeoutMs = 10000.0;
+    // The timeline strip across the top (a drag selects a range), the platters, and the
+    // three-band meters while deck 1 plays.
+    steps.push_back({"performance timeline strip, platters and meters",
+                     [this, perfWorkspace]
+                     {
+                         auto* view = perfWorkspace() != nullptr ? perfWorkspace()->performanceView() : nullptr;
+                         if (view == nullptr) return;
+                         auto& strip = view->stripForTest();
+                         strip.dragForTest(strip.getWidth() * 0.1F, strip.getWidth() * 0.3F);
+                     },
+                     {},
+                     [this, perfWorkspace](const juce::var&)
+                     {
+                         mirror.refreshNow();
+                         auto* view = perfWorkspace() != nullptr ? perfWorkspace()->performanceView() : nullptr;
+                         if (view == nullptr || !model().timelineSelection.has_value()) return false;
+                         const auto& sel = *model().timelineSelection;
+                         const auto& d = view->stateForTest().decks[0];
+                         const bool bands = d.bands[0] > 0.0F || d.bands[1] > 0.0F || d.bands[2] > 0.0F;
+                         auto* platter = view->platterForTest(1);
+                         const bool platterShown = platter != nullptr && platter->isVisible() && platter->getWidth() > 40;
+                         report.add("performance strip: selected " + juce::String(sel.first / 1000.0, 1) + "-" + juce::String(sel.second / 1000.0, 1)
+                                    + " s; platter " + (platterShown ? "shown" : "hidden") + "; bands " + juce::String(d.bands[0], 3) + " "
+                                    + juce::String(d.bands[1], 3) + " " + juce::String(d.bands[2], 3));
+                         if (!(bands && platterShown && sel.second > sel.first)) return false;
+                         actions.setTimelineSelection(std::nullopt, false);
+                         return true;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 10000.0;
     steps.push_back({"performance cue hold",
                      [inject]
                      {

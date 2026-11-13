@@ -201,6 +201,12 @@ LibraryView::LibraryView(Context context)
     exportButton.setTooltip("Put playlists on a USB stick or SD card for CDJs and XDJs, without rekordbox");
     exportButton.setEnabled(ctx.rekordbox.isAvailable());
     historyButton.onClick = [this] { readHistories(); };
+    performButton.setTooltip("Performance mode, with this collection in its browser (Ctrl/Cmd+Shift+L)");
+    performButton.onClick = [this]
+    {
+        if (ctx.performance) ctx.performance();
+    };
+    addAndMakeVisible(performButton);
     linkButton.setTooltip("Link Export: players on the same network browse and load the collection, with no USB stick (as rekordbox's LINK)");
     linkButton.setClickingTogglesState(false);
     linkButton.onClick = [this] { toggleLink(); };
@@ -1063,6 +1069,8 @@ void LibraryView::resized()
     auto r = getLocalBounds();
     auto bar = r.removeFromTop(40).reduced(8, 6);
     closeButton.setBounds(bar.removeFromLeft(130));
+    bar.removeFromLeft(6);
+    performButton.setBounds(bar.removeFromLeft(130));
     bar.removeFromLeft(10);
     search.setBounds(bar.removeFromLeft(std::min(320, bar.getWidth() / 3)));
     bar.removeFromLeft(10);

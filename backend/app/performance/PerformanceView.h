@@ -5,6 +5,8 @@
 // performance section (PERF_OPEN) and hands the controller over to it; what is played is
 // recorded and written into the timeline when the take ends (PerformanceTake).
 
+#include "JogPlatter.h"
+#include "TimelineStrip.h"
 #include "AppPreferences.h"
 #include "AudioImport.h"
 #include "EngineClient.h"
@@ -59,6 +61,8 @@ class PerformanceView final : public juce::Component, private juce::Timer, priva
     const State& stateForTest() const { return state; }
     const DeckTrackInfo& trackForTest(int deck) const { return infos[static_cast<size_t>(deck - 1)]; }
     PerfBrowser& browserForTest() { return browser; }
+    TimelineStrip& stripForTest() { return *timelineStrip; }
+    JogPlatter* platterForTest(int deck) { return platters[static_cast<size_t>(deck - 1)].get(); }
     void loadForTest(const juce::String& itemId, int deck) { loadItem(itemId, deck); }
     const PerformanceTake& takeForTest() const { return take; }
     void bindForTest(int deck, const juce::String& trackId)
@@ -131,8 +135,19 @@ class PerformanceView final : public juce::Component, private juce::Timer, priva
     juce::Rectangle<int> fxArea;
     std::array<juce::String, 64> sampleNames;
     PerfBrowser browser;
-    juce::TextButton exitButton{"Exit"}, recButton{"REC"}, autoGainButton{"AUTO GAIN"};
+    juce::TextButton exitButton{"Exit"}, recButton{"REC"}, autoGainButton{"AUTO GAIN"}, plattersButton{"DISCS"};
+    std::unique_ptr<TimelineStrip> timelineStrip;
+    std::array<std::unique_ptr<JogPlatter>, 2> platters;
+    // The take being recorded, as the timeline strip shows it: each deck's audible stretches.
+    std::vector<TimelineStrip::Pending> pendingTake;
+    std::array<int, 2> openStretch{-1, -1};
+    bool trackingTake = false;
+    double takeStartMs = 0.0, takeStartClock = 0.0;
+    void trackTake();
     void applyAutoGain(int deck);
+    // The meters' shown levels (dB) per deck and band, falling back slowly.
+    std::array<std::array<double, 3>, 2> meterDb{{{-100.0, -100.0, -100.0}, {-100.0, -100.0, -100.0}}};
+    double meterAt = 0.0;
     juce::Label status, midiLine;
     juce::Rectangle<int> mixerArea, topBar;
     PerformanceTake take;

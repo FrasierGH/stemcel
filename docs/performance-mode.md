@@ -4,8 +4,26 @@ Performance mode puts two decks, a DJ mixer, effects, a sampler and a browser on
 and records what you play into the timeline. You can drive it with a DJ controller (the
 Pioneer DJ DDJ-400, as it works with rekordbox) or with the mouse.
 
-Open it from **View ▸ Performance Mode** (`Ctrl`/`Cmd`+`Shift`+`L`). Press **Exit** or `Esc`
-to return to the timeline.
+Open it with the **Perform** button in the transport bar, or **View ▸ Performance Mode**
+(`Ctrl`/`Cmd`+`Shift`+`L`). Press **Exit** or `Esc` to return to the timeline.
+
+## On screen
+
+- **The timeline**, across the top: every track's clips in a lane, the playhead and the
+  selected range.
+  - While REC is on, the take is drawn as it grows: each deck's audible stretches in red,
+    from where it will land.
+  - Click to move the playhead.
+  - Drag across the lanes to select a range; double-click to clear it.
+- **Platters** beside the waveforms, turning at 33⅓ with the track, as rekordbox and Serato
+  draw them.
+  - The ring shows how far through the track it is (amber in the last 30 seconds), with the
+    cue point on it.
+  - The record glows while its jog is touched.
+  - **DISCS** in the top bar turns them off.
+- **Meters:** each channel's level in three bands (LOW, MID, HI), with the dB of each under
+  the fader.
+- **AUTO GAIN:** see [the library guide](dj-library.md#auto-gain).
 
 ## Recording into the timeline
 
@@ -60,9 +78,10 @@ Pick a track, and that channel works the timeline instead of its deck:
 
 ### A stretch of the timeline on a deck
 
-In the browser, the **Timeline** folder lists the selected range (or the whole arrangement
-if nothing is selected): **The mix**, then each track playing in it. **LOAD** renders that
-stretch, as it sounds, onto the deck.
+Select the range first: drag across the timeline strip at the top of performance mode (or
+select it on the timeline before opening performance mode). In the browser, the **Timeline**
+folder then lists that range (or the whole arrangement if nothing is selected): **The mix**,
+then each track playing in it. **LOAD** renders that stretch, as it sounds, onto the deck.
 
 With REC on, the take replaces that stretch:
 
@@ -122,9 +141,9 @@ line at the top right shows the last message and what it was mapped to.
 | Control | Does | With SHIFT |
 |---|---|---|
 | PLAY/PAUSE | Play or pause. Pressed during a CUE or hot cue hold, playback carries on after you let go | Play/pause |
-| CUE | Paused, away from the cue point: sets it (snapped to the beat with quantize). Paused on it: plays while held and returns on release. Playing: back to the cue point, paused | Back to the start |
+| CUE | Paused, away from the cue point: sets it (snapped to the nearest half beat with quantize). Paused on it: plays while held and returns on release. Playing: back to the cue point, paused | Back to the start |
 | BEAT SYNC | Sync on/off (tempo and beats to the master deck). Held: this deck becomes the master | Tempo range ±6 / 10 / 16 % / WIDE |
-| TEMPO | Tempo, − at the top | |
+| TEMPO | Tempo, − at the top. After a tempo range change the tempo stays put; move the slider to where that tempo sits in the new range and it takes over from there | |
 | Jog, top | Scratch (vinyl mode) | Fast search |
 | Jog, side | Nudge (pitch bend); paused, moves the position | Fast search |
 | LOOP IN / 4BEAT | Loop in point; held: a 4-beat loop. In a loop: adjust the in point with the jog | |
@@ -160,10 +179,12 @@ line at the top right shows the last message and what it was mapped to.
 | Control | Does |
 |---|---|
 | BEAT ◁ ▷ | Beats: 1/16 … 16. While a Pad FX pad is held, that pad's beats. SHIFT: ◁ BPM AUTO, ▷ TAP |
-| FX SELECT | Next effect (SHIFT: previous): Delay, Echo, Ping Pong, Spiral, Reverb, Trans, Filter, Flanger, Phaser, Pitch, Slip Roll, Roll, Vinyl Brake, Helix |
+| FX SELECT | Next effect (SHIFT: previous): Delay, Echo, Low Cut Echo, Multi Tap Delay, Ping Pong, Spiral, Reverb, Shimmer, Trans, Filter, Triplet Filter, Flanger, Phaser, Pitch, Slip Roll, Roll, Triplet Roll, Reverse Roll, Vinyl Brake, Helix, Enigma Jet, Mobius (Saw), Mobius (Triangle) |
 | CH SELECT | Channel 1, channel 2 or the master |
 | LEVEL/DEPTH | The effect's amount |
 | ON/OFF | On or off. Echoes and reverbs ring on after OFF. SHIFT: the Release FX (Vinyl Brake, Echo or Spin Back, chosen on screen) |
 
 The pad FX presets, the Sound Color FX type, the Release FX type and the sampler's bank and
-volume are on screen.
+volume are on screen. The Sound Color FX are Filter, Space, Dub Echo, Sweep, Noise, Crush,
+Jet, Pitch and Gate/Comp. Hot cues and the CUE point snap to the nearest half beat with
+quantize on; loops and beat jumps keep to whole beats.

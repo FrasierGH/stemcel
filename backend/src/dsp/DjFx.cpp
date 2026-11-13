@@ -14,9 +14,14 @@ constexpr double kMaxDelaySeconds = 4.0;  // as the DJM's delay range
 constexpr double kHistorySeconds = 8.0;   // what rolls, the brake and spin back read from
 constexpr double kFadeSeconds = 0.006;
 
-constexpr const char* kBeatNames[] = {"DELAY", "ECHO",  "PING PONG", "SPIRAL", "REVERB",     "TRANS", "FILTER", "FLANGER",
-                                      "PHASER", "PITCH", "SLIP ROLL", "ROLL",   "VINYL BRAKE", "HELIX", "SPIN BACK"};
-constexpr const char* kColorNames[] = {"FILTER", "SPACE", "DUB ECHO", "SWEEP", "NOISE", "CRUSH"};
+constexpr const char* kBeatNames[] = {"DELAY",        "ECHO",       "PING PONG",      "SPIRAL",      "REVERB",      "TRANS",
+                                      "FILTER",       "FLANGER",    "PHASER",         "PITCH",       "SLIP ROLL",   "ROLL",
+                                      "VINYL BRAKE",  "HELIX",      "SPIN BACK",      "LOW CUT ECHO", "MULTI TAP DELAY", "REV ROLL",
+                                      "ENIGMA JET",   "MOBIUS SAW", "MOBIUS TRI",     "TRIPLET FILTER", "TRIPLET ROLL", "SHIMMER"};
+static_assert(sizeof(kBeatNames) / sizeof(kBeatNames[0]) == static_cast<size_t>(BeatFx::count), "a name for every Beat FX");
+constexpr const char* kColorNames[] = {"FILTER", "SPACE", "DUB ECHO", "SWEEP", "NOISE", "CRUSH", "JET", "PITCH", "GATE/COMP"};
+static_assert(sizeof(kColorNames) / sizeof(kColorNames[0]) == static_cast<size_t>(ColorFx::count), "a name for every Color FX");
+constexpr int kMobiusBands = 7;
 
 // A biquad (RBJ cookbook), coefficients set per block.
 struct Biquad
@@ -96,6 +101,15 @@ struct Ring
 float smoothStep(float g, float target, float k) { return g + (target - g) * k; }
 } // namespace
 
+int stepBeatFx(int type, int steps) noexcept
+{
+    const int n = static_cast<int>(kBeatFxOrder.size());
+    int at = 0;
+    for (int i = 0; i < n; ++i)
+        if (static_cast<int>(kBeatFxOrder[static_cast<size_t>(i)]) == type) at = i;
+    return static_cast<int>(kBeatFxOrder[static_cast<size_t>(((at + steps) % n + n) % n)]);
+}
+
 const char* beatFxName(int type) noexcept
 {
     return type >= 0 && type < static_cast<int>(BeatFx::count) ? kBeatNames[type] : "";
@@ -137,6 +151,12 @@ struct BeatFxUnit::State
     double headAgo = 0.0, headSpeed = 1.0, brakeTime = 0.0;
     // Pitch: two grains.
     double grainPhase = 0.0;
+    // Mobius: a bank of band-passes gliding up an octave each cycle (and back for Triangle).
+    std::array<Biquad, kMobiusBands> bands{};
+    double glide = 0.0;
+    // Shimmer: the reverb's own output, read back an octave up into it.
+    Ring shimmer;
+    double shimmerPhase = 0.0;
 };
 
 BeatFxUnit::BeatFxUnit() = default;
@@ -150,6 +170,7 @@ void BeatFxUnit::allocate(double sampleRate)
     s->sr = sampleRate > 0.0 ? sampleRate : 44100.0;
     s->delay.allocate(static_cast<int>(kMaxDelaySeconds * s->sr) + 8);
     s->history.allocate(static_cast<int>(kHistorySeconds * s->sr) + 8);
+    s->shimmer.allocate(static_cast<int>(0.5 * s->sr) + 8);
     s->reverb.setSampleRate(s->sr);
     if (state != nullptr)
     {
@@ -169,6 +190,8 @@ void BeatFxUnit::reset() noexcept
     state->filterBq.reset();
     state->toneBq.reset();
     state->apState.fill(0.0);
+    for (auto& b : state->bands) b.reset();
+    state->shimmer.clear();
     state->onGain = 0.0F;
     state->wasOn = false;
 }
@@ -207,13 +230,15 @@ void BeatFxUnit::process(float* L, float* R, int n) noexcept
     const double sr = s.sr;
     const auto fadeK = static_cast<float>(1.0 - std::exp(-1.0 / (kFadeSeconds * sr)));
     const bool trails = type == BeatFx::delay || type == BeatFx::echo || type == BeatFx::pingPong || type == BeatFx::spiral ||
-                        type == BeatFx::reverb;
+                        type == BeatFx::reverb || type == BeatFx::lowCutEcho || type == BeatFx::multiTapDelay ||
+                        type == BeatFx::shimmer;
     const bool rising = on && !s.wasOn;
     if (static_cast<int>(type) != s.lastType)
     {
         s.lastType = static_cast<int>(type);
         s.filterBq.reset();
         s.apState.fill(0.0);
+        for (auto& b : s.bands) b.reset();
     }
 
     // Idle: nothing on and nothing ringing.
@@ -228,18 +253,37 @@ void BeatFxUnit::process(float* L, float* R, int n) noexcept
     if (rising)
     {
         if (!trails) s.delay.clear();
-        s.rollLen = std::clamp(beatSec * beats * sr, 64.0, static_cast<double>(s.delay.size - 1));
+        // A triplet roll's loop is two-thirds of the step: three in the time of two.
+        const double loopBeats = beats * (type == BeatFx::tripletRoll ? 2.0 / 3.0 : 1.0);
+        s.rollLen = std::clamp(beatSec * loopBeats * sr, 64.0, static_cast<double>(s.delay.size - 1));
         s.rollRecorded = 0;
         s.rollPos = 0.0;
         s.headAgo = 1.0;
         s.headSpeed = type == BeatFx::spinBack ? -3.0 : 1.0;
         s.brakeTime = 0.0;
-        if (type == BeatFx::reverb) s.reverb.reset();
+        if (type == BeatFx::reverb || type == BeatFx::shimmer) s.reverb.reset();
+        if (type == BeatFx::shimmer) s.shimmer.clear();
+        if (type == BeatFx::mobiusSaw || type == BeatFx::mobiusTriangle) s.glide = 0.0;
     }
     s.wasOn = on;
 
     // Per-block parameters.
-    if (type == BeatFx::reverb)
+    if (type == BeatFx::lowCutEcho)
+        s.filterBq.set(1, sr, 250.0 + 1750.0 * static_cast<double>(level), 0.7); // each repeat thinner
+    if (type == BeatFx::mobiusSaw || type == BeatFx::mobiusTriangle)
+    {
+        // Seven band-passes an octave apart, gliding up an octave per cycle (the cycle is the
+        // step, 4 beats at least): a Shepard tone made of the track, rising for ever. The
+        // Triangle glides up and back down. Each band's weight peaks mid-range, so the bands
+        // fading in at the bottom and out at the top are never heard to.
+        const double cycle = std::max(beatSec * 4.0, beatSec * beats) * sr;
+        s.glide += static_cast<double>(n) / cycle;
+        if (s.glide >= 1.0) s.glide -= std::floor(s.glide);
+        const double phase = type == BeatFx::mobiusSaw ? s.glide : (s.glide < 0.5 ? s.glide * 2.0 : 2.0 - s.glide * 2.0);
+        for (int b = 0; b < kMobiusBands; ++b)
+            s.bands[static_cast<size_t>(b)].set(2, sr, 60.0 * std::pow(2.0, static_cast<double>(b) + phase), 4.0);
+    }
+    if (type == BeatFx::reverb || type == BeatFx::shimmer)
     {
         juce::Reverb::Parameters p;
         p.roomSize = static_cast<float>(std::clamp(0.35 + 0.06 * static_cast<double>(s.step.load()), 0.3, 0.98));
@@ -249,7 +293,22 @@ void BeatFxUnit::process(float* L, float* R, int n) noexcept
         p.width = 1.0F;
         s.reverb.setParameters(p);
     }
-    const double lfoInc = 1.0 / std::max(1.0, beatSec * beats * sr * (type == BeatFx::filter || type == BeatFx::flanger || type == BeatFx::phaser ? 2.0 : 1.0));
+    const double lfoInc = 1.0 / std::max(1.0, beatSec * beats * sr *
+                                                   (type == BeatFx::filter || type == BeatFx::flanger || type == BeatFx::phaser ||
+                                                            type == BeatFx::enigmaJet
+                                                        ? 2.0
+                                                        : 1.0));
+    // Mobius: each band's weight, a bell over the octaves (where it sits in the glide).
+    std::array<float, kMobiusBands> bandWeight{};
+    if (type == BeatFx::mobiusSaw || type == BeatFx::mobiusTriangle)
+    {
+        const double phase = type == BeatFx::mobiusSaw ? s.glide : (s.glide < 0.5 ? s.glide * 2.0 : 2.0 - s.glide * 2.0);
+        for (int b = 0; b < kMobiusBands; ++b)
+        {
+            const double x = (static_cast<double>(b) + phase - (kMobiusBands - 1) * 0.5) / 1.6;
+            bandWeight[static_cast<size_t>(b)] = static_cast<float>(std::exp(-x * x));
+        }
+    }
 
     for (int i = 0; i < n; ++i)
     {
@@ -289,6 +348,95 @@ void BeatFxUnit::process(float* L, float* R, int n) noexcept
                 const float wet = type == BeatFx::helix ? g : level;
                 outL = dryL + wl * wet;
                 outR = dryR + wr * wet;
+                break;
+            }
+            case BeatFx::lowCutEcho:
+            {
+                // An echo whose repeats lose their bass, more with each one.
+                const float wl = s.delay.readL(s.delaySamples), wr = s.delay.readR(s.delaySamples);
+                s.delay.push(dryL * g + s.filterBq.run(0, wl) * 0.6F, dryR * g + s.filterBq.run(1, wr) * 0.6F);
+                outL = dryL + wl * (0.4F + 0.6F * level);
+                outR = dryR + wr * (0.4F + 0.6F * level);
+                break;
+            }
+            case BeatFx::multiTapDelay:
+            {
+                // Three taps across the step (¼, ½ and ¾ of it, and the step), panned about.
+                const float al = s.delay.readL(s.delaySamples * 0.25), ar = s.delay.readR(s.delaySamples * 0.25);
+                const float bl = s.delay.readL(s.delaySamples * 0.5), br = s.delay.readR(s.delaySamples * 0.5);
+                const float cl = s.delay.readL(s.delaySamples * 0.75), cr = s.delay.readR(s.delaySamples * 0.75);
+                const float dl = s.delay.readL(s.delaySamples), dr = s.delay.readR(s.delaySamples);
+                s.delay.push(dryL * g + dl * 0.3F, dryR * g + dr * 0.3F);
+                outL = dryL + (al * 0.9F + bl * 0.35F + cl * 0.7F + dl * 0.5F) * level * 0.6F;
+                outR = dryR + (ar * 0.35F + br * 0.9F + cr * 0.5F + dr * 0.7F) * level * 0.6F;
+                break;
+            }
+            case BeatFx::shimmer:
+            {
+                // A reverb fed with its own output an octave up: the tail rises and glows.
+                const double window = 0.08 * sr;
+                s.shimmerPhase += (1.0 - 2.0) / window;
+                if (s.shimmerPhase < 0.0) s.shimmerPhase += 1.0;
+                double ul = 0.0, ur = 0.0;
+                for (int grain = 0; grain < 2; ++grain)
+                {
+                    double ph = s.shimmerPhase + 0.5 * grain;
+                    if (ph >= 1.0) ph -= 1.0;
+                    const double w = std::sin(kPi * ph);
+                    ul += s.shimmer.readL(1.0 + ph * window) * w * w;
+                    ur += s.shimmer.readR(1.0 + ph * window) * w * w;
+                }
+                // The octave fed back gently and soft-limited, so the loop always dies away.
+                // (Weaker once the effect is off, so the tail settles like a reverb's.)
+                const float feed = 0.14F * (0.4F + 0.6F * g);
+                float l = dryL * g + std::tanh(static_cast<float>(ul) * feed), r = dryR * g + std::tanh(static_cast<float>(ur) * feed);
+                s.reverb.processStereo(&l, &r, 1);
+                s.shimmer.push(l * 0.6F, r * 0.6F);
+                outL = dryL + l * level;
+                outR = dryR + r * level;
+                break;
+            }
+            case BeatFx::tripletFilter:
+            {
+                // The filter jumps between three cut-offs, three to each step.
+                if ((i & 31) == 0)
+                {
+                    const int third = static_cast<int>(s.lfo * 3.0) % 3;
+                    static constexpr double cutoffs[] = {400.0, 1600.0, 6000.0};
+                    s.filterBq.set(0, sr, cutoffs[third], 3.0);
+                }
+                const float fl = s.filterBq.run(0, dryL), fr = s.filterBq.run(1, dryR);
+                const float mix = level * g;
+                outL = dryL + (fl - dryL) * mix;
+                outR = dryR + (fr - dryR) * mix;
+                break;
+            }
+            case BeatFx::enigmaJet:
+            {
+                // A jet: a flanger with deep feedback and a slow sweep that seems to keep rising.
+                const double d = (0.0007 + 0.0060 * (0.5 - 0.5 * std::cos(2.0 * kPi * s.lfo))) * sr;
+                const float wl = s.delay.readL(d), wr = s.delay.readR(d);
+                const float fb = 0.6F + 0.3F * level;
+                s.delay.push(dryL + wl * fb, dryR + wr * fb);
+                const float mix = g;
+                outL = dryL + (0.5F * (dryL + wl) - dryL) * mix;
+                outR = dryR + (0.5F * (dryR + wr) - dryR) * mix;
+                break;
+            }
+            case BeatFx::mobiusSaw:
+            case BeatFx::mobiusTriangle:
+            {
+                float ml = 0.0F, mr = 0.0F;
+                for (int b = 0; b < kMobiusBands; ++b)
+                {
+                    auto& band = s.bands[static_cast<size_t>(b)];
+                    const float w = bandWeight[static_cast<size_t>(b)];
+                    ml += band.run(0, dryL) * w;
+                    mr += band.run(1, dryR) * w;
+                }
+                const float mix = level * g;
+                outL = dryL + (ml * 2.2F - dryL) * mix;
+                outR = dryR + (mr * 2.2F - dryR) * mix;
                 break;
             }
             case BeatFx::pingPong:
@@ -388,6 +536,8 @@ void BeatFxUnit::process(float* L, float* R, int n) noexcept
             }
             case BeatFx::roll:
             case BeatFx::slipRoll:
+            case BeatFx::tripletRoll:
+            case BeatFx::reverseRoll:
             {
                 // The first pass is heard as it is recorded (into the delay buffer, as the
                 // loop); then the loop repeats. SLIP ROLL's length follows LEVEL/DEPTH.
@@ -405,14 +555,16 @@ void BeatFxUnit::process(float* L, float* R, int n) noexcept
                     {
                         double len = s.rollLen;
                         if (type == BeatFx::slipRoll) len = std::max(64.0, s.rollLen * (0.25 + 0.75 * level));
-                        const auto at = static_cast<size_t>(std::min(s.rollPos, len - 1.0));
+                        // A reverse roll plays the loop backwards.
+                        const double read = type == BeatFx::reverseRoll ? len - 1.0 - s.rollPos : s.rollPos;
+                        const auto at = static_cast<size_t>(std::clamp(read, 0.0, len - 1.0));
                         rl = s.delay.l[at];
                         rr = s.delay.r[at];
                         s.rollPos += 1.0;
                         if (s.rollPos >= len) s.rollPos = 0.0;
                     }
                 }
-                const float mix = type == BeatFx::roll ? g * (0.5F + 0.5F * level) : g;
+                const float mix = type == BeatFx::slipRoll ? g : g * (0.5F + 0.5F * level);
                 outL = dryL + (rl - dryL) * mix;
                 outR = dryR + (rr - dryR) * mix;
                 break;
@@ -462,6 +614,8 @@ struct ColorFxUnit::State
     float smoothed = 0.0F;
     float holdL = 0.0F, holdR = 0.0F;
     double holdPhase = 0.0;
+    double lfo = 0.0, grainPhase = 0.0;
+    float envelope = 0.0F;
 };
 
 ColorFxUnit::ColorFxUnit() = default;
@@ -514,7 +668,7 @@ void ColorFxUnit::process(float* L, float* R, int n) noexcept
     const auto type = static_cast<ColorFx>(s.type.load(std::memory_order_relaxed));
     if (type == ColorFx::filter) return; // the channel's own filter (ToneEq) does it
     const float target = s.amount.load(std::memory_order_relaxed);
-    const bool echoes = type == ColorFx::dubEcho || type == ColorFx::space;
+    const bool echoes = type == ColorFx::dubEcho || type == ColorFx::space || type == ColorFx::jet;
     if (std::abs(target) < 1.0e-4F && std::abs(s.smoothed) < 1.0e-4F && !echoes) return;
     const double sr = s.sr;
     const auto k = static_cast<float>(1.0 - std::exp(-1.0 / (0.02 * sr)));
@@ -576,6 +730,68 @@ void ColorFxUnit::process(float* L, float* R, int n) noexcept
                 const float noise = (s.random.nextFloat() * 2.0F - 1.0F) * 0.18F * m;
                 ol = dl + s.bq.run(0, noise);
                 orr = dr + s.bq.run(1, noise);
+                break;
+            }
+            case ColorFx::jet:
+            {
+                // A flanger the knob opens up: negative feedback to the left (hollow), positive
+                // to the right (the jet), its sweep over two bars.
+                s.lfo += 1.0 / (beatSec * 8.0 * sr);
+                if (s.lfo >= 1.0) s.lfo -= 1.0;
+                const double d = (0.0008 + 0.0050 * (0.5 - 0.5 * std::cos(2.0 * kPi * s.lfo))) * sr;
+                const float wl = s.delay.readL(d), wr = s.delay.readR(d);
+                const float fb = (left ? -0.85F : 0.85F) * m;
+                s.delay.push(dl + wl * fb, dr + wr * fb);
+                ol = dl + (0.5F * (dl + wl) - dl) * std::min(1.0F, m * 1.5F);
+                orr = dr + (0.5F * (dr + wr) - dr) * std::min(1.0F, m * 1.5F);
+                break;
+            }
+            case ColorFx::pitch:
+            {
+                // The channel shifted down (left) or up (right), to an octave at the ends.
+                s.delay.push(dl, dr);
+                const double ratio = std::pow(2.0, static_cast<double>(s.smoothed));
+                const double window = 0.05 * sr;
+                s.grainPhase += (1.0 - ratio) / window;
+                if (s.grainPhase >= 1.0) s.grainPhase -= 1.0;
+                if (s.grainPhase < 0.0) s.grainPhase += 1.0;
+                double gl = 0.0, gr = 0.0;
+                for (int grain = 0; grain < 2; ++grain)
+                {
+                    double ph = s.grainPhase + 0.5 * grain;
+                    if (ph >= 1.0) ph -= 1.0;
+                    const double w = std::sin(kPi * ph);
+                    gl += s.delay.readL(1.0 + ph * window) * w * w;
+                    gr += s.delay.readR(1.0 + ph * window) * w * w;
+                }
+                const float mix = std::min(1.0F, m * 4.0F);
+                ol = dl + (static_cast<float>(gl) - dl) * mix;
+                orr = dr + (static_cast<float>(gr) - dr) * mix;
+                break;
+            }
+            case ColorFx::gateComp:
+            {
+                // Left: a gate that shuts out everything but the hits. Right: a compressor that
+                // pushes the quiet parts up.
+                const float level = std::max(std::abs(dl), std::abs(dr));
+                const float attack = 0.01F, release = 0.0005F;
+                s.envelope += (level - s.envelope) * (level > s.envelope ? attack : release);
+                const float env = std::max(1.0e-6F, s.envelope);
+                float gain = 1.0F;
+                if (left)
+                {
+                    const float threshold = 0.02F + 0.4F * m;
+                    gain = env < threshold ? std::pow(env / threshold, 2.0F + 6.0F * m) : 1.0F;
+                }
+                else
+                {
+                    const float threshold = 0.5F - 0.4F * m;
+                    const float ratio = 1.0F + 7.0F * m;
+                    if (env > threshold) gain = std::pow(env / threshold, 1.0F / ratio - 1.0F);
+                    gain *= 1.0F + 1.5F * m; // make-up
+                }
+                ol = dl * gain;
+                orr = dr * gain;
                 break;
             }
             case ColorFx::crush:

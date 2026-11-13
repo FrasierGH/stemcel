@@ -60,6 +60,7 @@ class Mapping
       private:
         std::shared_ptr<const Mapping> mapping;
         std::array<std::array<int, 128>, 16> msb{}, lsb{};
+        std::array<std::array<bool, 128>, 16> lsbSeen{}; // the controller sends the LSB: wait for it
     };
 
   private:

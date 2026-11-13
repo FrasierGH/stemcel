@@ -486,9 +486,13 @@ int Mapping::Translator::translate(const juce::uint8* bytes, int size, Event* ou
                     auto& held = msb[static_cast<size_t>(status & 0x0F)];
                     if (!b.isLsb)
                     {
-                        // The MSB alone moves the control (with the last LSB), so a controller
-                        // that never sends the LSB still works; the LSB then refines it.
+                        // The MSB alone moves the control (with the last LSB) while the controller
+                        // has never sent an LSB, so one that doesn't still works. Once it has, the
+                        // value waits for the LSB that follows: an MSB with the previous LSB is a
+                        // value the control never had (a slider passing x.99 to y.00 would read
+                        // y.99 for a moment), which a pickup could take for the slider arriving.
                         held[static_cast<size_t>(data1)] = data2;
+                        if (lsbSeen[static_cast<size_t>(status & 0x0F)][static_cast<size_t>(data1)]) continue;
                         const int low = lsb[static_cast<size_t>(status & 0x0F)][static_cast<size_t>(data1)];
                         e.value = static_cast<float>((data2 << 7) | low) / 16383.0F;
                     }
@@ -496,6 +500,7 @@ int Mapping::Translator::translate(const juce::uint8* bytes, int size, Event* ou
                     {
                         const int high = held[static_cast<size_t>(b.msbData1)];
                         lsb[static_cast<size_t>(status & 0x0F)][static_cast<size_t>(b.msbData1)] = data2;
+                        lsbSeen[static_cast<size_t>(status & 0x0F)][static_cast<size_t>(b.msbData1)] = true;
                         e.value = static_cast<float>((high << 7) | data2) / 16383.0F;
                     }
                 }

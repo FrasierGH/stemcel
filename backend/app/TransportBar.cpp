@@ -160,6 +160,12 @@ TransportBar::TransportBar(ProjectMirror& projectMirror, TimelineViewState& view
     mixerButton.setTooltip("Show the mixer (F9)");
     mixerButton.onClick = [this] { if (onToggleMixer) onToggleMixer(); };
     addAndMakeVisible(mixerButton);
+    performButton.setTooltip("Performance mode: two decks and a DJ mixer, played with a DJ controller (Ctrl/Cmd+Shift+L)");
+    performButton.onClick = [this] { if (onPerformance) onPerformance(); };
+    addAndMakeVisible(performButton);
+    libraryButton.setTooltip("Library mode: your DJ collection, playlists, grids and cues, and export to USB (Ctrl/Cmd+Shift+B)");
+    libraryButton.onClick = [this] { if (onLibrary) onLibrary(); };
+    addAndMakeVisible(libraryButton);
     masterLabel.setFont(uiFont(11.0f, true));
     masterLabel.setColour(juce::Label::textColourId, colours::textDim);
     masterLabel.setJustificationType(juce::Justification::centredRight);
@@ -317,7 +323,7 @@ void TransportBar::paint(juce::Graphics& g)
     const auto ruleAt = [&](int x) { g.drawVerticalLine(x, 9.0f, static_cast<float>(getHeight() - 9)); };
     ruleAt((stopButton.getRight() + position.getX()) / 2 - 2);
     ruleAt((bpmValue.getRight() + snapBox.getX()) / 2);
-    ruleAt(mixerButton.getRight() + 8);
+    ruleAt(libraryButton.getRight() + 8);
     ruleAt(zoomOut.getX() - 8);
     ruleAt((zoomFit.getRight() + masterLabel.getX()) / 2);
 
@@ -401,6 +407,10 @@ void TransportBar::resized()
     followButton.setBounds(area.removeFromLeft(60));
     area.removeFromLeft(4);
     mixerButton.setBounds(area.removeFromLeft(58));
+    area.removeFromLeft(4);
+    performButton.setBounds(area.removeFromLeft(66));
+    area.removeFromLeft(4);
+    libraryButton.setBounds(area.removeFromLeft(62));
 
     auto right = area.removeFromRight(520);
     meterArea = right.removeFromRight(150).reduced(0, 2);

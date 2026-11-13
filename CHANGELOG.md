@@ -12,6 +12,14 @@
   - **Link Export**: LINK serves the collection to players on the same network, as rekordbox's LINK does.
   - **Play histories**: read back from a stick into the collection.
   - **Performance mode**: its browser lists the collection. Cues set on a deck are saved back to the collection.
+- **Performance mode**:
+  - **Timeline strip** across the top: the arrangement's clips, the playhead and the selected range, and the take being recorded as it grows. Click to move the playhead; drag to select the range the browser's Timeline folder offers for the decks.
+  - **Spinning platters** beside the waveforms, with the track's progress and cue point on the ring. On by default; DISCS turns them off.
+  - **Three-band meters**: each channel's LOW, MID and HI levels, with their dB to one decimal under the fader.
+  - **More effects**, the rest of rekordbox's set:
+    - Beat FX: Low Cut Echo, Multi Tap Delay, Shimmer, Triplet Filter, Triplet Roll, Reverse Roll, Enigma Jet, Mobius (Saw) and Mobius (Triangle).
+    - Sound Color FX: Jet, Pitch and Gate/Comp.
+- **Perform** and **Library** buttons in the transport bar, and **Performance Mode** in library mode's top bar.
 - **Auto gain** in performance mode: each deck's track is evened out by its loudness, which is measured as it loads. A recorded take keeps it.
 
 - **Add to rekordbox ▸ With Stemcel's Analysis**: tracks go into rekordbox already analysed, with Stemcel's beat grid, BPM and key plus waveforms and bars from rbxport's analyser, so rekordbox doesn't analyse them again. A track rekordbox analysed itself is left alone. **For rekordbox to Analyse** adds them as before.
@@ -25,6 +33,10 @@
 - Fusion is now the default theme for new installs. A theme already chosen in Preferences stays.
 
 ### Fixed
+
+- **Tempo slider pickup**: after a tempo range change, the slider took over the tempo early, near the held tempo rather than at it, and the tempo jumped. Two causes: a 14-bit slider's coarse half arriving alone read as a value the slider never had, and the pickup's tolerance let a near miss count. The slider now picks up exactly where the held tempo sits in the new range.
+- **DJ controller on the timeline**: only deck 1's Play and jog wheel worked the timeline until deck 2 was switched on with its headphone CUE button. The timeline is now one channel that either deck's Play, Cue, Sync and jog wheel control.
+- **Finer cue quantize**: hot cues and the CUE point (in performance mode and the library editor) snap to half beats, with half-beat lines on the grids.
 
 - **Performance mode headphones**: when the master plays on another device (speakers on the computer, an interface), the headphone cue now goes to the DJ controller's own sound card, so headphones plugged into the controller hear it. The master goes to its outputs 1–2 too, so its HEADPHONES MIX knob still blends them.
 

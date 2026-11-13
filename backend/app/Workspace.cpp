@@ -111,6 +111,8 @@ Workspace::Workspace(EngineClient& engineClient, AppController& appController, A
     view.selectedTrackId = mirror.model().selectedTrackId;
     transport.setTimeline(&timeline);
     transport.onToggleMixer = [this] { toggleMixer(); };
+    transport.onPerformance = [this] { togglePerformance(); };
+    transport.onLibrary = [this] { toggleLibrary(); };
     setupResizeBars();
     addAndMakeVisible(transport);
     addAndMakeVisible(headers);
@@ -372,7 +374,13 @@ void Workspace::toggleLibrary()
     {
         if (performance != nullptr) return; // one mode at a time
         if (live.playing) togglePlay();
-        dj::LibraryView::Context context{engine, waveforms, importer, sharedRekordbox(), toast, [this] { toggleLibrary(); }};
+        dj::LibraryView::Context context{engine, waveforms, importer, sharedRekordbox(), toast, [this] { toggleLibrary(); },
+                                         [this]
+                                         {
+                                             // After the click that asked for it, once library mode has gone.
+                                             juce::Component::SafePointer<Workspace> safe(this);
+                                             juce::MessageManager::callAsync([safe] { if (safe != nullptr) safe->togglePerformance(); });
+                                         }};
         library = std::make_unique<dj::LibraryView>(std::move(context));
         addAndMakeVisible(*library);
         showTimeline(false);

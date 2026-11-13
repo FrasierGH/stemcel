@@ -620,6 +620,8 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
         o->setProperty("recording", v.recording);
         std::array<float, perf::kDecks> peaks{};
         perfEngine().consumePeaks(peaks);
+        std::array<std::array<float, 3>, perf::kDecks> bandPeaks{};
+        perfEngine().consumeBandPeaks(bandPeaks);
         juce::Array<juce::var> decks;
         for (int d = 0; d < perf::kDecks; ++d)
         {
@@ -669,6 +671,9 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
             x->setProperty("padFxHeld", cv.padFxHeld);
             x->setProperty("bound", cv.bound);
             x->setProperty("peak", peaks[static_cast<size_t>(d)]);
+            juce::Array<juce::var> bands;
+            for (const float b : bandPeaks[static_cast<size_t>(d)]) bands.add(b);
+            x->setProperty("bands", bands);
             decks.add(juce::var(x));
         }
         o->setProperty("decks", decks);

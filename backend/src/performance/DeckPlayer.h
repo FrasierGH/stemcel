@@ -148,6 +148,7 @@ class DeckPlayer
     double gridBeat(double p) const noexcept;  // beats (fractional) at a position, along the analysed beats
     double gridPos(double beat) const noexcept; // and back
     double snapNearest(double p) const noexcept;
+    double snapHalf(double p) const noexcept;
     double snapFloor(double p, double gridLen) const noexcept;
     void holdTempo(double tempo) noexcept;
     double tempoFactor() const noexcept;

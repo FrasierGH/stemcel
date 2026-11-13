@@ -39,6 +39,7 @@ struct DeckState
     int beatJumpPage = 1, keyPage = 0, keyboardCue = -1, padFxHeld = -1;
     bool bound = false; // the channel drives a timeline track
     float peak = 0.0F;
+    std::array<float, 3> bands{}; // low, mid, high peaks since the last state
 };
 
 struct FxState
@@ -179,6 +180,8 @@ inline void readState(const juce::var& p, State& s)
         x.padFxHeld = static_cast<int>(d.getProperty("padFxHeld", -1));
         x.bound = static_cast<bool>(d.getProperty("bound", false));
         x.peak = static_cast<float>(num("peak", 0.0));
+        if (const auto* bands = d.getProperty("bands", {}).getArray())
+            for (int b = 0; b < std::min(3, bands->size()); ++b) x.bands[static_cast<size_t>(b)] = static_cast<float>(static_cast<double>((*bands)[b]));
     }
 }
 

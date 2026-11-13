@@ -235,6 +235,12 @@ void DeckDisplay::paintCloseUp(juce::Graphics& g, juce::Rectangle<float> area)
             const bool bar = (((k - downbeat) % 4) + 4) % 4 == 0;
             g.setColour(bar ? colours::text.withAlpha(0.55F) : colours::textDim.withAlpha(0.3F));
             g.fillRect(xAt(t), area.getY(), bar ? 1.5F : 1.0F, area.getHeight());
+            // The half beat after it, where cues can snap too.
+            if (const double half = t + period * 0.5; half <= from + span && half <= state.lengthSec)
+            {
+                g.setColour(colours::textDim.withAlpha(0.14F));
+                g.fillRect(xAt(half), area.getY() + area.getHeight() * 0.25F, 1.0F, area.getHeight() * 0.5F);
+            }
         };
         for (size_t i = 0; i < b.size(); ++i) drawBeat(b[i], static_cast<long long>(i));
         const auto n = static_cast<long long>(b.size());
@@ -254,6 +260,8 @@ void DeckDisplay::paintCloseUp(juce::Graphics& g, juce::Rectangle<float> area)
             const bool bar = ((k % 4) + 4) % 4 == 0;
             g.setColour(bar ? colours::text.withAlpha(0.55F) : colours::textDim.withAlpha(0.3F));
             g.fillRect(xAt(t), area.getY(), bar ? 1.5F : 1.0F, area.getHeight());
+            g.setColour(colours::textDim.withAlpha(0.14F));
+            g.fillRect(xAt(t + beat * 0.5), area.getY() + area.getHeight() * 0.25F, 1.0F, area.getHeight() * 0.5F);
         }
     }
     if (info.audioPath.isNotEmpty())

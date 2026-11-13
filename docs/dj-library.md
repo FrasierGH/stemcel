@@ -5,7 +5,9 @@ track's beat grid, key, hot and memory cues, rating, colour and My Tags. It is o
 playlists and folders, and goes onto USB sticks that CDJs and XDJs read. rekordbox doesn't
 have to be installed, open or involved.
 
-Open it from **View ▸ Library Mode** (`Ctrl`/`Cmd`+`Shift`+`B`). **Back to Timeline**, `Esc`
+Open it with the **Library** button in the transport bar, or **View ▸ Library Mode**
+(`Ctrl`/`Cmd`+`Shift`+`B`). **Performance Mode** in its top bar goes straight to performance
+mode. **Back to Timeline**, `Esc`
 or the same command returns to the project.
 
 The collection is shared by every project. It is kept in `~/Stemcel/Collection`:
@@ -79,7 +81,7 @@ Grid controls:
 | `<` `>` | Move the grid 5 ms earlier or later (1 ms with `Shift`) |
 | **1 Here** | Beat 1 of a bar at the playhead, keeping the tempo |
 | **Tap** | Tap along to set the tempo |
-| **Q** | Quantize: cues snap to the nearest beat |
+| **Q** | Quantize: cues snap to the nearest half beat (the zoomed view draws them) |
 
 A grid changed here is never replaced by analysis, unless you choose **Analyse Again**.
 

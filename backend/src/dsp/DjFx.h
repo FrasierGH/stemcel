@@ -1,11 +1,14 @@
 #pragma once
 
-// DJ effects, as rekordbox and the DDJ-400 have them (the DJM-900NXS2 set):
-//   Beat FX     — Delay, Echo, Ping Pong, Spiral, Reverb, Trans, Filter, Flanger, Phaser,
-//                 Pitch, Slip Roll, Roll, Vinyl Brake, Helix; timed in beats of the track's
-//                 tempo, LEVEL/DEPTH their amount.
-//   Sound Color — Space, Dub Echo, Sweep, Noise, Crush, Filter on a channel's FILTER knob
-//                 (centre off, one character each way).
+// DJ effects, as rekordbox has them (the DJM-900NXS2 set, and the ones its full version and
+// the DJM-A9 add):
+//   Beat FX     — Delay, Echo, Low Cut Echo, Multi Tap Delay, Ping Pong, Spiral, Reverb,
+//                 Shimmer, Trans, Filter, Triplet Filter, Flanger, Phaser, Pitch, Slip Roll,
+//                 Roll, Triplet Roll, Reverse Roll, Vinyl Brake, Helix, Enigma Jet, Mobius
+//                 (Saw), Mobius (Triangle); timed in beats of the track's tempo, LEVEL/DEPTH
+//                 their amount.
+//   Sound Color — Space, Dub Echo, Sweep, Noise, Crush, Filter, Jet, Pitch, Gate/Comp on a
+//                 channel's FILTER knob (centre off, one character each way).
 //   Release FX  — Vinyl Brake, Echo, Spin Back.
 // One DjFxChain per channel: in the performance mixer live, and in a track's TrackChain on
 // the timeline, where automation drives the same parameters — so a recorded take plays back
@@ -39,9 +42,27 @@ enum class BeatFx : int
     vinylBrake,
     helix,
     spinBack, // Release FX only
+    // Added later (after spinBack, so saved automation keeps its numbers).
+    lowCutEcho,
+    multiTapDelay,
+    reverseRoll,
+    enigmaJet,
+    mobiusSaw,
+    mobiusTriangle,
+    tripletFilter,
+    tripletRoll,
+    shimmer,
     count
 };
-constexpr int kBeatFxSelectable = static_cast<int>(BeatFx::helix) + 1; // FX SELECT steps through these
+
+// FX SELECT's order (rekordbox's): every Beat FX but Spin Back, which is Release FX only.
+constexpr std::array<BeatFx, 23> kBeatFxOrder{
+    BeatFx::delay,         BeatFx::echo,      BeatFx::lowCutEcho,    BeatFx::multiTapDelay, BeatFx::pingPong,  BeatFx::spiral,
+    BeatFx::reverb,        BeatFx::shimmer,   BeatFx::trans,         BeatFx::filter,        BeatFx::tripletFilter, BeatFx::flanger,
+    BeatFx::phaser,        BeatFx::pitch,     BeatFx::slipRoll,      BeatFx::roll,          BeatFx::tripletRoll, BeatFx::reverseRoll,
+    BeatFx::vinylBrake,    BeatFx::helix,     BeatFx::enigmaJet,     BeatFx::mobiusSaw,     BeatFx::mobiusTriangle};
+// The type `steps` places on from `type` in FX SELECT's order.
+int stepBeatFx(int type, int steps) noexcept;
 
 enum class ColorFx : int
 {
@@ -51,6 +72,9 @@ enum class ColorFx : int
     sweep,
     noise,
     crush,
+    jet,
+    pitch,
+    gateComp,
     count
 };
 

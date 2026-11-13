@@ -88,14 +88,13 @@ struct DeckRig
 void testCueButtonFollowsCdjRules()
 {
     DeckRig rig;
-    // Paused away from the cue point: CUE sets it here, snapped to the nearest beat.
-    rig.press(Control::seek, 2.26F); // between beats (0.5 s each at 120 BPM)
+    // Paused away from the cue point: CUE sets it here, snapped to the nearest half beat.
+    rig.press(Control::seek, 2.31F); // between beats (0.5 s each at 120 BPM), near the half beat at 2.25
     rig.run(0.05);
     rig.press(Control::cue, 1.0F);
     rig.press(Control::cue, 0.0F);
     auto v = rig.view();
-    require(std::abs(v.cueSec - 2.5) < 1.0e-6 || std::abs(v.cueSec - 2.0) < 1.0e-6,
-            "CUE while paused should set a quantized cue point");
+    require(std::abs(v.cueSec - 2.25) < 1.0e-6, "CUE while paused should set a cue point quantized to the half beat");
     require(!v.playing && !v.previewing, "setting a cue point should not start playback");
     const double cue = v.cueSec;
 
@@ -378,8 +377,75 @@ void testTempoRangeHoldsTempoUntilPickup()
     require(std::abs(rig.view().tempo - 1.05) < 1.0e-6, "a new range should keep the tempo");
     rig.press(Control::tempo, 0.70F); // towards where +5% is in ±16% (0.656), not there yet
     require(std::abs(rig.view().tempo - 1.05) < 1.0e-6, "the slider should not take over before it reaches the tempo");
-    rig.press(Control::tempo, 0.66F);
-    require(std::abs(rig.view().tempo - (1.0 + 0.16 * 0.32)) < 1.0e-6, "past the pickup the slider should take over");
+    rig.press(Control::tempo, 0.66F); // within a hair of it: still held
+    require(std::abs(rig.view().tempo - 1.05) < 1.0e-6, "a near miss should not take over");
+    rig.press(Control::tempo, 0.65F);
+    require(std::abs(rig.view().tempo - (1.0 + 0.16 * 0.30)) < 1.0e-6, "past the pickup the slider should take over");
+}
+
+// The tempo slider through the real DDJ-400 mapping (14-bit MSB then LSB) across range
+// changes: the tempo holds after each change and the slider picks it up where it is.
+void testTempoPickupFromTheController()
+{
+    juce::String error;
+    const auto mapping =
+        Mapping::fromFile(midiMappingDirectory().getChildFile("performance").getChildFile("pioneer-ddj-400.json"), error);
+    require(mapping != nullptr, "the mapping should load");
+    Mapping::Translator t(mapping);
+    PerformanceEngine engine;
+    engine.prepareToPlay(kBlock, kRate);
+    engine.setOpen(true);
+    engine.load(1, makeTrack(20.0, 120.0, 1));
+    juce::AudioBuffer<float> out(2, kBlock);
+    auto render = [&] { engine.getNextAudioBlock(juce::AudioSourceChannelInfo(&out, 0, kBlock)); };
+    auto midi = [&](std::initializer_list<int> bytes)
+    {
+        std::vector<juce::uint8> b;
+        for (int x : bytes) b.push_back(static_cast<juce::uint8>(x));
+        Event e[4];
+        const int n = t.translate(b.data(), static_cast<int>(b.size()), e, 4);
+        for (int i = 0; i < n; ++i) engine.post(e[i]);
+        render();
+    };
+    auto slider = [&](double v)
+    {
+        const int value = juce::jlimit(0, 16383, static_cast<int>(std::lround(v * 16383.0)));
+        midi({0xB0, 0x00, value >> 7});
+        midi({0xB0, 0x20, value & 0x7F});
+    };
+    auto tempo = [&] { return engine.view().decks[0].tempo; };
+    render();
+    for (double v = 0.5; v <= 0.751; v += 0.01) slider(v); // +5% at ±10%
+    const double set = tempo();
+    require(std::abs(set - 1.05) < 0.002, "the slider should set +5%");
+    for (int round = 0; round < 4; ++round)
+    {
+        midi({0x90, 0x60, 0x7F}); // SHIFT + SYNC: the next range
+        midi({0x90, 0x60, 0x00});
+        const double held = tempo();
+        const double range = engine.view().decks[0].range;
+        require(std::abs(held - set) < 0.002, "a new range should keep the tempo");
+        // Where the held tempo is on the slider now; move to it from where the slider is.
+        const double target = std::clamp(((held - 1.0) / range + 1.0) * 0.5, 0.0, 1.0);
+        const double from = engine.view().decks[0].slider;
+        const double step = target > from ? 0.002 : -0.002;
+        for (double v = from; std::abs(v - target) > 0.003; v += step)
+        {
+            slider(v);
+            if (std::abs(tempo() - held) > 0.003)
+            {
+                std::printf("    round %d range %.2f: tempo %.4f at slider %.4f before the pickup at %.4f (held %.4f, from %.4f)\n", round, range,
+                            tempo(), v, target, held, from);
+                require(false, "the tempo should hold until the slider reaches it");
+            }
+        }
+        slider(target);
+        slider(target + 0.004); // then the slider moves the tempo from there
+        if (target < 0.99)
+            require(std::abs(tempo() - (1.0 + range * ((target + 0.004) * 2.0 - 1.0))) < 0.002 && tempo() > held - 0.0001,
+                    "past the pickup the slider should move the tempo on from the held one");
+        slider(target);
+    }
 }
 
 void testSyncedDeckKeepsTempoWhenItPlays()
@@ -550,6 +616,7 @@ void addPerformanceTests(std::vector<TestCase>& tests)
     tests.push_back({"Performance cue stays where CUE set it", testCueStaysWhereCueSetIt});
     tests.push_back({"Performance quantize follows analysed beats", testQuantizeFollowsAnalysedBeats});
     tests.push_back({"Performance tempo range holds tempo until pickup", testTempoRangeHoldsTempoUntilPickup});
+    tests.push_back({"Performance tempo pickup from the controller", testTempoPickupFromTheController});
     tests.push_back({"Performance synced deck keeps tempo when it plays", testSyncedDeckKeepsTempoWhenItPlays});
     tests.push_back({"Performance Beat FX units", testBeatFxUnits});
     tests.push_back({"Performance Sound Color FX units", testColorFxUnits});

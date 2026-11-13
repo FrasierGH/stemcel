@@ -335,8 +335,16 @@ double TrackEditor::snapped(double sec) const
 {
     const auto* t = track();
     if (t == nullptr || !quantize.getToggleState()) return sec;
-    const auto beats = t->beatTimes();
-    if (beats.empty()) return sec;
+    // The beats and the half beats between them.
+    const auto whole = t->beatTimes();
+    if (whole.empty()) return sec;
+    std::vector<double> beats;
+    beats.reserve(whole.size() * 2);
+    for (size_t i = 0; i < whole.size(); ++i)
+    {
+        beats.push_back(whole[i]);
+        if (i + 1 < whole.size()) beats.push_back(0.5 * (whole[i] + whole[i + 1]));
+    }
     const auto at = std::lower_bound(beats.begin(), beats.end(), sec);
     double best = at != beats.end() ? *at : beats.back();
     if (at != beats.begin() && std::abs(*(at - 1) - sec) < std::abs(best - sec)) best = *(at - 1);
@@ -617,6 +625,13 @@ void TrackEditor::paintGrid(juce::Graphics& g, juce::Rectangle<float> area, doub
         g.drawVerticalLine(juce::roundToInt(x), area.getY(), area.getBottom());
         if (numbers && number > 0)
             g.drawText(juce::String(number), juce::Rectangle<float>(x + 2.0F, area.getY(), 14.0F, 12.0F), juce::Justification::topLeft);
+        // In the zoomed view, the half beat after it (cues snap to those too).
+        if (numbers && it + 1 != beats.end())
+        {
+            const float hx = area.getX() + static_cast<float>((0.5 * (*it + *(it + 1)) - startSec) / lengthSec) * area.getWidth();
+            g.setColour(juce::Colours::white.withAlpha(0.13F));
+            g.drawVerticalLine(juce::roundToInt(hx), area.getY() + area.getHeight() * 0.3F, area.getBottom() - area.getHeight() * 0.3F);
+        }
     }
 }
 

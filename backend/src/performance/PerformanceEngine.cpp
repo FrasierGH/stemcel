@@ -256,6 +256,13 @@ void PerformanceEngine::drainRecording(std::vector<RecEvent>& out)
     recFifo.finishedRead(n1 + n2);
 }
 
+void PerformanceEngine::consumeBandPeaks(std::array<std::array<float, 3>, kDecks>& out)
+{
+    for (int d = 0; d < kDecks; ++d)
+        for (int b = 0; b < 3; ++b)
+            out[static_cast<size_t>(d)][static_cast<size_t>(b)] = bandPeaks[static_cast<size_t>(d)][static_cast<size_t>(b)].exchange(0.0F);
+}
+
 void PerformanceEngine::consumePeaks(std::array<float, kDecks>& peaksOut)
 {
     for (int d = 0; d < kDecks; ++d) peaksOut[static_cast<size_t>(d)] = peaks[static_cast<size_t>(d)].exchange(0.0F);
@@ -350,13 +357,14 @@ void PerformanceEngine::beatFxControl(const Event& e) noexcept
             lastTapAt = clock;
             break;
         case Control::fxSelect:
-            if (press) fxType = (fxType + 1) % djfx::kBeatFxSelectable;
+            if (press) fxType = djfx::stepBeatFx(fxType, 1);
             break;
         case Control::fxSelectPrev:
-            if (press) fxType = (fxType + djfx::kBeatFxSelectable - 1) % djfx::kBeatFxSelectable;
+            if (press) fxType = djfx::stepBeatFx(fxType, -1);
             break;
         case Control::fxTypeSelect:
-            fxType = std::clamp(static_cast<int>(std::lround(e.value)), 0, djfx::kBeatFxSelectable - 1);
+            fxType = std::clamp(static_cast<int>(std::lround(e.value)), 0, static_cast<int>(djfx::BeatFx::count) - 1);
+            if (fxType == static_cast<int>(djfx::BeatFx::spinBack)) fxType = static_cast<int>(djfx::BeatFx::echo);
             break;
         case Control::fxChannel:
             fxChannel = std::clamp(static_cast<int>(e.index), 0, 2);
@@ -993,15 +1001,32 @@ void PerformanceEngine::renderBlock(float* const* out, int numOutChannels, int n
             captureLength.store(at + std::max(0, room), std::memory_order_release);
         }
         float peak = 0.0F;
+        // The meter's three bands: two one-pole low-passes split the signal at 250 Hz and
+        // 2.5 kHz (low, the part between, and what is above).
+        const auto kLow = static_cast<float>(1.0 - std::exp(-2.0 * juce::MathConstants<double>::pi * 250.0 / rate));
+        const auto kHigh = static_cast<float>(1.0 - std::exp(-2.0 * juce::MathConstants<double>::pi * 2500.0 / rate));
+        float bandPeak[3] = {0.0F, 0.0F, 0.0F};
         for (int i = 0; i < n; ++i)
         {
             const float l = buf[0][i], r = buf[1][i];
             out[0][i] += l;
             if (numOutChannels > 1) out[1][i] += r;
             peak = std::max({peak, std::abs(l), std::abs(r)});
+            const float m = 0.5F * (l + r);
+            c.bandLow += (m - c.bandLow) * kLow;
+            c.bandBelowHigh += (m - c.bandBelowHigh) * kHigh;
+            bandPeak[0] = std::max(bandPeak[0], std::abs(c.bandLow));
+            bandPeak[1] = std::max(bandPeak[1], std::abs(c.bandBelowHigh - c.bandLow));
+            bandPeak[2] = std::max(bandPeak[2], std::abs(m - c.bandBelowHigh));
         }
         float prev = peaks[static_cast<size_t>(d - 1)].load(std::memory_order_relaxed);
         while (peak > prev && !peaks[static_cast<size_t>(d - 1)].compare_exchange_weak(prev, peak)) {}
+        for (int b = 0; b < 3; ++b)
+        {
+            auto& slot = bandPeaks[static_cast<size_t>(d - 1)][static_cast<size_t>(b)];
+            float was = slot.load(std::memory_order_relaxed);
+            while (bandPeak[b] > was && !slot.compare_exchange_weak(was, bandPeak[b])) {}
+        }
         if (rec) recordParams(d, clock, restart);
     }
     // The sampler into the master, then the master's Beat FX over everything.

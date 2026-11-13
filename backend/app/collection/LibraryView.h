@@ -42,6 +42,7 @@ class LibraryView final : public juce::Component,
         Rekordbox& rekordbox;
         std::function<void(const juce::String& message, bool isError)> notify;
         std::function<void()> close;
+        std::function<void()> performance; // into performance mode
     };
 
     explicit LibraryView(Context context);
@@ -108,7 +109,8 @@ class LibraryView final : public juce::Component,
     TrackEditor trackEditor;
     juce::TextEditor search;
     juce::TextButton addFilesButton{"Add Files..."}, addFolderButton{"Add Folder..."}, rekordboxButton{"From rekordbox..."},
-        exportButton{"Export to USB..."}, historyButton{"Histories from USB"}, closeButton{"Back to Timeline"}, linkButton{"LINK"};
+        exportButton{"Export to USB..."}, historyButton{"Histories from USB"}, closeButton{"Back to Timeline"}, linkButton{"LINK"},
+        performButton{"Performance Mode"};
     void toggleLink();
     void startLink(const juce::String& interfaceName);
     void showLinkStatus();

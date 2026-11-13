@@ -118,6 +118,13 @@ double DeckPlayer::snapNearest(double p) const noexcept
     return gridPos(std::round(gridBeat(p)));
 }
 
+// Cues snap finer: to the half beat (the beats and the eighths between them).
+double DeckPlayer::snapHalf(double p) const noexcept
+{
+    if (!quantizeOn || !hasGrid()) return p;
+    return gridPos(std::round(gridBeat(p) * 2.0) / 2.0);
+}
+
 double DeckPlayer::snapFloor(double p, double grid) const noexcept
 {
     if (!quantizeOn || !hasGrid() || grid <= 0.0 || beatLen() <= 0.0) return p;
@@ -280,9 +287,11 @@ void DeckPlayer::handle(const Event& e) noexcept
             const float v = std::clamp(e.value, 0.0F, 1.0F);
             if (tempoHeld)
             {
-                // The pickup: the slider takes over once it reaches (or passes) the held tempo.
+                // The pickup: the slider takes over once it reaches (or passes) the held tempo,
+                // and not before (a near miss would jump the tempo by the gap, which in WIDE
+                // is several percent).
                 const bool crossed = (lastSlider - takeover) * (v - takeover) <= 0.0F;
-                if (crossed || std::abs(v - takeover) < 0.01F) tempoHeld = false;
+                if (crossed) tempoHeld = false;
                 lastSlider = v;
             }
             slider = v;
@@ -462,7 +471,7 @@ void DeckPlayer::cueButton(bool pressed) noexcept
     }
     if (std::abs(pos - cuePoint) > kAtCueTolerance * sr())
     {
-        cuePoint = std::clamp(snapNearest(pos), 0.0, length());
+        cuePoint = std::clamp(snapHalf(pos), 0.0, length());
         if (std::abs(cuePoint - pos) > 0.5) jumpTo(cuePoint);
         return;
     }
@@ -487,7 +496,7 @@ void DeckPlayer::hotCueButton(int index, bool pressed) noexcept
     if (!cue.set())
     {
         if (loopActive) cue = {loopIn / sr(), loopOut / sr()};
-        else cue = {snapNearest(pos) / sr(), -1.0};
+        else cue = {snapHalf(pos) / sr(), -1.0};
         bumpCues();
         return;
     }

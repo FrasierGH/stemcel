@@ -55,6 +55,8 @@ class TransportBar final : public juce::Component, private juce::ChangeListener,
     void setTimeline(TimelineView* timelineView) { timeline = timelineView; }
     // The Mixer button, which the workspace answers.
     std::function<void()> onToggleMixer;
+    std::function<void()> onPerformance; // performance mode
+    std::function<void()> onLibrary;     // library (export) mode
     void setMixerShown(bool shown);
     void togglePlay();
 
@@ -87,6 +89,7 @@ class TransportBar final : public juce::Component, private juce::ChangeListener,
     juce::TextButton loopButton{"Loop"};
     juce::TextButton followButton{"Follow"};
     juce::TextButton mixerButton{"Mixer"};
+    juce::TextButton performButton{"Perform"}, libraryButton{"Library"};
     juce::TextButton skipBack{"|<"}, skipForward{">|"};
     void skip(bool forward);
     juce::TextButton zoomOut{"-"};

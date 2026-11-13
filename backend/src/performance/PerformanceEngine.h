@@ -157,6 +157,8 @@ class PerformanceEngine final : public juce::AudioSource
     void drainRecording(std::vector<RecEvent>& out);
     // Post-fader channel peaks since the last call (for meters and the controller's LEDs).
     void consumePeaks(std::array<float, kDecks>& peaksOut);
+    // The same, split in three bands (low < 250 Hz < mid < 2.5 kHz < high), for the meters.
+    void consumeBandPeaks(std::array<std::array<float, 3>, kDecks>& out);
     void setCrossfaderCurve(curves::CrossfaderCurve c) noexcept { crossfaderCurve.store(static_cast<int>(c)); }
     void setCueOutputAvailable(bool on) noexcept { cueOutputAvailable.store(on); }
     void collectGarbage();
@@ -188,6 +190,7 @@ class PerformanceEngine final : public juce::AudioSource
         juce::LinearSmoothedValue<float> gain;
         float trim = 0.5F, eqHi = 0.5F, eqMid = 0.5F, eqLow = 0.5F, filter = 0.5F, fader = 1.0F;
         float autoGainDb = 0.0F; // the loaded track's auto gain
+        float bandLow = 0.0F, bandBelowHigh = 0.0F; // the meter's band split (one-pole states)
         bool hpCue = false;
         PadMode padMode = PadMode::hotCue;
         int beatJumpPage = 1, keyPage = 0, keyboardCue = -1;
@@ -276,6 +279,7 @@ class PerformanceEngine final : public juce::AudioSource
 
     TripleBuffer<EngineView> views;
     std::array<std::atomic<float>, kDecks> peaks{};
+    std::array<std::array<std::atomic<float>, 3>, kDecks> bandPeaks{};
 
     // Tracks the decks may hold (message thread).
     std::mutex tracksMutex;
