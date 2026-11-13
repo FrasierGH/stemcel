@@ -458,7 +458,7 @@ void PerformanceEngine::renderSampler(float* const* out, int numOutChannels, int
 double PerformanceEngine::channelGain(int deck) const noexcept
 {
     const auto& c = channels[static_cast<size_t>(deck - 1)];
-    const double trim = juce::Decibels::decibelsToGain(curves::trimDb(c.trim), curves::kSilentDb);
+    const double trim = juce::Decibels::decibelsToGain(curves::trimDb(c.trim) + static_cast<double>(c.autoGainDb), curves::kSilentDb);
     const auto curve = static_cast<curves::CrossfaderCurve>(crossfaderCurve.load(std::memory_order_relaxed));
     // Deck 1 on the crossfader's A side, deck 2 on B (rekordbox's default assign for two decks).
     return trim * curves::faderGain(c.fader) * curves::crossfaderGain(crossfader, deck == 1 ? 0 : 1, curve);
@@ -725,6 +725,7 @@ void PerformanceEngine::apply(const Queued& q) noexcept
     switch (e.control)
     {
         case Control::trim: c.trim = e.value; break;
+        case Control::autoGain: c.autoGainDb = juce::jlimit(-24.0F, 24.0F, e.value); break;
         case Control::eqHi: c.eqHi = e.value; c.eq.setTrebleTarget(static_cast<float>(curves::eqDb(e.value)), false); break;
         case Control::eqMid: c.eqMid = e.value; c.eq.setMidTarget(static_cast<float>(curves::eqDb(e.value)), false); break;
         case Control::eqLow: c.eqLow = e.value; c.eq.setBassTarget(static_cast<float>(curves::eqDb(e.value)), false); break;

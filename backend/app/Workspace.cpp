@@ -357,6 +357,35 @@ void Workspace::toggleMixer()
     resized();
 }
 
+void Workspace::toggleLibrary()
+{
+    auto showTimeline = [this](bool show)
+    {
+        for (auto* c : {static_cast<juce::Component*>(&transport), static_cast<juce::Component*>(&headers),
+                        static_cast<juce::Component*>(&timeline), static_cast<juce::Component*>(&bottomBar),
+                        static_cast<juce::Component*>(&headerBar)})
+            c->setVisible(show);
+        if (bottomPanel != nullptr) bottomPanel->setVisible(show && !isMixerShown());
+        if (mixer != nullptr && !show) mixer->setVisible(false);
+    };
+    if (library == nullptr)
+    {
+        if (performance != nullptr) return; // one mode at a time
+        if (live.playing) togglePlay();
+        dj::LibraryView::Context context{engine, waveforms, importer, sharedRekordbox(), toast, [this] { toggleLibrary(); }};
+        library = std::make_unique<dj::LibraryView>(std::move(context));
+        addAndMakeVisible(*library);
+        showTimeline(false);
+        resized();
+        library->grabKeyboardFocus();
+        return;
+    }
+    library.reset();
+    showTimeline(true);
+    resized();
+    timeline.grabKeyboardFocus();
+}
+
 void Workspace::togglePerformance()
 {
     auto showTimeline = [this](bool show)
@@ -370,6 +399,7 @@ void Workspace::togglePerformance()
     };
     if (performance == nullptr)
     {
+        if (library != nullptr) toggleLibrary(); // performance mode browses the collection itself
         if (live.playing) togglePlay();
         perf::PerformanceView::Context context{engine,
                                                mirror,
@@ -457,6 +487,11 @@ void Workspace::resized()
     if (performance != nullptr)
     {
         performance->setBounds(getLocalBounds());
+        return;
+    }
+    if (library != nullptr)
+    {
+        library->setBounds(getLocalBounds());
         return;
     }
     auto area = getLocalBounds();
@@ -756,7 +791,7 @@ void Workspace::duplicateSelectedTrack()
 
 bool Workspace::keyPressed(const juce::KeyPress& key)
 {
-    if (performance != nullptr) return false; // the timeline's keys are asleep in performance mode
+    if (performance != nullptr || library != nullptr) return false; // the timeline's keys are asleep in these modes
     const auto mods = key.getModifiers();
     const int code = key.getKeyCode();
     const bool plain = !mods.isCommandDown() && !mods.isCtrlDown() && !mods.isAltDown();

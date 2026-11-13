@@ -131,7 +131,8 @@ class PerformanceView final : public juce::Component, private juce::Timer, priva
     juce::Rectangle<int> fxArea;
     std::array<juce::String, 64> sampleNames;
     PerfBrowser browser;
-    juce::TextButton exitButton{"Exit"}, recButton{"REC"};
+    juce::TextButton exitButton{"Exit"}, recButton{"REC"}, autoGainButton{"AUTO GAIN"};
+    void applyAutoGain(int deck);
     juce::Label status, midiLine;
     juce::Rectangle<int> mixerArea, topBar;
     PerformanceTake take;

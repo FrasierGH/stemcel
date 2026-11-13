@@ -444,3 +444,59 @@ fn stemcel_cues_go_onto_a_desktop_track_without_overwriting_unless_asked() {
     assert_ne!(added["trackId"], track.as_str(), "{added}");
     unsafe { rbx_close(library) };
 }
+
+#[test]
+fn the_collection_exports_to_a_stick_a_player_can_read() {
+    let source = tempfile::tempdir().unwrap();
+    let stick = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let audio = source.path().join("four seconds.wav");
+    std::fs::write(&audio, wav_of(44_100 * 4)).unwrap();
+    let beats: Vec<f64> = (0..9).map(|i| 0.12 + f64::from(i) * 60.0 / 128.0).collect();
+    let request = json!({
+        "action": "export", "root": stick.path().to_string_lossy(), "sync": true,
+        "cacheDir": cache.path().to_string_lossy(),
+        "tracks": [{ "id": 41, "path": audio.to_string_lossy(), "title": "Four Seconds", "artist": "Stemcel",
+            "key": "A minor", "bpm": 128.0, "firstBeat": 1, "beats": beats, "durationSec": 4.0, "rating": 3,
+            "colour": 2, "tags": ["Peak"], "dateAdded": "2026-11-13",
+            "cues": [{ "slot": 0, "pos": 0.12 }, { "slot": 4, "pos": 1.06, "end": 2.0 }, { "slot": -1, "pos": 0.59 }] }],
+        "playlists": [
+            { "id": 7, "name": "Sets", "parent": 0, "folder": true, "tracks": [] },
+            { "id": 8, "name": "Friday", "parent": 7, "folder": false, "tracks": [0] }
+        ]
+    });
+    let mut stages = Vec::new();
+    let report = crate::stick::export(&request, &mut |p| stages.push(p["stage"].as_str().unwrap_or_default().to_owned()), &|| false).unwrap();
+    assert_eq!(report["ok"], true, "{report}");
+    assert_eq!(report["tracks"], 1, "{report}");
+    assert!(report["failed"].as_array().unwrap().is_empty(), "{report}");
+    assert!(stages.iter().any(|s| s == "analysing"), "{stages:?}");
+
+    let verified = rbl_export::verify(stick.path()).unwrap();
+    assert!(verified.is_ok(), "{verified:?}");
+    assert_eq!(verified.tracks, 1);
+    assert_eq!(verified.playlist_entries, 1);
+    assert!(verified.analysis_present >= 1);
+
+    // The grid and cues in the stick's analysis.
+    let bytes = std::fs::read(stick.path().join("PIONEER/rekordbox/export.pdb")).unwrap();
+    let pdb = rbl_pdb::Pdb::parse(&bytes).unwrap();
+    let rows = pdb.track_rows(pdb.table(rbl_pdb::PageType::Tracks).unwrap());
+    let dat = stick.path().join(rows[0].analyze_path.trim_start_matches('/'));
+    let anlz = rbl_anlz::Anlz::read(&dat).unwrap();
+    let grid = anlz.beat_grid().unwrap();
+    assert_eq!(grid.len(), 9);
+    assert_eq!(grid[0].time_ms, 120);
+    assert_eq!(grid[0].beat_number, 1);
+    assert_eq!(grid[4].beat_number, 1);
+    assert_eq!(grid[0].tempo_x100, 12_800);
+
+    // Exported again with nothing changed: the analysis comes from the cache, the audio stays.
+    let again = crate::stick::export(&request, &mut |_| {}, &|| false).unwrap();
+    assert_eq!(again["ok"], true, "{again}");
+    assert_eq!(again["added"], 0, "{again}");
+
+    let history = crate::stick::histories(&stick.path().to_string_lossy()).unwrap();
+    assert_eq!(history["ok"], true, "{history}");
+    assert!(history["histories"].as_array().unwrap().is_empty());
+}

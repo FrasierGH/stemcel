@@ -66,6 +66,8 @@ struct DeckTrackInfo
     juce::String itemId, title, artist, key, audioPath;
     double bpm = 0.0, lengthSec = 0.0, anchorSec = 0.0;
     std::vector<double> beats; // the analysed beats (seconds), as the deck quantizes to them
+    bool hasLoudness = false;  // measured as it loaded, for auto gain
+    double lufs = 0.0;
 };
 
 struct State

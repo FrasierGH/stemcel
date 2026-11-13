@@ -61,6 +61,7 @@ constexpr ControlName kControlNames[] = {
     {Control::hotCue, "hotCue"},
     {Control::hotCueDelete, "hotCueDelete"},
     {Control::seek, "seek"},
+    {Control::autoGain, "autoGain"},
     {Control::crossfader, "crossfader"},
     {Control::masterLevel, "masterLevel"},
     {Control::masterCue, "masterCue"},

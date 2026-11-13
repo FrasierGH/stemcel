@@ -1388,6 +1388,69 @@ fn read_one_lenient(path: &Path) -> Result<device_library::Library, String> {
 }
 
 mod analyse;
+mod stick;
+
+/// Every mounted drive: `{ok, volumes: [{name, root, removable, fileSystem, totalBytes,
+/// freeBytes, hasExport, exportTracks, exportPlaylists}]}`.
+#[no_mangle]
+pub extern "C" fn rbx_volumes_json() -> *mut c_char {
+    guarded(|| stick::volumes().to_string())
+}
+
+/// Ejects the drive mounted at `root`: `{ok, error?}`.
+///
+/// # Safety
+/// `root` must be NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn rbx_eject_json(root: *const c_char) -> *mut c_char {
+    let Some(root) = opt_str(root) else { return to_c(&error_json("no drive")) };
+    guarded(|| stick::eject(root).to_string())
+}
+
+/// Told how an export is going (`ctx`, then JSON: {stage, done, total, title, bytesDone?,
+/// bytesTotal?}); called on the exporting thread.
+pub type ExportProgressFn = extern "C" fn(*mut std::ffi::c_void, *const c_char);
+/// Asked whether to stop; nonzero stops the export before it publishes anything.
+pub type ExportCancelledFn = extern "C" fn(*mut std::ffi::c_void) -> i32;
+
+/// Writes a selection of Stemcel's collection to a USB stick as a rekordbox export (see
+/// `stick::export` for the request). Blocking; returns the report `{ok, verified, tracks,
+/// playlists, added, updated, reused, removed, failed, skipped, warnings}` or `{ok:false,
+/// error}`.
+///
+/// # Safety
+/// `request` must be NUL-terminated; the callbacks, when given, must be callable with `ctx`
+/// for the length of the call.
+#[no_mangle]
+pub unsafe extern "C" fn rbx_export_json(
+    request: *const c_char, progress: Option<ExportProgressFn>, cancelled: Option<ExportCancelledFn>,
+    ctx: *mut std::ffi::c_void,
+) -> *mut c_char {
+    let Some(request) = opt_str(request).and_then(|text| serde_json::from_str::<Value>(text).ok()) else {
+        return to_c(&error_json("bad request"));
+    };
+    let ctx = ctx as usize; // carried into the closures; only handed back to the callbacks
+    guarded(move || {
+        let mut tell = |value: Value| {
+            if let (Some(f), Ok(text)) = (progress, CString::new(value.to_string())) {
+                f(ctx as *mut std::ffi::c_void, text.as_ptr());
+            }
+        };
+        let stop = || cancelled.is_some_and(|f| f(ctx as *mut std::ffi::c_void) != 0);
+        stick::export(&request, &mut tell, &stop).unwrap_or_else(|e| json!({ "ok": false, "error": e })).to_string()
+    })
+}
+
+/// The play histories on the stick at `root`: `{ok, histories: [{name, tracks: [{deviceId,
+/// collectionId, title, artist, path}]}]}`.
+///
+/// # Safety
+/// `root` must be NUL-terminated.
+#[no_mangle]
+pub unsafe extern "C" fn rbx_stick_history_json(root: *const c_char) -> *mut c_char {
+    let Some(root) = opt_str(root) else { return to_c(&error_json("no drive")) };
+    guarded(|| stick::histories(root).unwrap_or_else(|e| json!({ "ok": false, "error": e })).to_string())
+}
 
 #[cfg(test)]
 mod tests;

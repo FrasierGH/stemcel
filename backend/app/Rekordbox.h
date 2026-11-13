@@ -4,6 +4,7 @@
 #include <juce_events/juce_events.h>
 
 #include <array>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -137,6 +138,19 @@ class Rekordbox final
     // the whole snapshot. Replaces any library already open.
     RekordboxSnapshot open(const juce::File& masterDb = {}, const juce::String& passphrase = {});
     RekordboxSnapshot open(const RekordboxSource& source);
+    // Every mounted drive, for exporting to: {ok, volumes: [{name, root, removable,
+    // fileSystem, totalBytes, freeBytes, hasExport, exportTracks, exportPlaylists}]}.
+    juce::var volumes();
+    juce::var eject(const juce::File& root);
+    // A stick's play histories: {ok, histories: [{name, tracks: [{deviceId, collectionId,
+    // title, artist, path}]}]}.
+    juce::var stickHistories(const juce::File& root);
+    // Writes Stemcel's collection to a stick (dj::Collection::exportRequest). Blocking, on
+    // the caller's thread; `progress` and `cancelled` are called on it too.
+    juce::var exportToStick(const juce::var& request, std::function<void(const juce::var&)> progress,
+                            std::function<bool()> cancelled);
+    // The library open now (what write() changes).
+    RekordboxSource currentSource();
     // This computer's library first, then libraries on drives and on connected USB/SD
     // exports (each export's Device Library and OneLibrary as two entries). Slow-ish.
     std::vector<RekordboxSource> listSources();

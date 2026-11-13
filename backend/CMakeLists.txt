@@ -823,6 +823,10 @@ if(STEMCEL_BUILD_NATIVE_APP)
         app/TimelineActions.cpp
         app/TimelineView.cpp
         app/TimeEdit.cpp
+        app/collection/Collection.cpp
+        app/collection/LibraryView.cpp
+        app/collection/TrackEditor.cpp
+        app/collection/UsbExport.cpp
         app/performance/DeckDisplay.cpp
         app/performance/PerfBrowser.cpp
         app/performance/PerformanceTake.cpp

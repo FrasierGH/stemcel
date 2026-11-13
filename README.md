@@ -266,6 +266,11 @@ Stemcel is built around a single idea: **arranging audio should be simple.**
   mouse, with the headphone cue on outputs 3–4. Everything you play is recorded into
   the timeline as clips and automation you can edit. See
   **[performance mode](docs/performance-mode.md)**.
+- **Library mode, a DJ library without rekordbox.** Your collection across projects, with
+  playlists, beat grids, hot and memory cues, ratings, colours and My Tags. Bring in your
+  rekordbox library, fix grids and cues, and export playlists to a USB stick for CDJs and
+  XDJs (or sync one). Read back the players' play histories. See
+  **[library mode](docs/dj-library.md)**.
 - **Supported MIDI deck control.** Use a recognised deck controller for
   transport, timeline and marker navigation, clip browsing, selected-track
   mixer controls, platter holding and scratching, plus supported lights and

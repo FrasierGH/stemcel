@@ -4,6 +4,15 @@
 
 ### Added
 
+- **Library mode** (View ▸ Library Mode, Ctrl/Cmd+Shift+B), a DJ library that doesn't need rekordbox. See [the guide](docs/dj-library.md).
+  - **Collection**: one collection across projects. Tracks are analysed in the background for BPM, beat grid, key and loudness. They can be organised in playlists and folders, searched and sorted, and given ratings, colours and My Tags.
+  - **Grid and cue editor**: the waveform with numbered beats. Set the tempo, halve or double it, nudge the grid, put beat 1 at the playhead, or tap the tempo. Set hot cues A–H (with loops and names) and memory cues, quantized to the beat. Preview the track as you edit.
+  - **From rekordbox**: brings this computer's rekordbox library in, with every track's grid, key, cues, rating and colour, and every playlist.
+  - **Export to USB**: playlists go onto a stick or SD card as a rekordbox export that CDJs and XDJs read: both libraries, the audio, analysis from Stemcel's grid, and the cues. Sync makes the stick hold exactly the choice; Add puts it beside what's there. The stick is verified afterwards and can be ejected.
+  - **Play histories**: read back from a stick into the collection.
+  - **Performance mode**: its browser lists the collection. Cues set on a deck are saved back to the collection.
+- **Auto gain** in performance mode: each deck's track is evened out by its loudness, which is measured as it loads. A recorded take keeps it.
+
 - **Add to rekordbox ▸ With Stemcel's Analysis**: tracks go into rekordbox already analysed, with Stemcel's beat grid, BPM and key plus waveforms and bars from rbxport's analyser, so rekordbox doesn't analyse them again. A track rekordbox analysed itself is left alone. **For rekordbox to Analyse** adds them as before.
 
 - **Send Cues to rekordbox** (library item menu): the hot and memory cues set in performance mode go onto the track in this computer's rekordbox collection, which gets the file first if it hasn't got it. Hot cues fill only empty slots unless you choose to replace rekordbox's. Like Add to rekordbox, it waits for rekordbox to be closed and backs its database up first.

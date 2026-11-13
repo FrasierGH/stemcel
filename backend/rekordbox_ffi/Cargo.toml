@@ -35,6 +35,7 @@ symphonia = { version = "0.5", default-features = false, features = ["aac", "iso
 
 [dev-dependencies]
 tempfile = "3"
+rbl-pdb = { git = "https://github.com/chrisle/rbxport", rev = "b739d369665b492534dc2eae0733322c040a26d5" }
 
 [profile.release]
 opt-level = 3

@@ -67,6 +67,7 @@ enum class Control : std::uint8_t
     hotCue,       // index 0..7, value pressed
     hotCueDelete, // index 0..7
     seek,         // value = seconds
+    autoGain,     // value = dB added to the channel: the track's auto gain
     // Mixer and browser
     crossfader,
     masterLevel,

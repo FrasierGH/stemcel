@@ -88,7 +88,7 @@ pub fn analyse_track(
         .iter()
         .map(|b| Beat { beat_number: b.beat_number, tempo_x100: b.tempo_x100, time_ms: b.time_ms })
         .collect();
-    let grid = stemcel_grid(known, length_secs, &theirs).unwrap_or(theirs);
+    let grid = stemcel_grid(known, length_secs, &theirs, None).unwrap_or(theirs);
     let bpm_x100 = if known.bpm > 0.0 {
         (known.bpm * 100.0).round() as u32
     } else {
@@ -153,9 +153,9 @@ fn write_new_files(dat: &Path, files: &[(&str, &Vec<u8>)]) -> Result<(), String>
     Ok(())
 }
 
-/// Stemcel's beats, numbered in bars as the analyser places the downbeats. `None` when
-/// Stemcel has no grid.
-pub fn stemcel_grid(known: &Known, length_secs: f64, theirs: &[Beat]) -> Option<Vec<Beat>> {
+/// Stemcel's beats, numbered in bars: from `first` (the bar position of the first beat)
+/// when known, else as the analyser places the downbeats. `None` when Stemcel has no grid.
+pub fn stemcel_grid(known: &Known, length_secs: f64, theirs: &[Beat], first: Option<u16>) -> Option<Vec<Beat>> {
     let mut beats = known.beats_secs.clone();
     if beats.len() < 2 {
         // A steady grid: the anchor and the tempo, over the whole track.
@@ -178,11 +178,11 @@ pub fn stemcel_grid(known: &Known, length_secs: f64, theirs: &[Beat]) -> Option<
     // The downbeat: the bar position of the analyser's beat nearest Stemcel's first.
     let first_ms = beats[0] * 1000.0;
     let interval_ms = (beats[1] - beats[0]) * 1000.0;
-    let start = theirs
+    let start = first.filter(|f| (1..=4).contains(f)).unwrap_or_else(|| theirs
         .iter()
         .min_by(|a, b| (f64::from(a.time_ms) - first_ms).abs().total_cmp(&(f64::from(b.time_ms) - first_ms).abs()))
         .filter(|b| (f64::from(b.time_ms) - first_ms).abs() < interval_ms / 2.0)
-        .map_or(1, |b| b.beat_number.clamp(1, 4));
+        .map_or(1, |b| b.beat_number.clamp(1, 4)));
     // A steady tempo (every beat within 1% of the BPM) is stored as that BPM, as a
     // rekordbox grid holds it; otherwise each beat carries its own.
     let steady = known.bpm > 0.0

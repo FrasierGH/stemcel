@@ -2,6 +2,7 @@
 
 #include "Log.h"
 #include "Theme.h"
+#include "collection/Collection.h"
 #include "DjFx.h"
 
 namespace stemcel::native::perf
@@ -62,6 +63,15 @@ PerformanceView::PerformanceView(Context context)
             o->setProperty("on", true);
             ctx.engine.send("PERF_RECORD", juce::var(o));
         }
+    };
+    addAndMakeVisible(autoGainButton);
+    autoGainButton.setClickingTogglesState(true);
+    autoGainButton.setToggleState(static_cast<bool>(ctx.prefs.get("performance", "autoGain", true)), juce::dontSendNotification);
+    autoGainButton.setTooltip("Auto gain: each deck's level evened out by its track's loudness, as rekordbox does");
+    autoGainButton.onClick = [this]
+    {
+        ctx.prefs.set("performance", "autoGain", autoGainButton.getToggleState());
+        for (int d = 1; d <= kDecks; ++d) applyAutoGain(d);
     };
     addAndMakeVisible(status);
     status.setFont(uiFont(12.0F));
@@ -316,12 +326,28 @@ void PerformanceView::onLoaded(const juce::var& p)
     info.key = p.getProperty("key", "").toString();
     info.bpm = static_cast<double>(p.getProperty("bpm", 0.0));
     info.lengthSec = static_cast<double>(p.getProperty("lengthSec", 0.0));
+    info.hasLoudness = p.hasProperty("lufs");
+    info.lufs = static_cast<double>(p.getProperty("lufs", 0.0));
     if (const auto* item = ctx.mirror.model().findLibraryItem(info.itemId))
     {
         info.audioPath = item->audioPath();
         info.anchorSec = item->beatAnchorSec;
         info.beats = item->beats;
+        // The DJ collection keeps the loudness, for the next export and load.
+        if (info.hasLoudness) dj::Collection::shared().setLoudness(item->filePath, info.lufs);
     }
+    applyAutoGain(deck);
+}
+
+void PerformanceView::applyAutoGain(int deck)
+{
+    // Toward a reference loudness: down by up to 12 dB, up by up to 6 (what a timeline
+    // track's level reaches, so a recorded take still sounds as played). Nothing when off
+    // or not measured.
+    constexpr double kReferenceLufs = -10.0;
+    const auto& info = infos[static_cast<size_t>(deck - 1)];
+    const double gain = autoGainButton.getToggleState() && info.hasLoudness ? juce::jlimit(-12.0, 6.0, kReferenceLufs - info.lufs) : 0.0;
+    sendControl(ctx.engine, "autoGain", deck, gain);
 }
 
 void PerformanceView::onCues(const juce::var& p)
@@ -336,6 +362,10 @@ void PerformanceView::onCues(const juce::var& p)
     o->setProperty("itemId", itemId);
     o->setProperty("cues", juce::var(cues));
     ctx.engine.send("LIBRARY_ITEM_SET_PERF_CUES", juce::var(o));
+    // And with the track in the DJ collection, where the export and library mode find them.
+    if (const auto* item = ctx.mirror.model().findLibraryItem(itemId))
+        if (const auto* track = dj::Collection::shared().findByPath(item->filePath))
+            dj::Collection::shared().update(track->id, [&cues](dj::Track& t) { t.cues = dj::cuesFromPerf(juce::var(cues), t.cues); });
 }
 
 void PerformanceView::onUi(const juce::var& p)
@@ -396,6 +426,47 @@ void PerformanceView::loadRow(const BrowserRow& row, int deck)
         loadItem(row.itemId, deck);
         return;
     }
+    // A DJ collection track: the project's item for its file, or it joins the library with
+    // the collection's grid, key and cues.
+    if (row.collectionId != 0)
+    {
+        const auto* track = dj::Collection::shared().find(row.collectionId);
+        if (track == nullptr) return;
+        for (const auto& item : ctx.mirror.model().library)
+            if (item.kind == "source" && dj::normalisedPath(item.filePath) == dj::normalisedPath(track->path))
+            {
+                loadItem(item.id, deck);
+                return;
+            }
+        ImportRequest request;
+        request.file = juce::File(track->path);
+        request.hints.title = track->title;
+        request.hints.artist = track->artist;
+        request.hints.key = track->key;
+        request.hints.bpm = track->bpm;
+        if (const auto beats = track->beatTimes(); track->bpm > 0.0 && !beats.empty())
+        {
+            double anchor = beats.front();
+            for (size_t i = 0; i < beats.size() && i < 4; ++i)
+                if (track->beatNumberAt(static_cast<int>(i)) == 1)
+                {
+                    anchor = beats[i];
+                    break;
+                }
+            request.hints.beatAnchorSec = anchor;
+        }
+        request.hints.perfCues = dj::toPerfCues(*track);
+        juce::Component::SafePointer<PerformanceView> safe(this);
+        if (ctx.toast) ctx.toast("Adding " + track->displayTitle() + " to the project...", true);
+        ctx.importer.import(std::vector<ImportRequest>{request},
+                            [safe, deck](const juce::StringArray& ids)
+                            {
+                                if (safe == nullptr || ids.isEmpty()) return;
+                                safe->ctx.mirror.refreshNow();
+                                safe->loadItem(ids[0], deck);
+                            });
+        return;
+    }
     // A rekordbox track joins the library first (with rekordbox's grid and key).
     ImportRequest request;
     request.file = juce::File(row.path);
@@ -437,7 +508,10 @@ void PerformanceView::loadItem(const juce::String& itemId, int deck)
         for (const double b : item->beats) beats.add(b);
         o->setProperty("beats", beats);
     }
-    const auto cues = item->raw.getProperty("perfCues", {});
+    // The DJ collection's cues for the track, else the item's own.
+    auto cues = item->raw.getProperty("perfCues", {});
+    if (const auto* track = dj::Collection::shared().findByPath(item->filePath); track != nullptr && !track->cues.empty())
+        cues = dj::toPerfCues(*track);
     if (cues.isObject())
     {
         o->setProperty("hotCues", cues.getProperty("hot", {}));
@@ -859,6 +933,7 @@ void PerformanceView::resized()
     auto bar = topBar;
     exitButton.setBounds(bar.removeFromLeft(70).reduced(2));
     recButton.setBounds(bar.removeFromLeft(70).reduced(2));
+    autoGainButton.setBounds(bar.removeFromLeft(96).reduced(2));
     status.setBounds(bar.removeFromLeft(bar.getWidth() / 2));
     midiLine.setBounds(bar);
     area.removeFromTop(4);

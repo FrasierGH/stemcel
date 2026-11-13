@@ -187,6 +187,7 @@ class PerformanceEngine final : public juce::AudioSource
         ToneEq eq;
         juce::LinearSmoothedValue<float> gain;
         float trim = 0.5F, eqHi = 0.5F, eqMid = 0.5F, eqLow = 0.5F, filter = 0.5F, fader = 1.0F;
+        float autoGainDb = 0.0F; // the loaded track's auto gain
         bool hpCue = false;
         PadMode padMode = PadMode::hotCue;
         int beatJumpPage = 1, keyPage = 0, keyboardCue = -1;

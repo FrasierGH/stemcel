@@ -40,6 +40,8 @@ struct DeckTrack
     double anchorSec = 0.0;      // a downbeat
     std::vector<double> beats;   // the analysed beats (seconds); the grid follows them where known
     double cueSec = -1.0;        // the cue point to start at; < 0 = the first beat
+    bool hasLoudness = false;     // its integrated loudness (LUFS), measured as it loads
+    double loudnessLufs = 0.0;
     std::array<Cue, kHotCues> hotCues{};
     std::array<Cue, kMemoryCues> memoryCues{};
 };

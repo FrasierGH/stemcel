@@ -1,5 +1,7 @@
 #include "PerfBrowser.h"
 
+#include "collection/Collection.h"
+
 #include "Theme.h"
 
 namespace stemcel::native::perf
@@ -23,7 +25,26 @@ void PerfBrowser::buildTree()
 {
     const auto selected = treeCursor >= 0 && treeCursor < static_cast<int>(nodes.size()) ? nodes[static_cast<size_t>(treeCursor)].kind + "/" + nodes[static_cast<size_t>(treeCursor)].id : juce::String();
     nodes.clear();
-    nodes.push_back({"Collection", "folder", "collection", 0, true});
+    // The DJ collection (library mode's), with its playlists and histories.
+    auto& dj = dj::Collection::shared();
+    dj.load();
+    nodes.push_back({"DJ Library", "folder", "djlib", 0, true});
+    if (expanded.count("djlib") != 0)
+    {
+        nodes.push_back({"All tracks", "djAll", {}, 1, false});
+        std::function<void(juce::int64, int, bool)> add = [&](juce::int64 parent, int depth, bool histories)
+        {
+            for (const auto* p : dj.childrenOf(parent, histories))
+            {
+                const auto key = "dj" + juce::String(p->id);
+                nodes.push_back({p->name, p->isFolder() ? "folder" : "djList", p->isFolder() ? key : juce::String(p->id), depth, p->isFolder()});
+                if (p->isFolder() && expanded.count(key) != 0) add(p->id, depth + 1, false);
+            }
+        };
+        add(0, 1, false);
+        add(0, 1, true);
+    }
+    nodes.push_back({"This project", "folder", "collection", 0, true});
     if (expanded.count("collection") != 0)
     {
         nodes.push_back({"All", "all", {}, 1, false});
@@ -115,6 +136,28 @@ void PerfBrowser::buildRows()
                     region(t.name, t.id);
                     break;
                 }
+        return;
+    }
+    if (node.kind == "djAll" || node.kind == "djList")
+    {
+        const auto& dj = dj::Collection::shared();
+        auto addCollection = [&](const dj::Track& t)
+        {
+            BrowserRow row;
+            row.collectionId = t.id;
+            row.title = t.displayTitle();
+            row.artist = t.artist;
+            row.key = t.key;
+            row.bpm = t.bpm;
+            row.durationSec = t.durationSec;
+            row.path = t.path;
+            rows.push_back(std::move(row));
+        };
+        if (node.kind == "djAll")
+            for (const auto& t : dj.tracks()) addCollection(t);
+        else if (const auto* p = dj.findPlaylist(node.id.getLargeIntValue()))
+            for (const auto id : p->tracks)
+                if (const auto* t = dj.find(id)) addCollection(*t);
         return;
     }
     const auto* snapshot = rekordbox ? rekordbox() : nullptr;

@@ -50,6 +50,7 @@ enum : juce::CommandID
     pasteClips,
     toggleMixer,
     togglePerformance,
+    toggleLibraryMode,
     selectAllClips,
     joinClips,
     toggleAutomation,

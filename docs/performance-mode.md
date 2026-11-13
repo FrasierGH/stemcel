@@ -108,7 +108,8 @@ This works like Add to rekordbox:
   ~/Stemcel/Backups/rekordbox.
 
 To put cues on a USB stick, send them to the computer's library, then export or sync from
-rekordbox.
+rekordbox. Or skip rekordbox: tracks in Stemcel's own [DJ library](dj-library.md) keep the
+cues set on a deck, and its **Export to USB** puts them on the stick.
 
 ## Pioneer DJ DDJ-400
 

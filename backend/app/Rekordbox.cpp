@@ -82,6 +82,11 @@ struct Rekordbox::Functions
     using Location = char* (*)(const void*);
     using Refusal = char* (*)(const void*);
     using Write = char* (*)(const void*, const char*);
+    using Volumes = char* (*)();
+    using ByRoot = char* (*)(const char*);
+    using ExportProgress = void (*)(void*, const char*);
+    using ExportCancelled = int (*)(void*);
+    using Export = char* (*)(const char*, ExportProgress, ExportCancelled, void*);
 
     Open open = nullptr;
     Close close = nullptr;
@@ -100,6 +105,11 @@ struct Rekordbox::Functions
     Refusal refusal = nullptr;
     Write write = nullptr;
     Fixture deviceFixture = nullptr;
+    // Sticks without rekordbox.
+    Volumes volumes = nullptr;
+    ByRoot eject = nullptr;
+    ByRoot history = nullptr;
+    Export exportStick = nullptr;
 };
 
 const RekordboxTrack* RekordboxSnapshot::findTrack(const juce::String& id) const
@@ -175,6 +185,10 @@ Rekordbox::Rekordbox()
     f->refusal = reinterpret_cast<Functions::Refusal>(library.getFunction("rbx_write_refusal_json"));
     f->write = reinterpret_cast<Functions::Write>(library.getFunction("rbx_write_json"));
     f->deviceFixture = reinterpret_cast<Functions::Fixture>(library.getFunction("rbx_build_device_fixture"));
+    f->volumes = reinterpret_cast<Functions::Volumes>(library.getFunction("rbx_volumes_json"));
+    f->eject = reinterpret_cast<Functions::ByRoot>(library.getFunction("rbx_eject_json"));
+    f->history = reinterpret_cast<Functions::ByRoot>(library.getFunction("rbx_stick_history_json"));
+    f->exportStick = reinterpret_cast<Functions::Export>(library.getFunction("rbx_export_json"));
     if (f->open == nullptr || f->close == nullptr || f->freeString == nullptr || f->snapshot == nullptr
         || f->track == nullptr || f->tags == nullptr || f->picture == nullptr)
     {
@@ -242,6 +256,12 @@ RekordboxSnapshot Rekordbox::open(const juce::File& masterDb, const juce::String
         return snapshot;
     }
     return readSnapshot(source);
+}
+
+RekordboxSource Rekordbox::currentSource()
+{
+    std::scoped_lock lock(mutex);
+    return openSource;
 }
 
 RekordboxSnapshot Rekordbox::open(const RekordboxSource& source)
@@ -713,6 +733,60 @@ juce::var Rekordbox::buildFixture(const juce::File& dir, const juce::File& audio
     const auto json = juce::JSON::parse(juce::String::fromUTF8(raw));
     functions->freeString(raw);
     return json;
+}
+
+juce::var Rekordbox::volumes()
+{
+    if (functions == nullptr || functions->volumes == nullptr) return failure(loadError.isNotEmpty() ? loadError : "This build can't list drives.");
+    return juce::JSON::parse(callJson([&] { return functions->volumes(); }));
+}
+
+juce::var Rekordbox::eject(const juce::File& root)
+{
+    if (functions == nullptr || functions->eject == nullptr) return failure("This build can't eject drives.");
+    const auto path = root.getFullPathName();
+    return juce::JSON::parse(callJson([&] { return functions->eject(path.toRawUTF8()); }));
+}
+
+juce::var Rekordbox::stickHistories(const juce::File& root)
+{
+    if (functions == nullptr || functions->history == nullptr) return failure("This build can't read play histories.");
+    const auto path = root.getFullPathName();
+    return juce::JSON::parse(callJson([&] { return functions->history(path.toRawUTF8()); }));
+}
+
+namespace
+{
+struct ExportCallbacks
+{
+    std::function<void(const juce::var&)> progress;
+    std::function<bool()> cancelled;
+};
+
+void exportProgress(void* ctx, const char* json)
+{
+    auto* callbacks = static_cast<ExportCallbacks*>(ctx);
+    if (callbacks->progress && json != nullptr) callbacks->progress(juce::JSON::parse(juce::String::fromUTF8(json)));
+}
+
+int exportCancelled(void* ctx)
+{
+    auto* callbacks = static_cast<ExportCallbacks*>(ctx);
+    return callbacks->cancelled && callbacks->cancelled() ? 1 : 0;
+}
+} // namespace
+
+juce::var Rekordbox::exportToStick(const juce::var& request, std::function<void(const juce::var&)> progress,
+                                   std::function<bool()> cancelled)
+{
+    if (functions == nullptr || functions->exportStick == nullptr) return failure("This build can't export to USB.");
+    ExportCallbacks callbacks{std::move(progress), std::move(cancelled)};
+    const auto text = juce::JSON::toString(request, true);
+    auto result = juce::JSON::parse(callJson([&] { return functions->exportStick(text.toRawUTF8(), exportProgress, exportCancelled, &callbacks); }));
+    if (!result.isObject()) return failure("The export gave no answer.");
+    log::info("rekordbox", "export to " + request.getProperty("root", "").toString() + ": "
+                               + juce::JSON::toString(result, true).substring(0, 2000));
+    return result;
 }
 
 Rekordbox& sharedRekordbox()
