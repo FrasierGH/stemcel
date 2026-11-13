@@ -150,6 +150,13 @@ class Rekordbox final
     // Adds audio files to this computer's library (and to the playlist named `playlist`,
     // made if missing), whatever library is open. Same refusal and backup as write().
     juce::var addToComputerLibrary(const juce::Array<juce::File>& files, const juce::String& playlist);
+    // Stemcel's hot and memory cues onto `file`'s track in this computer's library (the file
+    // added first when the collection hasn't got it). `cues` is a library item's perfCues
+    // ({hot: [null | {pos, end?}] x8, memory: [{pos, end?}]}, seconds). rekordbox's own hot
+    // cues stay unless `replaceHot`. Same refusal and backup as write().
+    juce::var sendCuesToComputerLibrary(const juce::File& file, const juce::var& cues, bool replaceHot);
+    // That write's request (an empty var when there are no cues).
+    static juce::var cuesRequest(const juce::File& file, const juce::var& cues, bool replaceHot);
     // Where the database copies go: ~/Stemcel/Backups/rekordbox/<time> <library>/. The
     // smoke test points it into its own folder.
     static juce::File backupFolder();
@@ -179,6 +186,7 @@ class Rekordbox final
     RekordboxSnapshot readSnapshot(RekordboxSource source);
     // Refusal, backup, write against `target` (the open handle or a temporary one).
     juce::var writeTo(void* target, const RekordboxSource& source, const juce::File& database, const juce::var& request);
+    juce::var writeToComputerLibrary(const juce::var& request);
     bool backUp(const RekordboxSource& source, const juce::File& database, juce::String& error);
 
     juce::DynamicLibrary library;

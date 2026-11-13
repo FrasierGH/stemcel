@@ -84,7 +84,7 @@ GeneralPreferencesPage::GeneralPreferencesPage(AppPreferences& preferences) : pr
     toastsHint.setColour(juce::Label::textColourId, colours::textFaint);
     // Applied at once: the window is built again in the new theme.
     styleLabel(themeLabel);
-    const auto savedTheme = prefs.get("ui", "theme", "terminal").toString();
+    const auto savedTheme = prefs.get("ui", "theme", "fusionDark").toString();
     fillCombo(themeBox, {"terminal", "fusionDark"}, {"Terminal", "Fusion Dark"}, savedTheme);
     themeNote.setFont(uiFont(12.0f));
     themeNote.setColour(juce::Label::textColourId, colours::textFaint);

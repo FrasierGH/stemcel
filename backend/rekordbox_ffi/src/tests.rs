@@ -326,3 +326,59 @@ fn a_drive_with_both_export_folders_opens_the_newer() {
         unsafe { rbx_close(library) };
     }
 }
+
+#[test]
+fn stemcel_cues_go_onto_a_desktop_track_without_overwriting_unless_asked() {
+    let dir = tempfile::tempdir().unwrap();
+    let location = fixture_library(dir.path());
+    let library = open_fixture(&location);
+    let snapshot = take_json(unsafe { rbx_snapshot_json(library) });
+    let track = snapshot["tracks"][0]["id"].as_str().unwrap().to_owned();
+    let write = |request: Value| take_json(unsafe { rbx_write_json(library, c(&request.to_string()).as_ptr()) });
+    if rbl_db::is_rekordbox_app_running() {
+        return; // writes are refused while rekordbox runs
+    }
+
+    let first = write(json!({ "action": "setCues", "trackId": track,
+        "hot": [{ "slot": 0, "posMs": 1000.0 }, { "slot": 2, "posMs": 2000.0, "endMs": 4000.0 }],
+        "memory": [{ "posMs": 500.0 }] }));
+    assert_eq!(first["ok"], true, "{first}");
+    assert_eq!(first["added"], 3, "{first}");
+
+    // Slot A is taken: kept as it is, and the memory cue is not added twice.
+    let again = write(json!({ "action": "setCues", "trackId": track,
+        "hot": [{ "slot": 0, "posMs": 3000.0 }], "memory": [{ "posMs": 505.0 }] }));
+    assert_eq!(again["added"], 0, "{again}");
+    assert_eq!(again["skipped"], 2, "{again}");
+
+    // Asked to replace: slot A moves to 3 s.
+    let replaced = write(json!({ "action": "setCues", "trackId": track, "replaceHot": true,
+        "hot": [{ "slot": 0, "posMs": 3000.0 }] }));
+    assert_eq!(replaced["replaced"], 1, "{replaced}");
+    unsafe { rbx_close(library) };
+
+    let library = open_fixture(&location);
+    let detail = take_json(unsafe { rbx_track_json(library, c(&track).as_ptr()) });
+    let cues = detail["cues"].as_array().unwrap();
+    let hot = |letter: &str| cues.iter().find(|c| c["hot"] == letter).cloned();
+    assert_eq!(hot("A").unwrap()["positionMs"], 3000, "{detail}");
+    let loop_c = hot("C").unwrap();
+    assert_eq!(loop_c["positionMs"], 2000, "{detail}");
+    assert_eq!(loop_c["endMs"], 4000, "{detail}");
+    assert!(cues.iter().any(|c| c["memory"] == true && c["positionMs"] == 500), "{detail}");
+    assert_eq!(cues.iter().filter(|c| c["hot"] == "A").count(), 1, "{detail}");
+
+    // By file: the track the collection already holds, or the file added first.
+    let path = snapshot["tracks"][0]["path"].as_str().unwrap().to_owned();
+    let write = |request: Value| take_json(unsafe { rbx_write_json(library, c(&request.to_string()).as_ptr()) });
+    let by_path = write(json!({ "action": "setCues", "path": path, "hot": [{ "slot": 7, "posMs": 100.0 }] }));
+    assert_eq!(by_path["trackId"], track.as_str(), "{by_path}");
+    assert_eq!(by_path["imported"], false, "{by_path}");
+    assert_eq!(by_path["added"], 1, "{by_path}");
+    let fresh = dir.path().join("fresh.wav");
+    std::fs::write(&fresh, wav_bytes()).unwrap();
+    let added = write(json!({ "action": "setCues", "path": fresh.to_string_lossy(), "memory": [{ "posMs": 250.0 }] }));
+    assert_eq!(added["imported"], true, "{added}");
+    assert_ne!(added["trackId"], track.as_str(), "{added}");
+    unsafe { rbx_close(library) };
+}

@@ -593,8 +593,64 @@ juce::var Rekordbox::addToComputerLibrary(const juce::Array<juce::File>& files, 
     request->setProperty("action", "importFiles");
     request->setProperty("paths", paths);
     if (playlist.isNotEmpty()) request->setProperty("playlist", playlist);
-    const juce::var requestVar(request);
+    return writeToComputerLibrary(juce::var(request));
+}
 
+juce::var Rekordbox::sendCuesToComputerLibrary(const juce::File& file, const juce::var& cues, bool replaceHot)
+{
+    if (functions == nullptr) return failure(loadError);
+    if (functions->write == nullptr || functions->refusal == nullptr || functions->location == nullptr)
+        return failure("This build's rekordbox reader can't write.");
+    const auto request = cuesRequest(file, cues, replaceHot);
+    if (!request.isObject()) return failure("It has no hot or memory cues to send.");
+    return writeToComputerLibrary(request);
+}
+
+juce::var Rekordbox::cuesRequest(const juce::File& file, const juce::var& cues, bool replaceHot)
+{
+    // Seconds to milliseconds; a cue with an end after its start is a loop.
+    const auto cue = [](const juce::var& c, juce::DynamicObject& into)
+    {
+        const double pos = c.getProperty("pos", -1.0);
+        if (pos < 0.0) return false;
+        into.setProperty("posMs", pos * 1000.0);
+        if (c.hasProperty("end"))
+        {
+            const double end = c.getProperty("end", 0.0);
+            if (end > pos) into.setProperty("endMs", end * 1000.0);
+        }
+        return true;
+    };
+    juce::Array<juce::var> hot;
+    juce::Array<juce::var> memory;
+    if (const auto* slots = cues.getProperty("hot", {}).getArray())
+        for (int slot = 0; slot < std::min(8, slots->size()); ++slot)
+        {
+            auto* c = new juce::DynamicObject();
+            const juce::var held(c);
+            c->setProperty("slot", slot);
+            if (cue((*slots)[slot], *c)) hot.add(held);
+        }
+    if (const auto* list = cues.getProperty("memory", {}).getArray())
+        for (const auto& m : *list)
+        {
+            auto* c = new juce::DynamicObject();
+            const juce::var held(c);
+            if (cue(m, *c)) memory.add(held);
+        }
+    if (hot.isEmpty() && memory.isEmpty()) return {};
+    auto* request = new juce::DynamicObject();
+    request->setProperty("action", "setCues");
+    request->setProperty("path", file.getFullPathName());
+    request->setProperty("hot", hot);
+    request->setProperty("memory", memory);
+    request->setProperty("replaceHot", replaceHot);
+    return juce::var(request);
+}
+
+// A write to this computer's library, whatever library is open.
+juce::var Rekordbox::writeToComputerLibrary(const juce::var& requestVar)
+{
     std::scoped_lock lock(mutex);
     if (handle != nullptr && openSource.kind == RekordboxSource::Kind::computer)
         return writeTo(handle, openSource, openDatabase, requestVar);

@@ -83,6 +83,33 @@ so the HEADPHONES MIX knob still blends the two. The status line above the decks
 the headphones are. The DDJ-400's
 own MASTER LEVEL, HEADPHONES MIX and HEADPHONES LEVEL knobs act in its hardware.
 
+## Hot cues and rekordbox
+
+Hot cues and memory cues set in performance mode are Stemcel's own. They are saved with
+the library item in the project, and Stemcel never reads or changes rekordbox's cues
+while you play.
+
+To take them into rekordbox, right-click the item in the library and choose **Send Cues to
+rekordbox**:
+
+- **Into Empty Hot Cue Slots** adds Stemcel's hot cues only where rekordbox has none, so
+  your rekordbox hot cues stay as they are.
+- **Replacing rekordbox's Hot Cues** puts Stemcel's hot cue in each slot Stemcel uses.
+  rekordbox's cues in the other slots stay.
+
+Memory cues are added, except where rekordbox already has one within 10 ms. The track is
+found in this computer's rekordbox collection by its file, and the file is added to the
+collection first if it isn't there yet.
+
+This works like Add to rekordbox:
+
+- rekordbox must be closed.
+- Before the first change in a session, Stemcel copies rekordbox's database to
+  ~/Stemcel/Backups/rekordbox.
+
+To put cues on a USB stick, send them to the computer's library, then export or sync from
+rekordbox.
+
 ## Pioneer DJ DDJ-400
 
 Connect the controller before opening the mode. It is enabled for you while the mode is

@@ -37,8 +37,8 @@ class CueOutput final : private juce::AudioIODeviceCallback
 
   private:
     void audioDeviceIOCallbackWithContext(const float* const* inputs, int numInputs, float* const* outputs, int numOutputs,
-                                          int numSamples, const juce::AudioIODeviceCallbackContext&) override;
-    void audioDeviceAboutToStart(juce::AudioIODevice*) override {}
+                                          int numSamples, const juce::AudioIODeviceCallbackContext& context) override;
+    void audioDeviceAboutToStart(juce::AudioIODevice* /*device*/) override {}
     void audioDeviceStopped() override {}
 
     juce::AudioDeviceManager factory; // a device-type factory only, never initialised

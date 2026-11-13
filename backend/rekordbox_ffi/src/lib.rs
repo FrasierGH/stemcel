@@ -918,7 +918,10 @@ fn write_refusal(library: &RbxLibrary) -> Option<&'static str> {
 /// `addTracks {playlistId, trackIds}`, `removeTracks {playlistId, trackIds}`, and, for a
 /// desktop library only, `importFiles {paths, playlistId? | playlist?}` (adds audio files
 /// to the collection, and to that playlist, or to the playlist of that name at the top
-/// level, made if missing).
+/// level, made if missing) and `setCues {trackId, hot: [{slot, posMs, endMs?}], memory:
+/// [{posMs, endMs?}], replaceHot?}` (Stemcel's cues onto a track; hot cues fill empty
+/// slots unless replaceHot; `path` in place of `trackId` finds the track by its file, adding
+/// the file to the collection when it isn't there yet).
 ///
 /// The caller backs the database up first; this takes no backup of its own.
 ///
@@ -941,6 +944,19 @@ pub unsafe extern "C" fn rbx_write_json(library: *const RbxLibrary, request: *co
         };
         result.unwrap_or_else(|e| error_json(&e))
     })
+}
+
+/// The live track whose file is `path`. rekordbox keeps forward slashes on every system,
+/// and a Windows path matches whatever its case or slashes.
+fn track_with_file(conn: &rusqlite::Connection, path: &Path) -> rusqlite::Result<Option<String>> {
+    use rusqlite::OptionalExtension;
+    let wanted = path.to_string_lossy().replace('\\', "/");
+    let sql = if cfg!(windows) {
+        "SELECT CAST(ID AS TEXT) FROM djmdContent WHERE REPLACE(FolderPath, '\\', '/') = ?1 COLLATE NOCASE AND rb_local_deleted = 0 ORDER BY ID LIMIT 1"
+    } else {
+        "SELECT CAST(ID AS TEXT) FROM djmdContent WHERE FolderPath = ?1 AND rb_local_deleted = 0 ORDER BY ID LIMIT 1"
+    };
+    conn.query_row(sql, [wanted], |r| r.get(0)).optional()
 }
 
 fn text<'a>(request: &'a Value, key: &str) -> Result<&'a str, String> {
@@ -1022,6 +1038,76 @@ fn desktop_write(location: &LibraryLocation, request: &Value) -> Result<String, 
             let playlist = target.map_or(Value::Null, Value::String);
             json!({ "ok": true, "added": added, "existing": existing, "refused": refused, "trackIds": ids, "id": playlist, "changed": added })
         }
+        "setCues" => {
+            // Stemcel's hot and memory cues onto a track. Hot cues fill empty slots, unless
+            // `replaceHot`: then a slot's cue is replaced. A memory cue already there (within
+            // 10 ms) is not added twice.
+            let mut imported = false;
+            let content = match request.get("trackId").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+                Some(id) => id.to_owned(),
+                None => {
+                    let path = PathBuf::from(text(request, "path")?);
+                    match track_with_file(writer.library().connection(), &path).map_err(|err| err.to_string())? {
+                        Some(id) => id,
+                        None => match writer.import_files(std::slice::from_ref(&path)).map_err(e)?.pop() {
+                            Some(ImportOutcome::Added(id) | ImportOutcome::Existing(id)) => {
+                                imported = true;
+                                id
+                            }
+                            Some(ImportOutcome::Refused(why)) => return Err(format!("rekordbox can't take {}: {why}", path.display())),
+                            None => return Err("the file wasn't added".to_owned()),
+                        },
+                    }
+                }
+            };
+            let content = content.as_str();
+            let replace = request.get("replaceHot").and_then(Value::as_bool).unwrap_or(false);
+            let existing: Vec<(String, i64, i64)> = {
+                let conn = writer.library().connection();
+                let mut statement = conn
+                    .prepare("SELECT CAST(ID AS TEXT), Kind, InMsec FROM djmdCue WHERE ContentID = ?1 AND rb_local_deleted = 0")
+                    .map_err(|err| err.to_string())?;
+                let rows = statement
+                    .query_map([content], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)))
+                    .map_err(|err| err.to_string())?;
+                rows.filter_map(Result::ok).collect()
+            };
+            // Hot cues A–H are kinds 1, 2, 3, 5, 6, 7, 8, 9 (4 is the active memory loop).
+            const HOT_KINDS: [u8; 8] = [1, 2, 3, 5, 6, 7, 8, 9];
+            let ms = |v: &Value, key: &str| v.get(key).and_then(Value::as_f64).filter(|x| *x >= 0.0).map(|x| x.round() as u32);
+            let (mut added, mut replaced, mut skipped) = (0u32, 0u32, 0u32);
+            for cue in request.get("hot").and_then(Value::as_array).cloned().unwrap_or_default() {
+                let Some(slot) = cue.get("slot").and_then(Value::as_u64).filter(|s| *s < 8) else { continue };
+                let Some(start) = ms(&cue, "posMs") else { continue };
+                let kind = HOT_KINDS[slot as usize];
+                if let Some((id, _, _)) = existing.iter().find(|(_, k, _)| *k == i64::from(kind)) {
+                    if !replace {
+                        skipped += 1;
+                        continue;
+                    }
+                    writer.delete_cue(id).map_err(e)?;
+                    replaced += 1;
+                }
+                match ms(&cue, "endMs").filter(|end| *end > start) {
+                    Some(end) => writer.add_loop(content, kind, start, end, 0).map_err(e)?,
+                    None => writer.add_cue(content, kind, start).map_err(e)?,
+                };
+                added += 1;
+            }
+            for cue in request.get("memory").and_then(Value::as_array).cloned().unwrap_or_default() {
+                let Some(start) = ms(&cue, "posMs") else { continue };
+                if existing.iter().any(|(_, k, at)| (*k == 0 || *k == 4) && (at - i64::from(start)).abs() <= 10) {
+                    skipped += 1;
+                    continue;
+                }
+                match ms(&cue, "endMs").filter(|end| *end > start) {
+                    Some(end) => writer.add_loop(content, 0, start, end, 0).map_err(e)?,
+                    None => writer.add_cue(content, 0, start).map_err(e)?,
+                };
+                added += 1;
+            }
+            json!({ "ok": true, "trackId": content, "imported": imported, "added": added, "replaced": replaced, "skipped": skipped, "changed": added })
+        }
         other => return Err(format!("unknown action {other}")),
     };
     Ok(reply.to_string())
@@ -1040,6 +1126,9 @@ fn device_write(root: &Path, format: Format, request: &Value) -> Result<String, 
         "delete" => Edit::Delete { id: number("id")? },
         "addTracks" => Edit::Add { playlist: number("playlistId")?, tracks: numbers("trackIds"), duplicates: false },
         "removeTracks" => Edit::Remove { playlist: number("playlistId")?, tracks: numbers("trackIds") },
+        "setCues" => {
+            return Err("Cues go onto a device through a rekordbox export. Send them to this computer's library, then export or sync the tracks from rekordbox.".to_owned())
+        }
         "importFiles" => {
             return Err("New audio goes onto a device through a rekordbox export. Add the tracks to this computer's library, then export or sync them from rekordbox.".to_owned())
         }

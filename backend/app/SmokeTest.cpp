@@ -404,6 +404,31 @@ void SmokeTest::addSteps()
                          if (list == nullptr || list->trackIds != juce::StringArray(rekordboxTrackId))
                              return fail("reread", juce::var(reread.error));
 
+                         // Performance-mode cues onto the track, found by its file: hot A at 1 s,
+                         // a loop on hot C, a memory cue at 0.5 s.
+                         const auto* fixtureTrack = reread.findTrack(rekordboxTrackId);
+                         if (fixtureTrack == nullptr) return fail("cue track", {});
+                         const auto perfCues = juce::JSON::parse(
+                             R"({"hot":[{"pos":1.0},null,{"pos":2.0,"end":4.0},null,null,null,null,null],"memory":[{"pos":0.5}]})");
+                         const auto sent = rb.write(Rekordbox::cuesRequest(juce::File(fixtureTrack->path), perfCues, false));
+                         if (!ok(sent) || static_cast<int>(sent.getProperty("added", 0)) != 3
+                             || sent.getProperty("trackId", {}).toString() != rekordboxTrackId)
+                             return fail("cues", sent);
+                         // Again: rekordbox's (now these) hot cues stay, the memory cue isn't doubled.
+                         const auto resent = rb.write(Rekordbox::cuesRequest(juce::File(fixtureTrack->path), perfCues, false));
+                         if (!ok(resent) || static_cast<int>(resent.getProperty("added", -1)) != 0) return fail("cues again", resent);
+                         rb.open(rekordboxFixtureDb, rekordboxFixturePassphrase);
+                         const auto detail = rb.trackDetail(rekordboxTrackId);
+                         int found = 0;
+                         for (const auto& c : detail.cues)
+                         {
+                             if (c.hot == "A" && std::abs(c.positionMs - 1000.0) < 1.0) ++found;
+                             if (c.hot == "C" && std::abs(c.positionMs - 2000.0) < 1.0 && std::abs(c.endMs - 4000.0) < 1.0) ++found;
+                             if (c.memory && std::abs(c.positionMs - 500.0) < 1.0) ++found;
+                         }
+                         if (found != 3 || detail.cues.size() != 3)
+                             return fail("cues reread", juce::var(juce::String(found) + " of 3, " + juce::String(static_cast<int>(detail.cues.size())) + " cues"));
+
                          // A USB export: OneLibrary and Device Library, edited separately.
                          const auto audio = workDir.getChildFile("Files").getChildFile("rekordbox track.wav");
                          const auto stick = workDir.getChildFile("stick");
