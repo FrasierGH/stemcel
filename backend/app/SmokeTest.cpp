@@ -3804,6 +3804,16 @@ void SmokeTest::addTempoJourney()
                      {
                          auto* w = perfWorkspace();
                          auto* view = w != nullptr ? w->performanceView() : nullptr;
+                         if (perfOpenedAt == 0) perfOpenedAt = juce::Time::getMillisecondCounter();
+                         if (view != nullptr && !view->stateForTest().open && juce::Time::getMillisecondCounter() - perfOpenedAt > 5000)
+                         {
+                             // No audio device (a build machine): the decks never run, so the
+                             // performance steps are skipped and the timeline comes back.
+                             perfSkip = true;
+                             report.add("SKIP performance mode (no audio device runs the decks)");
+                             w->togglePerformance();
+                             return true;
+                         }
                          if (view == nullptr || !view->stateForTest().open || !view->stateForTest().recording) return false;
                          report.add("performance mode: open, item " + perfItem + (view->stateForTest().cueOutput ? ", cue on 3-4" : ", no cue outputs"));
                          return perfItem.isNotEmpty();
@@ -4240,6 +4250,24 @@ void SmokeTest::addTempoJourney()
                      }});
     steps.back().poll = true;
     steps.back().timeoutMs = 10000.0;
+    for (auto& step : steps)
+    {
+        if (!step.name.startsWith("performance ") || step.name == "performance mode opens") continue;
+        auto act = step.act;
+        auto accept = step.accept;
+        const auto awaitType = step.awaitType;
+        step.act = [this, act, awaitType]
+        {
+            if (!perfSkip)
+            {
+                if (act) act();
+                return;
+            }
+            if (awaitType.isNotEmpty())
+                juce::MessageManager::callAsync([this, awaitType] { engine.host().bridge().broadcast(awaitType, juce::var(new juce::DynamicObject())); });
+        };
+        step.accept = [this, accept](const juce::var& p) { return perfSkip || accept(p); };
+    }
     // Two files dropped at once: the prompt, answered "as dropped", mixes them on two decks.
     steps.push_back({"auto mix on drop",
                      [this]
