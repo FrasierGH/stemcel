@@ -4164,11 +4164,13 @@ void SmokeTest::addTempoJourney()
                          const auto& d = view->stateForTest().decks[0];
                          const bool bands = d.bands[0] > 0.0F || d.bands[1] > 0.0F || d.bands[2] > 0.0F;
                          auto* platter = view->platterForTest(1);
+                         // A narrow window (a CI runner's) leaves the waveform the room: no platters then.
+                         const bool narrow = view->getWidth() < 1400;
                          const bool platterShown = platter != nullptr && platter->isVisible() && platter->getWidth() > 40;
                          report.add("performance strip: selected " + juce::String(sel.first / 1000.0, 1) + "-" + juce::String(sel.second / 1000.0, 1)
-                                    + " s; platter " + (platterShown ? "shown" : "hidden") + "; bands " + juce::String(d.bands[0], 3) + " "
+                                    + " s; platter " + (platterShown ? "shown" : narrow ? "hidden (narrow window)" : "hidden") + "; bands " + juce::String(d.bands[0], 3) + " "
                                     + juce::String(d.bands[1], 3) + " " + juce::String(d.bands[2], 3));
-                         if (!(bands && platterShown && sel.second > sel.first)) return false;
+                         if (!(bands && (platterShown || narrow) && sel.second > sel.first)) return false;
                          actions.setTimelineSelection(std::nullopt, false);
                          return true;
                      }});
