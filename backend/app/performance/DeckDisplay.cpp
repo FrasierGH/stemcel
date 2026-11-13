@@ -59,10 +59,10 @@ void DeckDisplay::drawClips(juce::Graphics& g, juce::Rectangle<float> area, doub
 
 void DeckDisplay::paintTrack(juce::Graphics& g)
 {
-    auto header = getLocalBounds().reduced(8, 6).removeFromTop(38);
+    auto header = topBand().reduced(2, 0).removeFromTop(38);
     g.setColour(colours::amber400);
     g.setFont(uiFont(22.0F, true));
-    g.drawText(juce::String(deck), header.removeFromLeft(24), juce::Justification::centredLeft);
+    if (!platterShown()) g.drawText(juce::String(deck), header.removeFromLeft(24), juce::Justification::centredLeft);
     auto right = header.removeFromRight(160);
     g.setColour(colours::text);
     g.setFont(uiFont(15.0F, true));
@@ -94,9 +94,32 @@ void DeckDisplay::paintTrack(juce::Graphics& g)
     g.fillRect(close.getCentreX() - 1.0F, close.getY(), 2.0F, close.getHeight());
 }
 
+namespace
+{
+constexpr int kTopBand = 42 + 34 + 6; // the header, the overview and the gap under them
+}
+
+juce::Rectangle<int> DeckDisplay::topBand() const
+{
+    auto band = getLocalBounds().reduced(6).removeFromTop(kTopBand);
+    if (platterShown())
+    {
+        if (deck == 1) band.removeFromLeft(kTopBand + 4);
+        else band.removeFromRight(kTopBand + 4);
+    }
+    return band;
+}
+
+void DeckDisplay::resized()
+{
+    if (platterComponent == nullptr) return;
+    auto band = getLocalBounds().reduced(6).removeFromTop(kTopBand);
+    platterComponent->setBounds(deck == 1 ? band.removeFromLeft(kTopBand) : band.removeFromRight(kTopBand));
+}
+
 juce::Rectangle<int> DeckDisplay::overviewArea() const
 {
-    auto r = getLocalBounds().reduced(6);
+    auto r = topBand();
     r.removeFromTop(42);
     return r.removeFromTop(34);
 }
@@ -117,12 +140,12 @@ void DeckDisplay::paint(juce::Graphics& g)
         paintTrack(g);
         return;
     }
-    auto header = getLocalBounds().reduced(8, 6).removeFromTop(38);
+    auto header = topBand().reduced(2, 0).removeFromTop(38);
 
-    // Deck number, title and artist.
+    // Deck number (on the platter when it shows), title and artist.
     g.setColour(isMaster ? colours::amber400 : colours::accent);
     g.setFont(uiFont(22.0F, true));
-    g.drawText(juce::String(deck), header.removeFromLeft(24), juce::Justification::centredLeft);
+    if (!platterShown()) g.drawText(juce::String(deck), header.removeFromLeft(24), juce::Justification::centredLeft);
     auto right = header.removeFromRight(240);
     g.setColour(colours::text);
     g.setFont(uiFont(15.0F, true));

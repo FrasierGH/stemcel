@@ -76,8 +76,12 @@ PerformanceView::PerformanceView(Context context)
     addAndMakeVisible(*timelineStrip);
     for (int d = 0; d < kDecks; ++d)
     {
-        platters[static_cast<size_t>(d)] = std::make_unique<JogPlatter>(d + 1);
-        addChildComponent(*platters[static_cast<size_t>(d)]);
+        // In each deck screen's top corner, beside its title and overview.
+        auto& platter = platters[static_cast<size_t>(d)];
+        platter = std::make_unique<JogPlatter>(d + 1);
+        auto& display = *decks[static_cast<size_t>(d)].display;
+        display.addChildComponent(*platter);
+        display.setPlatter(platter.get());
     }
     addAndMakeVisible(plattersButton);
     plattersButton.setClickingTogglesState(true);
@@ -965,19 +969,10 @@ void PerformanceView::layoutDeck(int deck, juce::Rectangle<int> area)
     targetBoxes[static_cast<size_t>(deck - 1)]->setBounds(area.removeFromTop(24).withWidth(juce::jmin(320, area.getWidth())).reduced(0, 1));
     area.removeFromTop(2);
     auto displayArea = area.removeFromTop(juce::jmax(150, area.getHeight() - 170));
-    auto& platter = platters[static_cast<size_t>(deck - 1)];
-    const bool showPlatter = plattersButton.getToggleState() && displayArea.getWidth() > 420;
-    platter->setVisible(showPlatter);
-    if (showPlatter)
-    {
-        // On the outer side, as the jog wheel is on the unit.
-        const int size = juce::jmin(displayArea.getHeight(), 190, displayArea.getWidth() / 3);
-        auto side = left ? displayArea.removeFromLeft(size) : displayArea.removeFromRight(size);
-        platter->setBounds(side.withSizeKeepingCentre(size, size));
-        if (left) displayArea.removeFromLeft(4);
-        else displayArea.removeFromRight(4);
-    }
+    platters[static_cast<size_t>(deck - 1)]->setVisible(plattersButton.getToggleState());
     d.display->setBounds(displayArea);
+    d.display->resized(); // the platter in or out of its corner
+    d.display->repaint();
     area.removeFromTop(6);
     auto row1 = area.removeFromTop(30);
     const int w = row1.getWidth() / 9;

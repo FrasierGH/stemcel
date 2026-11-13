@@ -15,8 +15,8 @@ Open it with the **Perform** button in the transport bar, or **View ▸ Performa
     from where it will land.
   - Click to move the playhead.
   - Drag across the lanes to select a range; double-click to clear it.
-- **Platters** beside the waveforms, turning at 33⅓ with the track, as rekordbox and Serato
-  draw them.
+- **Platters** in each deck screen's outer top corner, beside the title and overview, turning
+  at 33⅓ with the track, as rekordbox and Serato draw them.
   - The ring shows how far through the track it is (amber in the last 30 seconds), with the
     cue point on it.
   - The record glows while its jog is touched.

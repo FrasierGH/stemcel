@@ -14,7 +14,7 @@
   - **Performance mode**: its browser lists the collection. Cues set on a deck are saved back to the collection.
 - **Performance mode**:
   - **Timeline strip** across the top: the arrangement's clips, the playhead and the selected range, and the take being recorded as it grows. Click to move the playhead; drag to select the range the browser's Timeline folder offers for the decks.
-  - **Spinning platters** beside the waveforms, with the track's progress and cue point on the ring. On by default; DISCS turns them off.
+  - **Spinning platters** in each deck screen's top corner, with the track's progress and cue point on the ring. On by default; DISCS turns them off.
   - **Three-band meters**: each channel's LOW, MID and HI levels, with their dB to one decimal under the fader.
   - **More effects**, the rest of rekordbox's set:
     - Beat FX: Low Cut Echo, Multi Tap Delay, Shimmer, Triplet Filter, Triplet Roll, Reverse Roll, Enigma Jet, Mobius (Saw) and Mobius (Triangle).
