@@ -5,6 +5,7 @@
 #include "DecodedCache.h"
 #include "EnginePlaybackPath.h"
 #include "Log.h"
+#include "LoudnessAnalyzer.h"
 #include "MidiDeviceCommands.h"
 #include "ProjectState.h"
 #include "performance/PerformanceEngine.h"
@@ -14,6 +15,9 @@
 #include <juce_events/juce_events.h>
 #include <samplerate.h>
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
 #include <map>
 #include <memory>
 
@@ -140,12 +144,14 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
         if (!perfEngine().isOpen())
         {
             perfEngine().setOpen(true);
-            cueOutput = engine.setPerformanceOutputs(true);
+            cueDevice = engine.openPerformanceCue(perf::Mapping::allModels());
+            cueOutput = cueDevice.isNotEmpty();
             setMidiPerformanceSink(this);
             startTimerHz(60);
         }
         auto* o = new juce::DynamicObject();
         o->setProperty("cueOutput", cueOutput);
+        o->setProperty("cueDevice", cueDevice);
         bridge.broadcast("PERF_OPENED", juce::var(o));
         // What the decks and the sampler still hold from last time, for the view to show.
         for (const auto& [deck, track] : loadedTracks)
@@ -169,6 +175,7 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
         lightsOff();
         setMidiPerformanceSink(nullptr);
         perfEngine().setOpen(false);
+        engine.closePerformanceCue();
         stopTimer();
         bridge.broadcast("PERF_CLOSED", juce::var(new juce::DynamicObject()));
     }
@@ -401,8 +408,23 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
                 stemcel::log::info("performance", "reading " + file.getFileName());
                 auto audio = readWhole(file, formats, rate, error);
                 stemcel::log::info("performance", "read " + juce::String(audio != nullptr ? audio->getNumSamples() : 0) + " samples");
+                // Its loudness, for auto gain (the analyser takes the two usual rates).
+                double lufs = std::numeric_limits<double>::quiet_NaN();
+                if (audio != nullptr && (std::abs(rate - 44100.0) < 1.0 || std::abs(rate - 48000.0) < 1.0))
+                {
+                    LoudnessAnalyzer loudness(rate);
+                    constexpr int block = 1 << 15;
+                    for (int at = 0; at < audio->getNumSamples(); at += block)
+                    {
+                        const int n = std::min(block, audio->getNumSamples() - at);
+                        const float* channels[2] = {audio->getReadPointer(0, at), audio->getReadPointer(std::min(1, audio->getNumChannels() - 1), at)};
+                        loudness.process(channels, 2, n);
+                    }
+                    const auto result = loudness.finalize();
+                    if (!result.silent) lufs = result.integratedLufs;
+                }
                 juce::MessageManager::callAsync(
-                    [self, deck, request, track, audio, rate, error]
+                    [self, deck, request, track, audio, rate, error, lufs]
                     {
                         if (g_host.get() != self || self->loadRequests[deck] != request) return; // superseded
                         if (audio == nullptr)
@@ -413,6 +435,8 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
                         stemcel::log::info("performance", "loading deck " + juce::String(deck));
                         track->audio = audio;
                         track->sampleRate = rate;
+                        track->hasLoudness = std::isfinite(lufs);
+                        track->loudnessLufs = std::isfinite(lufs) ? lufs : 0.0;
                         self->loadedTracks[deck] = track;
                         self->perfEngine().load(deck, track, 0);
                         self->broadcastLoaded(deck, track);
@@ -443,6 +467,7 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
         o->setProperty("key", track->key);
         o->setProperty("bpm", track->bpm);
         o->setProperty("lengthSec", track->audio != nullptr ? track->audio->getNumSamples() / track->sampleRate : 0.0);
+        if (track->hasLoudness) o->setProperty("lufs", track->loudnessLufs);
         bridge.broadcast("PERF_LOADED", juce::var(o));
         const juce::SpinLock::ScopedLockType lock(devicesLock);
         for (auto& [id, d] : devices) d.ledsSent.erase((0x9F << 8) | (deck - 1));
@@ -591,9 +616,12 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
         o->setProperty("crossfader", v.crossfader);
         o->setProperty("masterDeck", v.masterDeck);
         o->setProperty("cueOutput", v.cueOutput);
+        o->setProperty("cueDevice", cueDevice);
         o->setProperty("recording", v.recording);
         std::array<float, perf::kDecks> peaks{};
         perfEngine().consumePeaks(peaks);
+        std::array<std::array<float, 3>, perf::kDecks> bandPeaks{};
+        perfEngine().consumeBandPeaks(bandPeaks);
         juce::Array<juce::var> decks;
         for (int d = 0; d < perf::kDecks; ++d)
         {
@@ -643,6 +671,9 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
             x->setProperty("padFxHeld", cv.padFxHeld);
             x->setProperty("bound", cv.bound);
             x->setProperty("peak", peaks[static_cast<size_t>(d)]);
+            juce::Array<juce::var> bands;
+            for (const float b : bandPeaks[static_cast<size_t>(d)]) bands.add(b);
+            x->setProperty("bands", bands);
             decks.add(juce::var(x));
         }
         o->setProperty("decks", decks);
@@ -778,6 +809,7 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
     AudioEngine& engine;
     BridgeServer& bridge;
     bool cueOutput = false;
+    juce::String cueDevice; // where the headphone cue goes
     juce::SpinLock devicesLock, appLock;
     std::map<juce::String, Device> devices;
     std::vector<perf::Event> appEvents;

@@ -35,6 +35,9 @@
 #include "Tracklist.h"
 #include "WaveformStore.h"
 #include "Workspace.h"
+#include "collection/Collection.h"
+#include "collection/LibraryView.h"
+#include "collection/UsbExport.h"
 #include "TimeEdit.h"
 #include "Autosave.h"
 #include "Log.h"
@@ -221,6 +224,8 @@ SmokeTest::SmokeTest(EngineClient& client, juce::File dir)
     : engine(client), workDir(std::move(dir)), mirror(client), actions(client, mirror),
       importer(client, mirror, sharedRekordbox()), stems(client, mirror, actions, prefs)
 {
+    // The DJ collection lives in the run's own folder, never the user's.
+    dj::Collection::setFolderForTest(workDir.getChildFile("Collection"));
     failureSubscription = engine.subscribe("MIXDOWN_FAILED", [this](const juce::var& p)
                                            { report.add("MIXDOWN_FAILED: " + p.getProperty("error", {}).toString()); });
     addSteps();
@@ -403,6 +408,54 @@ void SmokeTest::addSteps()
                          const auto* list = reread.findPlaylist(listId);
                          if (list == nullptr || list->trackIds != juce::StringArray(rekordboxTrackId))
                              return fail("reread", juce::var(reread.error));
+
+                         // Performance-mode cues onto the track, found by its file: hot A at 1 s,
+                         // a loop on hot C, a memory cue at 0.5 s.
+                         const auto* fixtureTrack = reread.findTrack(rekordboxTrackId);
+                         if (fixtureTrack == nullptr) return fail("cue track", {});
+                         const auto perfCues = juce::JSON::parse(
+                             R"({"hot":[{"pos":1.0},null,{"pos":2.0,"end":4.0},null,null,null,null,null],"memory":[{"pos":0.5}]})");
+                         const auto sent = rb.write(Rekordbox::cuesRequest(juce::File(fixtureTrack->path), perfCues, false));
+                         if (!ok(sent) || static_cast<int>(sent.getProperty("added", 0)) != 3
+                             || sent.getProperty("trackId", {}).toString() != rekordboxTrackId)
+                             return fail("cues", sent);
+                         // Again: rekordbox's (now these) hot cues stay, the memory cue isn't doubled.
+                         const auto resent = rb.write(Rekordbox::cuesRequest(juce::File(fixtureTrack->path), perfCues, false));
+                         if (!ok(resent) || static_cast<int>(resent.getProperty("added", -1)) != 0) return fail("cues again", resent);
+                         rb.open(rekordboxFixtureDb, rekordboxFixturePassphrase);
+                         const auto detail = rb.trackDetail(rekordboxTrackId);
+                         int found = 0;
+                         for (const auto& c : detail.cues)
+                         {
+                             if (c.hot == "A" && std::abs(c.positionMs - 1000.0) < 1.0) ++found;
+                             if (c.hot == "C" && std::abs(c.positionMs - 2000.0) < 1.0 && std::abs(c.endMs - 4000.0) < 1.0) ++found;
+                             if (c.memory && std::abs(c.positionMs - 500.0) < 1.0) ++found;
+                         }
+                         if (found != 3 || detail.cues.size() != 3)
+                             return fail("cues reread", juce::var(juce::String(found) + " of 3, " + juce::String(static_cast<int>(detail.cues.size())) + " cues"));
+
+                         // A file added with Stemcel's analysis: a 120 BPM grid from 0.1 s, so
+                         // rekordbox has its grid, BPM and waveforms without analysing it.
+                         const auto analysedFile = workDir.getChildFile("Files").getChildFile("analysed track.wav");
+                         juce::File(fixtureTrack->path).copyFileTo(analysedFile);
+                         auto* known = new juce::DynamicObject();
+                         const juce::var knownVar(known);
+                         known->setProperty("path", analysedFile.getFullPathName());
+                         known->setProperty("bpm", 120.0);
+                         known->setProperty("anchorSec", 0.1);
+                         const auto imported = rb.write(object({{"action", "importFiles"},
+                                                                {"paths", juce::var(juce::Array<juce::var>{analysedFile.getFullPathName()})},
+                                                                {"analyse", true},
+                                                                {"analysis", juce::var(juce::Array<juce::var>{knownVar})}}));
+                         if (!ok(imported) || static_cast<int>(imported.getProperty("analysed", 0)) != 1) return fail("analysed import", imported);
+                         const auto analysedId = imported["trackIds"][0].toString();
+                         rb.open(rekordboxFixtureDb, rekordboxFixturePassphrase);
+                         const auto grid = rb.trackDetail(analysedId);
+                         if (grid.beats.size() < 2 || std::abs(grid.beats.front().timeMs - 100.0) > 1.0
+                             || std::abs(grid.beats[1].timeMs - grid.beats.front().timeMs - 500.0) > 1.0)
+                             return fail("analysed grid", juce::var(juce::String(static_cast<int>(grid.beats.size())) + " beats"));
+                         report.add("rekordbox analysed import: " + juce::String(static_cast<int>(grid.beats.size())) + " beats from "
+                                    + juce::String(grid.beats.front().timeMs, 0) + " ms");
 
                          // A USB export: OneLibrary and Device Library, edited separately.
                          const auto audio = workDir.getChildFile("Files").getChildFile("rekordbox track.wav");
@@ -3776,6 +3829,232 @@ void SmokeTest::addTempoJourney()
         auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
         return window != nullptr ? findDescendant<Workspace>(window) : nullptr;
     };
+
+    // Library mode, the DJ collection: files in and analysed, playlists, the grid and cues
+    // edited, the fixture rekordbox library brought in, a USB export (to a folder standing in
+    // for a stick) read back as a rekordbox export, and a track into the project.
+    struct LibraryRun
+    {
+        std::vector<juce::int64> ids;
+        juce::int64 folder = 0, list = 0;
+        bool editsOk = false, rbDone = false, rbOk = false, exportOk = false;
+        juce::String summary;
+    };
+    auto lib = std::make_shared<LibraryRun>();
+    auto libraryView = [perfWorkspace]() -> dj::LibraryView* { return perfWorkspace() != nullptr ? perfWorkspace()->libraryView() : nullptr; };
+    steps.push_back({"library mode opens",
+                     [perfWorkspace]
+                     {
+                         if (auto* w = perfWorkspace()) w->toggleLibrary();
+                     },
+                     {}, [libraryView](const juce::var&) { return libraryView() != nullptr; }});
+    steps.push_back({"library adds and analyses files",
+                     [this, lib]
+                     {
+                         const auto dir = workDir.getChildFile("Collection music");
+                         dir.createDirectory();
+                         const auto a = dir.getChildFile("Collection 120.wav");
+                         const auto b = dir.getChildFile("Collection 128.wav");
+                         writeClicks(a, 120.0);
+                         writeClicks(b, 128.0);
+                         lib->ids = dj::Collection::shared().addFiles(juce::Array<juce::File>{a, b});
+                     },
+                     {}, [this, lib](const juce::var&)
+                     {
+                         auto& c = dj::Collection::shared();
+                         if (lib->ids.size() != 2 || !c.idle()) return false;
+                         const auto* a = c.find(lib->ids[0]);
+                         const auto* b = c.find(lib->ids[1]);
+                         if (a == nullptr || b == nullptr || a->state != dj::Track::State::ready || b->state != dj::Track::State::ready) return false;
+                         report.add("library analysis: " + juce::String(a->bpm, 2) + " and " + juce::String(b->bpm, 2) + " BPM, keys '" + a->key
+                                    + "' '" + b->key + "', loudness " + juce::String(a->loudnessLufs, 1) + " LUFS");
+                         return std::abs(a->bpm - 120.0) < 0.5 && std::abs(b->bpm - 128.0) < 0.5 && a->hasLoudness;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 180000.0;
+    steps.push_back({"library playlists",
+                     [lib, libraryView]
+                     {
+                         auto* view = libraryView();
+                         if (view == nullptr) return;
+                         lib->folder = view->newPlaylist("Sets", 0, true);
+                         lib->list = view->newPlaylist("Friday", lib->folder, false);
+                         dj::Collection::shared().addToPlaylist(lib->list, lib->ids);
+                         view->showList(lib->list);
+                     },
+                     {}, [lib, libraryView](const juce::var&)
+                     {
+                         auto* view = libraryView();
+                         return view != nullptr && view->rowCount() == 2 && dj::Collection::shared().tracksIn(lib->folder).size() == 2;
+                     }});
+    steps.push_back({"library grid and cues",
+                     [this, lib, libraryView]
+                     {
+                         auto* view = libraryView();
+                         auto& c = dj::Collection::shared();
+                         if (view == nullptr || lib->ids.empty()) return;
+                         const auto id = lib->ids[0];
+                         view->selectTrack(id);
+                         auto& editor = view->editor();
+                         const auto beats = c.find(id)->beatTimes();
+                         if (beats.size() < 8) return;
+                         // A hot cue near the fifth beat lands on it (quantize).
+                         editor.setPositionForTest(beats[4] + 0.03);
+                         editor.setHotCueForTest(0);
+                         const auto* cue = c.find(id)->hotCue(0);
+                         const bool cueOnBeat = cue != nullptr && std::abs(cue->pos - beats[4]) < 0.001;
+                         // The grid 5 ms later, then beat 1 put at the playhead.
+                         const double anchor = c.find(id)->anchorSec;
+                         editor.shiftGridForTest(5.0);
+                         const bool shifted = std::abs(c.find(id)->anchorSec - anchor - 0.005) < 1e-6 && c.find(id)->gridLocked;
+                         editor.setPositionForTest(beats[2]);
+                         editor.setDownbeatForTest();
+                         const auto* t = c.find(id);
+                         const auto after = t->beatTimes();
+                         int index = 0;
+                         for (size_t i = 0; i < after.size(); ++i)
+                             if (std::abs(after[i] - beats[2]) < 1e-6) index = static_cast<int>(i);
+                         const bool downbeat = t->firstBeat == 1 && t->beatNumberAt(index) == 1 && t->beatNumberAt(index + 1) == 2;
+                         report.add(juce::String("library edits: cue on beat ") + (cueOnBeat ? "yes" : "no") + ", grid shifted " + (shifted ? "yes" : "no")
+                                    + ", downbeat " + (downbeat ? "yes" : "no"));
+                         lib->editsOk = cueOnBeat && shifted && downbeat;
+                     },
+                     {}, [lib](const juce::var&) { return lib->editsOk; }});
+    steps.push_back({"library brings in rekordbox",
+                     [this, lib]
+                     {
+                         if (rekordboxTrackId == "skipped" || !rekordboxFixtureDb.existsAsFile())
+                         {
+                             report.add("SKIP library from rekordbox (no fixture library)");
+                             lib->rbDone = lib->rbOk = true;
+                             return;
+                         }
+                         RekordboxSource source;
+                         source.kind = RekordboxSource::Kind::drive;
+                         source.masterDb = rekordboxFixtureDb;
+                         source.name = rekordboxFixtureDb.getFileName();
+                         dj::Collection::shared().importRekordbox(sharedRekordbox(), source, rekordboxFixturePassphrase, {},
+                                                                  [this, lib](const juce::String& summary, bool ok)
+                                                                  {
+                                                                      lib->rbDone = true;
+                                                                      lib->rbOk = ok;
+                                                                      report.add("library from rekordbox: " + summary);
+                                                                  });
+                     },
+                     {}, [this, lib](const juce::var&)
+                     {
+                         if (!lib->rbDone) return false;
+                         if (rekordboxTrackId == "skipped" || !rekordboxFixtureDb.existsAsFile()) return true;
+                         auto& c = dj::Collection::shared();
+                         const dj::Track* found = nullptr;
+                         for (const auto& t : c.tracks())
+                             if (t.rekordboxId == rekordboxTrackId) found = &t;
+                         bool folder = false;
+                         for (const auto* p : c.childrenOf(0, false)) folder = folder || (p->isFolder() && p->name == "rekordbox");
+                         if (found != nullptr)
+                             report.add("rekordbox track in the collection: " + juce::String(found->bpm, 2) + " BPM, grid "
+                                        + (found->gridLocked ? "from rekordbox" : "analysed") + ", " + juce::String(static_cast<int>(found->cues.size())) + " cue(s)");
+                         return lib->rbOk && found != nullptr && found->gridLocked && found->bpm > 0.0 && folder;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 60000.0;
+    steps.push_back({"library exports to USB",
+                     [this, lib]
+                     {
+                         auto& rb = sharedRekordbox();
+                         if (!rb.isAvailable())
+                         {
+                             report.add("SKIP library export (" + rb.unavailableReason() + ")");
+                             lib->exportOk = true;
+                             return;
+                         }
+                         const auto stick = workDir.getChildFile("stick-export");
+                         stick.deleteRecursively();
+                         stick.createDirectory();
+                         const auto result = dj::UsbExport::runForTest(rb, {lib->folder}, stick, true);
+                         report.add("library export: " + juce::JSON::toString(result, true).substring(0, 400));
+                         if (!static_cast<bool>(result.getProperty("ok", false)) || static_cast<int>(result.getProperty("tracks", 0)) != 2) return;
+                         // Read back as a player's stick: both libraries hold the playlist.
+                         bool both = true;
+                         for (const auto* format : {"deviceLibrary", "oneLibrary"})
+                         {
+                             RekordboxSource source;
+                             source.kind = RekordboxSource::Kind::device;
+                             source.name = "Smoke export";
+                             source.root = stick;
+                             source.format = format;
+                             const auto read = rb.open(source);
+                             const RekordboxPlaylist* friday = nullptr;
+                             for (const auto& p : read.playlists)
+                                 if (p.name == "Friday") friday = &p;
+                             bool hotA = false;
+                             for (const auto& t : read.tracks)
+                                 if (t.title == "Collection 120")
+                                     for (const auto& cue : rb.trackDetail(t.id).cues) hotA = hotA || cue.hot == "A";
+                             report.add(juce::String(format) + ": " + juce::String(static_cast<int>(read.tracks.size())) + " tracks, Friday "
+                                        + (friday != nullptr ? juce::String(friday->trackIds.size()) : juce::String("missing")) + ", hot cue A "
+                                        + (hotA ? "yes" : "no"));
+                             both = both && read.ok && read.tracks.size() == 2 && friday != nullptr && friday->trackIds.size() == 2
+                                    && (hotA || juce::String(format) == "oneLibrary");
+                         }
+                         const auto histories = rb.stickHistories(stick);
+                         both = both && static_cast<bool>(histories.getProperty("ok", false));
+                         if (rekordboxFixtureDb.existsAsFile()) rb.open(rekordboxFixtureDb, rekordboxFixturePassphrase);
+                         lib->exportOk = both;
+                     },
+                     {}, [lib](const juce::var&) { return lib->exportOk; }});
+    steps.push_back({"library adds to project",
+                     [lib, libraryView]
+                     {
+                         if (auto* view = libraryView()) view->addToProject({lib->ids[0]});
+                     },
+                     {}, [this, lib](const juce::var&)
+                     {
+                         mirror.refreshNow();
+                         const auto* t = dj::Collection::shared().find(lib->ids[0]);
+                         if (t == nullptr) return false;
+                         for (const auto& item : model().library)
+                             if (dj::normalisedPath(item.filePath) == dj::normalisedPath(t->path) && item.bpm > 0.0)
+                             {
+                                 const auto hot = item.raw.getProperty("perfCues", {}).getProperty("hot", {});
+                                 const bool cue = hot.isArray() && hot.size() > 0 && hot[0].isObject();
+                                 report.add("project item from the collection: " + juce::String(item.bpm, 2) + " BPM, hot cue A " + (cue ? "yes" : "no"));
+                                 return std::abs(item.bpm - t->bpm) < 0.01 && cue;
+                             }
+                         return false;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 60000.0;
+    steps.push_back({"library snapshot",
+                     [this]
+                     {
+                         if (auto* window = juce::TopLevelWindow::getTopLevelWindow(0))
+                         {
+                             const auto image = window->createComponentSnapshot(window->getLocalBounds());
+                             juce::FileOutputStream out(workDir.getChildFile("library-mode.png"));
+                             if (out.openedOk()) juce::PNGImageFormat().writeImageToStream(image, out);
+                         }
+                     },
+                     {}, [](const juce::var&) { return true; }, 800.0});
+    steps.push_back({"library mode closes and keeps the collection",
+                     [lib, perfWorkspace]
+                     {
+                         if (auto* w = perfWorkspace()) w->toggleLibrary();
+                         auto& c = dj::Collection::shared();
+                         const auto tracks = c.tracks().size();
+                         const auto lists = c.playlists().size();
+                         c.saveNow();
+                         c.reload();
+                         lib->summary = juce::String(static_cast<int>(tracks)) + "/" + juce::String(static_cast<int>(c.tracks().size())) + " tracks, "
+                                        + juce::String(static_cast<int>(lists)) + "/" + juce::String(static_cast<int>(c.playlists().size())) + " playlists";
+                         if (tracks != c.tracks().size() || lists != c.playlists().size()) lib->summary = "lost: " + lib->summary;
+                     },
+                     {}, [this, lib, libraryView](const juce::var&)
+                     {
+                         report.add("collection saved and read again: " + lib->summary);
+                         const auto* t = dj::Collection::shared().find(lib->ids[0]);
+                         return libraryView() == nullptr && !lib->summary.startsWith("lost") && t != nullptr && t->firstBeat == 1 && t->hotCue(0) != nullptr;
+                     }});
     auto inject = [this](std::initializer_list<int> bytes)
     {
         juce::Array<juce::var> list;
@@ -3862,6 +4141,38 @@ void SmokeTest::addTempoJourney()
                              if (out.openedOk()) juce::PNGImageFormat().writeImageToStream(image, out);
                          }
                          return std::abs(d.fader - 1.0F) < 0.01F;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 10000.0;
+    // The timeline strip across the top (a drag selects a range), the platters, and the
+    // three-band meters while deck 1 plays.
+    steps.push_back({"performance timeline strip, platters and meters",
+                     [this, perfWorkspace]
+                     {
+                         auto* view = perfWorkspace() != nullptr ? perfWorkspace()->performanceView() : nullptr;
+                         if (view == nullptr) return;
+                         auto& strip = view->stripForTest();
+                         strip.dragForTest(strip.getWidth() * 0.1F, strip.getWidth() * 0.3F);
+                     },
+                     {},
+                     [this, perfWorkspace](const juce::var&)
+                     {
+                         mirror.refreshNow();
+                         auto* view = perfWorkspace() != nullptr ? perfWorkspace()->performanceView() : nullptr;
+                         if (view == nullptr || !model().timelineSelection.has_value()) return false;
+                         const auto& sel = *model().timelineSelection;
+                         const auto& d = view->stateForTest().decks[0];
+                         const bool bands = d.bands[0] > 0.0F || d.bands[1] > 0.0F || d.bands[2] > 0.0F;
+                         auto* platter = view->platterForTest(1);
+                         // A narrow window (a CI runner's) leaves the waveform the room: no platters then.
+                         const bool narrow = view->getWidth() < 1400;
+                         const bool platterShown = platter != nullptr && platter->isVisible() && platter->getWidth() > 40;
+                         report.add("performance strip: selected " + juce::String(sel.first / 1000.0, 1) + "-" + juce::String(sel.second / 1000.0, 1)
+                                    + " s; platter " + (platterShown ? "shown" : narrow ? "hidden (narrow window)" : "hidden") + "; bands " + juce::String(d.bands[0], 3) + " "
+                                    + juce::String(d.bands[1], 3) + " " + juce::String(d.bands[2], 3));
+                         if (!(bands && (platterShown || narrow) && sel.second > sel.first)) return false;
+                         actions.setTimelineSelection(std::nullopt, false);
+                         return true;
                      }});
     steps.back().poll = true;
     steps.back().timeoutMs = 10000.0;

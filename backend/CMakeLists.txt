@@ -420,6 +420,7 @@ add_library(stemcel_backend_core STATIC
     src/core/Log.cpp
     src/core/NativeApplication.cpp
     # performance (live DJ mode)
+    src/performance/CueOutput.cpp
     src/performance/DeckPlayer.cpp
     src/performance/PerformanceEngine.cpp
     src/performance/PerformanceMapping.cpp
@@ -822,7 +823,13 @@ if(STEMCEL_BUILD_NATIVE_APP)
         app/TimelineActions.cpp
         app/TimelineView.cpp
         app/TimeEdit.cpp
+        app/collection/Collection.cpp
+        app/collection/LibraryView.cpp
+        app/collection/TrackEditor.cpp
+        app/collection/UsbExport.cpp
         app/performance/DeckDisplay.cpp
+        app/performance/JogPlatter.cpp
+        app/performance/TimelineStrip.cpp
         app/performance/PerfBrowser.cpp
         app/performance/PerformanceTake.cpp
         app/performance/PerformanceView.cpp

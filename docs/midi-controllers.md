@@ -63,15 +63,15 @@ corresponding binding, Stemcel applies these actions:
 
 | Controller control | Stemcel action |
 | --- | --- |
-| Play | Starts or pauses the project transport. |
+| Play (either deck) | Starts or pauses the project transport. |
 | Cue | Moves to the previous timeline marker. The start of an active timeline range counts as a temporary marker. |
 | Shift + Cue | Moves to the next timeline marker, again treating an active range's start as a temporary marker. Some controllers send a dedicated shifted Cue message. |
 | Sync | Acts as a jog modifier. It does not synchronise tempo. Holding Sync snaps jog movement to timeline grid lines. |
-| Jog wheel or platter | Moves the playhead freely. While playing, touching an enabled platter holds the transport until every touched platter is released. Moving a held platter auditions short forward or backward grains from the new playhead position. The Play button pulses while playback is held. Touch-sensitive profiles switch between pitch-bend and scratch movement; Shift moves faster. |
+| Jog wheel or platter (either deck) | Moves the playhead freely. While playing, touching an enabled platter holds the transport until every touched platter is released. Moving a held platter auditions short forward or backward grains from the new playhead position. The Play button pulses while playback is held. Touch-sensitive profiles switch between pitch-bend and scratch movement; Shift moves faster. |
 | Browse encoder | Selects tracks. Pressing it enters clip-browse mode on the selected track; rotation then selects clips, shifted rotation extends the clip range, and another press exits clip-browse mode. |
 | Shift + Browse | On profiles with a mapped Shift button, zooms the timeline when clip-browse mode is not active. Each clockwise or anticlockwise step uses the same increment as Zoom In or Zoom Out. |
 | Hot-cue pads | Jump to the corresponding numbered timeline marker. A shifted or dedicated clear pad toggles a marker at the playhead: it removes the marker the playhead is sitting on, or adds one there when it is not. This is the same action as the `M` key. Profiles expose four or eight marker pads according to the hardware. |
-| Headphone Cue / PFL | Enables or disables input from that physical deck. This is useful when a controller exposes more than one deck channel. |
+| Headphone Cue / PFL | In the Scratch Editor, picks the deck that owns the platter. On the timeline it does nothing: the timeline is one channel, and both decks' Play, Cue, Sync and jog wheels control it. |
 | Channel fader | Changes the currently selected Stemcel track's volume. |
 | EQ and filter | Changes Bass, Mid, Treble, or Filter on the currently selected track and opens Track FX. Profiles only expose controls present on that model. |
 | Master level | Changes the project master volume on profiles that bind it. |

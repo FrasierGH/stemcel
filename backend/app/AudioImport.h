@@ -21,6 +21,8 @@ struct ImportHints
     juce::String rekordboxId; // fetch beat grid + key from rekordbox for this track
     juce::String title, artist, key;
     double bpm = 0.0;
+    double beatAnchorSec = -1.0; // with `bpm`: the grid's first beat (the DJ collection's grid)
+    juce::var perfCues;          // performance-mode cues to give the item ({hot, memory})
 };
 
 struct ImportRequest
@@ -59,6 +61,7 @@ class AudioImporter final
     // Shared with the Files browser's audition: a path the engine can play (the file
     // itself, or a cached WAV transcode), or empty when the file can't be decoded.
     juce::String playablePath(const juce::File& file);
+    static juce::String playablePathFor(const juce::File& file, Rekordbox& rekordbox);
 
   private:
     struct Prepared;

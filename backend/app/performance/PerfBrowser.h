@@ -20,7 +20,8 @@ namespace stemcel::native::perf
 struct BrowserRow
 {
     juce::String itemId;      // a library item, or
-    juce::String rekordboxId; // a rekordbox track (imported on load)
+    juce::String rekordboxId; // a rekordbox track (imported on load), or
+    juce::int64 collectionId = 0; // a DJ collection track (the same)
     juce::String title, artist, key, path;
     double bpm = 0.0, durationSec = 0.0;
     // A stretch of the timeline (rendered onto the deck when loaded): one track, or "" the mix.
@@ -63,7 +64,7 @@ class PerfBrowser final : public juce::Component
     ProjectMirror& mirror;
     std::function<const RekordboxSnapshot*()> rekordbox;
     std::vector<Node> nodes;
-    std::set<juce::String> expanded{"collection", "rekordbox"};
+    std::set<juce::String> expanded{"collection", "rekordbox", "djlib"};
     std::vector<BrowserRow> rows;
     int treeCursor = 1, listCursor = 0;
     int treeScroll = 0, listScroll = 0;

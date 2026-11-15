@@ -1,5 +1,45 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Library mode** (View ▸ Library Mode, Ctrl/Cmd+Shift+B), a DJ library that doesn't need rekordbox. See [the guide](docs/dj-library.md).
+  - **Collection**: one collection across projects. Tracks are analysed in the background for BPM, beat grid, key and loudness. They can be organised in playlists and folders, searched and sorted, and given ratings, colours and My Tags.
+  - **Grid and cue editor**: the waveform with numbered beats. Set the tempo, halve or double it, nudge the grid, put beat 1 at the playhead, or tap the tempo. Set hot cues A–H (with loops and names) and memory cues, quantized to the beat. Preview the track as you edit.
+  - **From rekordbox**: brings this computer's rekordbox library in, with every track's grid, key, cues, rating and colour, and every playlist.
+  - **Export to USB**: playlists go onto a stick or SD card as a rekordbox export that CDJs and XDJs read: both libraries, the audio, analysis from Stemcel's grid, and the cues. Sync makes the stick hold exactly the choice; Add puts it beside what's there. The stick is verified afterwards and can be ejected.
+  - **Link Export**: LINK serves the collection to players on the same network, as rekordbox's LINK does.
+  - **Play histories**: read back from a stick into the collection.
+  - **Performance mode**: its browser lists the collection. Cues set on a deck are saved back to the collection.
+- **Performance mode**:
+  - **Timeline strip** across the top: the arrangement's clips, the playhead and the selected range, and the take being recorded as it grows. Click to move the playhead; drag to select the range the browser's Timeline folder offers for the decks.
+  - **Spinning platters** in each deck screen's top corner, with the track's progress and cue point on the ring. On by default; DISCS turns them off.
+  - **Three-band meters**: each channel's LOW, MID and HI levels, with their dB to one decimal under the fader.
+  - **More effects**, the rest of rekordbox's set:
+    - Beat FX: Low Cut Echo, Multi Tap Delay, Shimmer, Triplet Filter, Triplet Roll, Reverse Roll, Enigma Jet, Mobius (Saw) and Mobius (Triangle).
+    - Sound Color FX: Jet, Pitch and Gate/Comp.
+- **Perform** and **Library** buttons in the transport bar, and **Performance Mode** in library mode's top bar.
+- **Auto gain** in performance mode: each deck's track is evened out by its loudness, which is measured as it loads. A recorded take keeps it.
+
+- **Add to rekordbox ▸ With Stemcel's Analysis**: tracks go into rekordbox already analysed, with Stemcel's beat grid, BPM and key plus waveforms and bars from rbxport's analyser, so rekordbox doesn't analyse them again. A track rekordbox analysed itself is left alone. **For rekordbox to Analyse** adds them as before.
+
+- **Send Cues to rekordbox** (library item menu): the hot and memory cues set in performance mode go onto the track in this computer's rekordbox collection, which gets the file first if it hasn't got it. Hot cues fill only empty slots unless you choose to replace rekordbox's. Like Add to rekordbox, it waits for rekordbox to be closed and backs its database up first.
+
+### Changed
+
+- Only the newest 20 rekordbox database backups are kept in `~/Stemcel/Backups/rekordbox`.
+
+- Fusion is now the default theme for new installs. A theme already chosen in Preferences stays.
+
+### Fixed
+
+- **Tempo slider pickup**: after a tempo range change, the slider took over the tempo early, near the held tempo rather than at it, and the tempo jumped. Two causes: a 14-bit slider's coarse half arriving alone read as a value the slider never had, and the pickup's tolerance let a near miss count. The slider now picks up exactly where the held tempo sits in the new range.
+- **DJ controller on the timeline**: only deck 1's Play and jog wheel worked the timeline until deck 2 was switched on with its headphone CUE button. The timeline is now one channel that either deck's Play, Cue, Sync and jog wheel control.
+- **Finer cue quantize**: hot cues and the CUE point (in performance mode and the library editor) snap to half beats, with half-beat lines on the grids.
+
+- **Performance mode headphones**: when the master plays on another device (speakers on the computer, an interface), the headphone cue now goes to the DJ controller's own sound card, so headphones plugged into the controller hear it. The master goes to its outputs 1–2 too, so its HEADPHONES MIX knob still blends them.
+
 ## 0.4.0
 
 ### Added

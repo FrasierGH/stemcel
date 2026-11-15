@@ -571,7 +571,10 @@ private:
                                 }
                                 else
                                 {
-                                    active->deckActivation.toggle(mapped->deck);
+                                    // On the timeline the controller is one channel: both decks'
+                                    // transport and jogs drive it, so there is nothing to pick.
+                                    active->deckActivation.setEnabled(1, true);
+                                    active->deckActivation.setEnabled(2, true);
                                 }
                                 active->sendDeckSelectionLights();
                                 broadcastDeckSelection(*active);
@@ -584,7 +587,7 @@ private:
                             }
                             continue;
                         }
-                        if (!active->deckActivation.allows(*mapped)) continue;
+                        if (!timelineIsOneChannel() && !active->deckActivation.allows(*mapped)) continue;
                         scratchRouter.routeImmediate(
                             active->identifier, active->scratchState, raw.timestampMs,
                             *mapped, bridge);
@@ -703,6 +706,13 @@ private:
         }
     }
 
+    // Outside a scratch session (where the CUE buttons pick the deck that owns the platter)
+    // the timeline is one channel: either deck's PLAY, CUE and jog work it.
+    bool timelineIsOneChannel() const
+    {
+        return scratchRouter.engine() == nullptr || !scratchRouter.engine()->hasActiveScratchSession();
+    }
+
     static MidiControllerAction relativeControlAt(int index)
     {
         constexpr std::array<MidiControllerAction, relativeControlCount> controls{
@@ -723,7 +733,7 @@ private:
             {
                 const auto delta = deltas[static_cast<size_t>(deckIndex)]
                                          [static_cast<size_t>(controlIndex)];
-                if (delta == 0.0 || !active.deckActivation.isEnabled(deckIndex + 1)) continue;
+                if (delta == 0.0 || (!timelineIsOneChannel() && !active.deckActivation.isEnabled(deckIndex + 1))) continue;
                 const MidiControllerEvent event{
                     relativeControlAt(controlIndex), MidiControllerValueKind::relative,
                     deckIndex + 1, delta};

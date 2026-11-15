@@ -4,6 +4,7 @@
 #include <juce_events/juce_events.h>
 
 #include <array>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -137,6 +138,25 @@ class Rekordbox final
     // the whole snapshot. Replaces any library already open.
     RekordboxSnapshot open(const juce::File& masterDb = {}, const juce::String& passphrase = {});
     RekordboxSnapshot open(const RekordboxSource& source);
+    // Every mounted drive, for exporting to: {ok, volumes: [{name, root, removable,
+    // fileSystem, totalBytes, freeBytes, hasExport, exportTracks, exportPlaylists}]}.
+    juce::var volumes();
+    juce::var eject(const juce::File& root);
+    // A stick's play histories: {ok, histories: [{name, tracks: [{deviceId, collectionId,
+    // title, artist, path}]}]}.
+    juce::var stickHistories(const juce::File& root);
+    // Writes Stemcel's collection to a stick (dj::Collection::exportRequest). Blocking, on
+    // the caller's thread; `progress` and `cancelled` are called on it too.
+    juce::var exportToStick(const juce::var& request, std::function<void(const juce::var&)> progress,
+                            std::function<bool()> cancelled);
+    // Link Export of Stemcel's collection to players on the network (dj::Collection::
+    // linkRequest). Start blocks while it builds the library it serves.
+    juce::var linkInterfaces();
+    juce::var linkStart(const juce::var& request, std::function<void(const juce::var&)> progress);
+    juce::var linkStatus();
+    void linkStop();
+    // The library open now (what write() changes).
+    RekordboxSource currentSource();
     // This computer's library first, then libraries on drives and on connected USB/SD
     // exports (each export's Device Library and OneLibrary as two entries). Slow-ish.
     std::vector<RekordboxSource> listSources();
@@ -149,7 +169,18 @@ class Rekordbox final
     juce::var write(const juce::var& request);
     // Adds audio files to this computer's library (and to the playlist named `playlist`,
     // made if missing), whatever library is open. Same refusal and backup as write().
-    juce::var addToComputerLibrary(const juce::Array<juce::File>& files, const juce::String& playlist);
+    // `analysis` (an array of {path, bpm, beats: [s], anchorSec, key}, or void) adds them
+    // analysed: each track rekordbox hasn't analysed gets its beat grid, BPM, key and
+    // waveforms, Stemcel's where an entry has them.
+    juce::var addToComputerLibrary(const juce::Array<juce::File>& files, const juce::String& playlist,
+                                   const juce::var& analysis = {});
+    // Stemcel's hot and memory cues onto `file`'s track in this computer's library (the file
+    // added first when the collection hasn't got it). `cues` is a library item's perfCues
+    // ({hot: [null | {pos, end?}] x8, memory: [{pos, end?}]}, seconds). rekordbox's own hot
+    // cues stay unless `replaceHot`. Same refusal and backup as write().
+    juce::var sendCuesToComputerLibrary(const juce::File& file, const juce::var& cues, bool replaceHot);
+    // That write's request (an empty var when there are no cues).
+    static juce::var cuesRequest(const juce::File& file, const juce::var& cues, bool replaceHot);
     // Where the database copies go: ~/Stemcel/Backups/rekordbox/<time> <library>/. The
     // smoke test points it into its own folder.
     static juce::File backupFolder();
@@ -179,6 +210,8 @@ class Rekordbox final
     RekordboxSnapshot readSnapshot(RekordboxSource source);
     // Refusal, backup, write against `target` (the open handle or a temporary one).
     juce::var writeTo(void* target, const RekordboxSource& source, const juce::File& database, const juce::var& request);
+    juce::var writeToComputerLibrary(const juce::var& request);
+    static void pruneBackups();
     bool backUp(const RekordboxSource& source, const juce::File& database, juce::String& error);
 
     juce::DynamicLibrary library;

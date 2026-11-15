@@ -126,7 +126,11 @@ fn bad_open_reports_an_error() {
 
 /// 0.5 s of 16-bit stereo silence at 44.1 kHz.
 fn wav_bytes() -> Vec<u8> {
-    let samples = 22_050u32;
+    wav_of(22_050)
+}
+
+/// `samples` frames of 16-bit stereo silence at 44.1 kHz.
+fn wav_of(samples: u32) -> Vec<u8> {
     let data_len = samples * 4;
     let mut wav = Vec::new();
     wav.extend_from_slice(b"RIFF");
@@ -325,4 +329,213 @@ fn a_drive_with_both_export_folders_opens_the_newer() {
         assert_eq!(refusal["ok"], false, "{format}: writes are refused while both folders hold exports");
         unsafe { rbx_close(library) };
     }
+}
+
+#[test]
+fn files_added_with_stemcels_analysis_arrive_analysed() {
+    let dir = tempfile::tempdir().unwrap();
+    let location = fixture_library(dir.path());
+    let library = open_fixture(&location);
+    if rbl_db::is_rekordbox_app_running() {
+        return;
+    }
+    let audio = dir.path().join("analysed.wav");
+    std::fs::write(&audio, wav_of(44_100 * 4)).unwrap();
+    let path = audio.to_string_lossy().into_owned();
+    // A steady 128 BPM grid from 0.12 s over the four seconds.
+    let beats: Vec<f64> = (0..9).map(|i| 0.12 + f64::from(i) * 60.0 / 128.0).collect();
+    let request = json!({ "action": "importFiles", "paths": [path], "analyse": true,
+        "analysis": [{ "path": path, "bpm": 128.0, "beats": beats, "key": "A minor" }] });
+    let reply = take_json(unsafe { rbx_write_json(library, c(&request.to_string()).as_ptr()) });
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert_eq!(reply["analysed"], 1, "{reply}");
+    let id = reply["trackIds"][0].as_str().unwrap().to_owned();
+
+    // Added again: rekordbox now has an analysis, so it is kept.
+    let again = take_json(unsafe { rbx_write_json(library, c(&request.to_string()).as_ptr()) });
+    assert_eq!(again["analysed"], 0, "{again}");
+    assert_eq!(again["keptAnalysis"], 1, "{again}");
+    unsafe { rbx_close(library) };
+
+    let library = open_fixture(&location);
+    let detail = take_json(unsafe { rbx_track_json(library, c(&id).as_ptr()) });
+    let grid = detail["beats"].as_array().unwrap();
+    assert_eq!(grid.len(), beats.len(), "{detail}");
+    assert_eq!(grid[0][0], 120, "{detail}");
+    assert_eq!(grid[0][2], 128.0, "{detail}");
+    let snapshot = take_json(unsafe { rbx_snapshot_json(library) });
+    let track = snapshot["tracks"].as_array().unwrap().iter().find(|t| t["id"] == id.as_str()).unwrap().clone();
+    assert!((track["bpm"].as_f64().unwrap() - 128.0).abs() < 0.01, "{track}");
+    unsafe { rbx_close(library) };
+
+    let db = rbl_db::Library::open(location.clone(), rbl_db::OpenMode::ReadOnly).unwrap();
+    let (analysed, relative): (i64, String) = db
+        .connection()
+        .query_row("SELECT Analysed, AnalysisDataPath FROM djmdContent WHERE ID = ?1", [&id], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap();
+    assert_eq!(analysed, 105);
+    let dat = rbl_anlz::resolve(&location.share_root, &relative);
+    for extension in ["DAT", "EXT", "2EX"] {
+        assert!(dat.with_extension(extension).exists(), "{extension}");
+    }
+}
+
+#[test]
+fn keys_are_spelled_as_rekordbox_spells_them() {
+    assert_eq!(crate::analyse::key_spellings("A minor"), ["Am"]);
+    assert_eq!(crate::analyse::key_spellings("Eb major"), ["Eb", "D#"]);
+    assert_eq!(crate::analyse::key_spellings("C# minor"), ["C#m", "Dbm"]);
+    assert_eq!(crate::analyse::key_spellings("B minor"), ["Bm"]);
+    assert!(crate::analyse::key_spellings("").is_empty());
+}
+
+#[test]
+fn stemcel_cues_go_onto_a_desktop_track_without_overwriting_unless_asked() {
+    let dir = tempfile::tempdir().unwrap();
+    let location = fixture_library(dir.path());
+    let library = open_fixture(&location);
+    let snapshot = take_json(unsafe { rbx_snapshot_json(library) });
+    let track = snapshot["tracks"][0]["id"].as_str().unwrap().to_owned();
+    let write = |request: Value| take_json(unsafe { rbx_write_json(library, c(&request.to_string()).as_ptr()) });
+    if rbl_db::is_rekordbox_app_running() {
+        return; // writes are refused while rekordbox runs
+    }
+
+    let first = write(json!({ "action": "setCues", "trackId": track,
+        "hot": [{ "slot": 0, "posMs": 1000.0 }, { "slot": 2, "posMs": 2000.0, "endMs": 4000.0 }],
+        "memory": [{ "posMs": 500.0 }] }));
+    assert_eq!(first["ok"], true, "{first}");
+    assert_eq!(first["added"], 3, "{first}");
+
+    // Slot A is taken: kept as it is, and the memory cue is not added twice.
+    let again = write(json!({ "action": "setCues", "trackId": track,
+        "hot": [{ "slot": 0, "posMs": 3000.0 }], "memory": [{ "posMs": 505.0 }] }));
+    assert_eq!(again["added"], 0, "{again}");
+    assert_eq!(again["skipped"], 2, "{again}");
+
+    // Asked to replace: slot A moves to 3 s.
+    let replaced = write(json!({ "action": "setCues", "trackId": track, "replaceHot": true,
+        "hot": [{ "slot": 0, "posMs": 3000.0 }] }));
+    assert_eq!(replaced["replaced"], 1, "{replaced}");
+    unsafe { rbx_close(library) };
+
+    let library = open_fixture(&location);
+    let detail = take_json(unsafe { rbx_track_json(library, c(&track).as_ptr()) });
+    let cues = detail["cues"].as_array().unwrap();
+    let hot = |letter: &str| cues.iter().find(|c| c["hot"] == letter).cloned();
+    assert_eq!(hot("A").unwrap()["positionMs"], 3000, "{detail}");
+    let loop_c = hot("C").unwrap();
+    assert_eq!(loop_c["positionMs"], 2000, "{detail}");
+    assert_eq!(loop_c["endMs"], 4000, "{detail}");
+    assert!(cues.iter().any(|c| c["memory"] == true && c["positionMs"] == 500), "{detail}");
+    assert_eq!(cues.iter().filter(|c| c["hot"] == "A").count(), 1, "{detail}");
+
+    // By file: the track the collection already holds, or the file added first.
+    let path = snapshot["tracks"][0]["path"].as_str().unwrap().to_owned();
+    let write = |request: Value| take_json(unsafe { rbx_write_json(library, c(&request.to_string()).as_ptr()) });
+    let by_path = write(json!({ "action": "setCues", "path": path, "hot": [{ "slot": 7, "posMs": 100.0 }] }));
+    assert_eq!(by_path["trackId"], track.as_str(), "{by_path}");
+    assert_eq!(by_path["imported"], false, "{by_path}");
+    assert_eq!(by_path["added"], 1, "{by_path}");
+    let fresh = dir.path().join("fresh.wav");
+    std::fs::write(&fresh, wav_bytes()).unwrap();
+    let added = write(json!({ "action": "setCues", "path": fresh.to_string_lossy(), "memory": [{ "posMs": 250.0 }] }));
+    assert_eq!(added["imported"], true, "{added}");
+    assert_ne!(added["trackId"], track.as_str(), "{added}");
+    unsafe { rbx_close(library) };
+}
+
+#[test]
+fn the_collection_exports_to_a_stick_a_player_can_read() {
+    let source = tempfile::tempdir().unwrap();
+    let stick = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let audio = source.path().join("four seconds.wav");
+    std::fs::write(&audio, wav_of(44_100 * 4)).unwrap();
+    let beats: Vec<f64> = (0..9).map(|i| 0.12 + f64::from(i) * 60.0 / 128.0).collect();
+    let request = json!({
+        "action": "export", "root": stick.path().to_string_lossy(), "sync": true,
+        "cacheDir": cache.path().to_string_lossy(),
+        "tracks": [{ "id": 41, "path": audio.to_string_lossy(), "title": "Four Seconds", "artist": "Stemcel",
+            "key": "A minor", "bpm": 128.0, "firstBeat": 1, "beats": beats, "durationSec": 4.0, "rating": 3,
+            "colour": 2, "tags": ["Peak"], "dateAdded": "2026-11-13",
+            "cues": [{ "slot": 0, "pos": 0.12 }, { "slot": 4, "pos": 1.06, "end": 2.0 }, { "slot": -1, "pos": 0.59 }] }],
+        "playlists": [
+            { "id": 7, "name": "Sets", "parent": 0, "folder": true, "tracks": [] },
+            { "id": 8, "name": "Friday", "parent": 7, "folder": false, "tracks": [0] }
+        ]
+    });
+    let mut stages = Vec::new();
+    let report = crate::stick::export(&request, &mut |p| stages.push(p["stage"].as_str().unwrap_or_default().to_owned()), &|| false).unwrap();
+    assert_eq!(report["ok"], true, "{report}");
+    assert_eq!(report["tracks"], 1, "{report}");
+    assert!(report["failed"].as_array().unwrap().is_empty(), "{report}");
+    assert!(stages.iter().any(|s| s == "analysing"), "{stages:?}");
+
+    let verified = rbl_export::verify(stick.path()).unwrap();
+    assert!(verified.is_ok(), "{verified:?}");
+    assert_eq!(verified.tracks, 1);
+    assert_eq!(verified.playlist_entries, 1);
+    assert!(verified.analysis_present >= 1);
+
+    // The grid and cues in the stick's analysis.
+    let bytes = std::fs::read(stick.path().join("PIONEER/rekordbox/export.pdb")).unwrap();
+    let pdb = rbl_pdb::Pdb::parse(&bytes).unwrap();
+    let rows = pdb.track_rows(pdb.table(rbl_pdb::PageType::Tracks).unwrap());
+    let dat = stick.path().join(rows[0].analyze_path.trim_start_matches('/'));
+    let anlz = rbl_anlz::Anlz::read(&dat).unwrap();
+    let grid = anlz.beat_grid().unwrap();
+    assert_eq!(grid.len(), 9);
+    assert_eq!(grid[0].time_ms, 120);
+    assert_eq!(grid[0].beat_number, 1);
+    assert_eq!(grid[4].beat_number, 1);
+    assert_eq!(grid[0].tempo_x100, 12_800);
+
+    // Exported again with nothing changed: the analysis comes from the cache, the audio stays.
+    let again = crate::stick::export(&request, &mut |_| {}, &|| false).unwrap();
+    assert_eq!(again["ok"], true, "{again}");
+    assert_eq!(again["added"], 0, "{again}");
+
+    let history = crate::stick::histories(&stick.path().to_string_lossy()).unwrap();
+    assert_eq!(history["ok"], true, "{history}");
+    assert!(history["histories"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn the_collection_is_served_over_link() {
+    let source = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let audio = source.path().join("linked.wav");
+    std::fs::write(&audio, wav_of(44_100 * 4)).unwrap();
+    let beats: Vec<f64> = (0..9).map(|i| 0.12 + f64::from(i) * 60.0 / 128.0).collect();
+    let request = json!({
+        "libraryDir": dir.path().join("link").to_string_lossy(), "cacheDir": dir.path().join("anlz").to_string_lossy(),
+        "loopback": true,
+        "tracks": [{ "id": 5, "path": audio.to_string_lossy(), "title": "Linked", "artist": "Stemcel", "key": "A minor",
+            "bpm": 128.0, "firstBeat": 1, "beats": beats, "durationSec": 4.0, "rating": 4,
+            "cues": [{ "slot": 1, "pos": 0.59, "name": "Drop" }, { "slot": -1, "pos": 0.12 }] }],
+        "playlists": [{ "id": 9, "name": "Linked list", "parent": 0, "folder": false, "tracks": [0] }]
+    });
+    let started = crate::link::start(&request, &mut |_| {}).unwrap();
+    assert_eq!(started["ok"], true, "{started}");
+    assert_eq!(started["tracks"], 1, "{started}");
+    let status = crate::link::status();
+    assert_eq!(status["running"], true, "{status}");
+    crate::link::stop();
+    assert_eq!(crate::link::status()["running"], false);
+
+    // The library it served holds the track, analysed, with its cues and the playlist.
+    let location = rbl_db::LibraryLocation {
+        master_db: dir.path().join("link").join("master.db"),
+        share_root: dir.path().join("link").join("share"),
+        passphrase: rbl_db::fixture::FIXTURE_PASSPHRASE.to_owned(),
+        is_real_install: false,
+    };
+    let db = rbl_db::Library::open(location, rbl_db::OpenMode::ReadOnly).unwrap();
+    let (analysed, cues): (i64, i64) = db
+        .connection()
+        .query_row("SELECT c.Analysed, (SELECT COUNT(*) FROM djmdCue q WHERE q.ContentID = c.ID) FROM djmdContent c", [], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap();
+    assert_eq!(analysed, 105);
+    assert_eq!(cues, 2);
 }

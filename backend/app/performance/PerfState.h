@@ -39,6 +39,7 @@ struct DeckState
     int beatJumpPage = 1, keyPage = 0, keyboardCue = -1, padFxHeld = -1;
     bool bound = false; // the channel drives a timeline track
     float peak = 0.0F;
+    std::array<float, 3> bands{}; // low, mid, high peaks since the last state
 };
 
 struct FxState
@@ -66,6 +67,8 @@ struct DeckTrackInfo
     juce::String itemId, title, artist, key, audioPath;
     double bpm = 0.0, lengthSec = 0.0, anchorSec = 0.0;
     std::vector<double> beats; // the analysed beats (seconds), as the deck quantizes to them
+    bool hasLoudness = false;  // measured as it loaded, for auto gain
+    double lufs = 0.0;
 };
 
 struct State
@@ -78,6 +81,7 @@ struct State
     FxState fx;
     SamplerState sampler;
     juce::StringArray midi; // the controller monitor's last lines
+    juce::String cueDevice; // where the headphone cue goes
 };
 
 inline CuePoint cueFromVar(const juce::var& v)
@@ -91,6 +95,7 @@ inline void readState(const juce::var& p, State& s)
     s.open = static_cast<bool>(p.getProperty("open", false));
     s.cueOutput = static_cast<bool>(p.getProperty("cueOutput", false));
     s.recording = static_cast<bool>(p.getProperty("recording", false));
+    s.cueDevice = p.getProperty("cueDevice", "").toString();
     s.clock = static_cast<double>(p.getProperty("clock", 0.0));
     s.sampleRate = static_cast<double>(p.getProperty("sampleRate", 44100.0));
     s.crossfader = static_cast<float>(static_cast<double>(p.getProperty("crossfader", 0.5)));
@@ -175,6 +180,8 @@ inline void readState(const juce::var& p, State& s)
         x.padFxHeld = static_cast<int>(d.getProperty("padFxHeld", -1));
         x.bound = static_cast<bool>(d.getProperty("bound", false));
         x.peak = static_cast<float>(num("peak", 0.0));
+        if (const auto* bands = d.getProperty("bands", {}).getArray())
+            for (int b = 0; b < std::min(3, bands->size()); ++b) x.bands[static_cast<size_t>(b)] = static_cast<float>(static_cast<double>((*bands)[b]));
     }
 }
 

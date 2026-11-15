@@ -72,7 +72,7 @@ class StemcelApplication final : public juce::JUCEApplication
         // overrides it, which is how a smoke test runs under another theme).
         const auto themeOverride = juce::SystemStats::getEnvironmentVariable("STEMCEL_THEME", {});
         applyTheme(themeFromName(themeOverride.isNotEmpty() || smoke ? themeOverride
-                                                                     : prefs->get("ui", "theme", "terminal").toString()));
+                                                                     : prefs->get("ui", "theme", "fusionDark").toString()));
         lookAndFeel.applyColours();
         juce::LookAndFeel::setDefaultLookAndFeel(&lookAndFeel);
 

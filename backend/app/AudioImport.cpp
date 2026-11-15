@@ -60,6 +60,7 @@ struct AudioImporter::Prepared
     juce::File cover;   // temp file holding the embedded picture, when any
     double bpm = 0.0;   // rekordbox's tempo, applied as a manual tempo
     double beatAnchorSec = 0.0;
+    juce::var perfCues;
     juce::var sections; // rekordbox's phrases, as the item's arrangement sections
 };
 
@@ -87,6 +88,11 @@ juce::String AudioImporter::audioFileWildcard()
 }
 
 juce::String AudioImporter::playablePath(const juce::File& file)
+{
+    return playablePathFor(file, rekordbox);
+}
+
+juce::String AudioImporter::playablePathFor(const juce::File& file, Rekordbox& rekordbox)
 {
     juce::AudioFormatManager formats;
     formats.registerBasicFormats();
@@ -198,7 +204,9 @@ AudioImporter::Prepared AudioImporter::prepare(const ImportRequest& request)
     else if (request.hints.bpm > 0.0)
     {
         p.bpm = request.hints.bpm;
+        if (request.hints.beatAnchorSec >= 0.0) p.beatAnchorSec = request.hints.beatAnchorSec;
     }
+    p.perfCues = request.hints.perfCues;
     if (p.bpm < kMinManualBpm || p.bpm > kMaxManualBpm) p.bpm = 0.0;
 
     // AudioMetadata for the media store.
@@ -341,6 +349,7 @@ void AudioImporter::commit(std::vector<Prepared> prepared, const Done& done)
                     engine.send("LIBRARY_ITEM_SET_MANUAL_TEMPO",
                                 object({{"itemId", itemId}, {"bpm", p.bpm}, {"beatAnchorSec", p.beatAnchorSec}}));
                 if (p.sections.isArray()) engine.send("LIBRARY_ITEM_SET_SECTIONS", object({{"itemId", itemId}, {"sections", p.sections}}));
+                if (p.perfCues.isObject()) engine.send("LIBRARY_ITEM_SET_PERF_CUES", object({{"itemId", itemId}, {"cues", p.perfCues}}));
                 mirror.refreshNow();
                 itemIds.add(itemId);
                 log::info("import", "imported " + path + " as " + itemId + (p.bpm > 0.0 ? " bpm=" + juce::String(p.bpm, 2) : ""));

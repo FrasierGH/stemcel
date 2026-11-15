@@ -37,6 +37,8 @@ class Mapping
     static std::shared_ptr<const Mapping> forDevice(const juce::String& deviceName);
     static std::shared_ptr<const Mapping> fromJson(const juce::var& json, juce::String& error);
     static std::shared_ptr<const Mapping> fromFile(const juce::File& file, juce::String& error);
+    // Every model any installed mapping is for ("DDJ-400", ...).
+    static juce::StringArray allModels();
 
     const juce::String& name() const noexcept { return mappingName; }
     const std::vector<std::vector<juce::uint8>>& initMessages() const noexcept { return init; }
@@ -58,6 +60,7 @@ class Mapping
       private:
         std::shared_ptr<const Mapping> mapping;
         std::array<std::array<int, 128>, 16> msb{}, lsb{};
+        std::array<std::array<bool, 128>, 16> lsbSeen{}; // the controller sends the LSB: wait for it
     };
 
   private:

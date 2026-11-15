@@ -29,11 +29,17 @@ class DeckDisplay final : public juce::Component
     void setZoom(double secondsEachSide) { halfWindow = juce::jlimit(1.0, 16.0, secondsEachSide); }
     double zoom() const { return halfWindow; }
     std::function<void(double seconds)> onSeek; // a click on the overview
+    // The deck's platter, a child in the top corner on the outer side (deck 1 left, deck 2
+    // right), beside the title and the overview: shown or not, the layout follows.
+    void setPlatter(juce::Component* platter) { platterComponent = platter; }
 
     void paint(juce::Graphics&) override;
+    void resized() override;
     void mouseDown(const juce::MouseEvent&) override;
 
   private:
+    juce::Rectangle<int> topBand() const; // the header and overview, beside the platter
+    bool platterShown() const { return platterComponent != nullptr && platterComponent->isVisible(); }
     juce::Rectangle<int> overviewArea() const;
     juce::Rectangle<int> closeUpArea() const;
     void paintCloseUp(juce::Graphics&, juce::Rectangle<float> area);
@@ -52,6 +58,7 @@ class DeckDisplay final : public juce::Component
     juce::String trackName;
     std::vector<TrackClip> trackClips;
     double trackPlayheadMs = 0.0, trackLengthMs = 0.0;
+    juce::Component* platterComponent = nullptr;
 };
 
 } // namespace stemcel::native::perf

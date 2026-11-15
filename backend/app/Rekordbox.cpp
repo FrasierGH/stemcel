@@ -82,6 +82,13 @@ struct Rekordbox::Functions
     using Location = char* (*)(const void*);
     using Refusal = char* (*)(const void*);
     using Write = char* (*)(const void*, const char*);
+    using Volumes = char* (*)();
+    using ByRoot = char* (*)(const char*);
+    using ExportProgress = void (*)(void*, const char*);
+    using ExportCancelled = int (*)(void*);
+    using Export = char* (*)(const char*, ExportProgress, ExportCancelled, void*);
+    using LinkStart = char* (*)(const char*, ExportProgress, void*);
+    using LinkStop = void (*)();
 
     Open open = nullptr;
     Close close = nullptr;
@@ -100,6 +107,15 @@ struct Rekordbox::Functions
     Refusal refusal = nullptr;
     Write write = nullptr;
     Fixture deviceFixture = nullptr;
+    // Sticks without rekordbox.
+    Volumes volumes = nullptr;
+    ByRoot eject = nullptr;
+    ByRoot history = nullptr;
+    Export exportStick = nullptr;
+    Volumes linkInterfaces = nullptr;
+    LinkStart linkStart = nullptr;
+    Volumes linkStatus = nullptr;
+    LinkStop linkStop = nullptr;
 };
 
 const RekordboxTrack* RekordboxSnapshot::findTrack(const juce::String& id) const
@@ -175,6 +191,14 @@ Rekordbox::Rekordbox()
     f->refusal = reinterpret_cast<Functions::Refusal>(library.getFunction("rbx_write_refusal_json"));
     f->write = reinterpret_cast<Functions::Write>(library.getFunction("rbx_write_json"));
     f->deviceFixture = reinterpret_cast<Functions::Fixture>(library.getFunction("rbx_build_device_fixture"));
+    f->volumes = reinterpret_cast<Functions::Volumes>(library.getFunction("rbx_volumes_json"));
+    f->eject = reinterpret_cast<Functions::ByRoot>(library.getFunction("rbx_eject_json"));
+    f->history = reinterpret_cast<Functions::ByRoot>(library.getFunction("rbx_stick_history_json"));
+    f->exportStick = reinterpret_cast<Functions::Export>(library.getFunction("rbx_export_json"));
+    f->linkInterfaces = reinterpret_cast<Functions::Volumes>(library.getFunction("rbx_link_interfaces_json"));
+    f->linkStart = reinterpret_cast<Functions::LinkStart>(library.getFunction("rbx_link_start_json"));
+    f->linkStatus = reinterpret_cast<Functions::Volumes>(library.getFunction("rbx_link_status_json"));
+    f->linkStop = reinterpret_cast<Functions::LinkStop>(library.getFunction("rbx_link_stop"));
     if (f->open == nullptr || f->close == nullptr || f->freeString == nullptr || f->snapshot == nullptr
         || f->track == nullptr || f->tags == nullptr || f->picture == nullptr)
     {
@@ -188,6 +212,8 @@ Rekordbox::Rekordbox()
 
 Rekordbox::~Rekordbox()
 {
+    // Link's threads live in the module: stopped before anything else goes.
+    if (functions != nullptr && functions->linkStop != nullptr) functions->linkStop();
     std::scoped_lock lock(mutex);
     if (functions != nullptr && handle != nullptr) functions->close(handle);
     handle = nullptr;
@@ -242,6 +268,12 @@ RekordboxSnapshot Rekordbox::open(const juce::File& masterDb, const juce::String
         return snapshot;
     }
     return readSnapshot(source);
+}
+
+RekordboxSource Rekordbox::currentSource()
+{
+    std::scoped_lock lock(mutex);
+    return openSource;
 }
 
 RekordboxSnapshot Rekordbox::open(const RekordboxSource& source)
@@ -492,6 +524,24 @@ juce::File Rekordbox::backupFolder()
         .getChildFile("rekordbox");
 }
 
+// Only the newest backups are kept: each is a copy of one database (a few MB, more for a
+// very large collection), one per library per app session. Only folders this app made (with
+// its README) are ever removed.
+void Rekordbox::pruneBackups()
+{
+    constexpr int kKeep = 20;
+    auto folders = backupFolder().findChildFiles(juce::File::findDirectories, false);
+    folders.removeIf([](const juce::File& f)
+                     { return !f.getChildFile("README.txt").loadFileAsString().startsWith("Stemcel copied these files"); });
+    // Named from the time they were taken, so the names sort oldest first.
+    std::sort(folders.begin(), folders.end(), [](const juce::File& a, const juce::File& b) { return a.getFileName() < b.getFileName(); });
+    for (int i = 0; i < folders.size() - kKeep; ++i)
+    {
+        log::info("rekordbox", "removing the old backup " + folders[i].getFullPathName());
+        folders.getReference(i).deleteRecursively();
+    }
+}
+
 // Copies the database files of `source` aside, once per library (a stick's two together)
 // per app session. Writes
 // are refused while rekordbox is running, so the files are at rest while they're copied.
@@ -544,6 +594,7 @@ bool Rekordbox::backUp(const RekordboxSource& source, const juce::File& database
                          + " in this session.\n\nFrom: " + dir.getFullPathName()
                          + "\n\nTo put them back, quit rekordbox and copy them over the files there.\n");
     backedUp.insert(id);
+    pruneBackups();
     log::info("rekordbox", "backed up " + juce::String(copied) + " file(s) of " + dir.getFullPathName() + " to "
                                + folder.getFullPathName());
     return true;
@@ -582,7 +633,8 @@ juce::var Rekordbox::write(const juce::var& request)
     return writeTo(handle, openSource, openDatabase, request);
 }
 
-juce::var Rekordbox::addToComputerLibrary(const juce::Array<juce::File>& files, const juce::String& playlist)
+juce::var Rekordbox::addToComputerLibrary(const juce::Array<juce::File>& files, const juce::String& playlist,
+                                          const juce::var& analysis)
 {
     if (functions == nullptr) return failure(loadError);
     if (functions->write == nullptr || functions->refusal == nullptr || functions->location == nullptr)
@@ -593,8 +645,69 @@ juce::var Rekordbox::addToComputerLibrary(const juce::Array<juce::File>& files, 
     request->setProperty("action", "importFiles");
     request->setProperty("paths", paths);
     if (playlist.isNotEmpty()) request->setProperty("playlist", playlist);
-    const juce::var requestVar(request);
+    if (analysis.isArray())
+    {
+        request->setProperty("analyse", true);
+        request->setProperty("analysis", analysis);
+    }
+    return writeToComputerLibrary(juce::var(request));
+}
 
+juce::var Rekordbox::sendCuesToComputerLibrary(const juce::File& file, const juce::var& cues, bool replaceHot)
+{
+    if (functions == nullptr) return failure(loadError);
+    if (functions->write == nullptr || functions->refusal == nullptr || functions->location == nullptr)
+        return failure("This build's rekordbox reader can't write.");
+    const auto request = cuesRequest(file, cues, replaceHot);
+    if (!request.isObject()) return failure("It has no hot or memory cues to send.");
+    return writeToComputerLibrary(request);
+}
+
+juce::var Rekordbox::cuesRequest(const juce::File& file, const juce::var& cues, bool replaceHot)
+{
+    // Seconds to milliseconds; a cue with an end after its start is a loop.
+    const auto cue = [](const juce::var& c, juce::DynamicObject& into)
+    {
+        const double pos = c.getProperty("pos", -1.0);
+        if (pos < 0.0) return false;
+        into.setProperty("posMs", pos * 1000.0);
+        if (c.hasProperty("end"))
+        {
+            const double end = c.getProperty("end", 0.0);
+            if (end > pos) into.setProperty("endMs", end * 1000.0);
+        }
+        return true;
+    };
+    juce::Array<juce::var> hot;
+    juce::Array<juce::var> memory;
+    if (const auto* slots = cues.getProperty("hot", {}).getArray())
+        for (int slot = 0; slot < std::min(8, slots->size()); ++slot)
+        {
+            auto* c = new juce::DynamicObject();
+            const juce::var held(c);
+            c->setProperty("slot", slot);
+            if (cue((*slots)[slot], *c)) hot.add(held);
+        }
+    if (const auto* list = cues.getProperty("memory", {}).getArray())
+        for (const auto& m : *list)
+        {
+            auto* c = new juce::DynamicObject();
+            const juce::var held(c);
+            if (cue(m, *c)) memory.add(held);
+        }
+    if (hot.isEmpty() && memory.isEmpty()) return {};
+    auto* request = new juce::DynamicObject();
+    request->setProperty("action", "setCues");
+    request->setProperty("path", file.getFullPathName());
+    request->setProperty("hot", hot);
+    request->setProperty("memory", memory);
+    request->setProperty("replaceHot", replaceHot);
+    return juce::var(request);
+}
+
+// A write to this computer's library, whatever library is open.
+juce::var Rekordbox::writeToComputerLibrary(const juce::var& requestVar)
+{
     std::scoped_lock lock(mutex);
     if (handle != nullptr && openSource.kind == RekordboxSource::Kind::computer)
         return writeTo(handle, openSource, openDatabase, requestVar);
@@ -632,6 +745,88 @@ juce::var Rekordbox::buildFixture(const juce::File& dir, const juce::File& audio
     const auto json = juce::JSON::parse(juce::String::fromUTF8(raw));
     functions->freeString(raw);
     return json;
+}
+
+juce::var Rekordbox::volumes()
+{
+    if (functions == nullptr || functions->volumes == nullptr) return failure(loadError.isNotEmpty() ? loadError : "This build can't list drives.");
+    return juce::JSON::parse(callJson([&] { return functions->volumes(); }));
+}
+
+juce::var Rekordbox::eject(const juce::File& root)
+{
+    if (functions == nullptr || functions->eject == nullptr) return failure("This build can't eject drives.");
+    const auto path = root.getFullPathName();
+    return juce::JSON::parse(callJson([&] { return functions->eject(path.toRawUTF8()); }));
+}
+
+juce::var Rekordbox::stickHistories(const juce::File& root)
+{
+    if (functions == nullptr || functions->history == nullptr) return failure("This build can't read play histories.");
+    const auto path = root.getFullPathName();
+    return juce::JSON::parse(callJson([&] { return functions->history(path.toRawUTF8()); }));
+}
+
+namespace
+{
+struct ExportCallbacks
+{
+    std::function<void(const juce::var&)> progress;
+    std::function<bool()> cancelled;
+};
+
+void exportProgress(void* ctx, const char* json)
+{
+    auto* callbacks = static_cast<ExportCallbacks*>(ctx);
+    if (callbacks->progress && json != nullptr) callbacks->progress(juce::JSON::parse(juce::String::fromUTF8(json)));
+}
+
+int exportCancelled(void* ctx)
+{
+    auto* callbacks = static_cast<ExportCallbacks*>(ctx);
+    return callbacks->cancelled && callbacks->cancelled() ? 1 : 0;
+}
+} // namespace
+
+juce::var Rekordbox::exportToStick(const juce::var& request, std::function<void(const juce::var&)> progress,
+                                   std::function<bool()> cancelled)
+{
+    if (functions == nullptr || functions->exportStick == nullptr) return failure("This build can't export to USB.");
+    ExportCallbacks callbacks{std::move(progress), std::move(cancelled)};
+    const auto text = juce::JSON::toString(request, true);
+    auto result = juce::JSON::parse(callJson([&] { return functions->exportStick(text.toRawUTF8(), exportProgress, exportCancelled, &callbacks); }));
+    if (!result.isObject()) return failure("The export gave no answer.");
+    log::info("rekordbox", "export to " + request.getProperty("root", "").toString() + ": "
+                               + juce::JSON::toString(result, true).substring(0, 2000));
+    return result;
+}
+
+juce::var Rekordbox::linkInterfaces()
+{
+    if (functions == nullptr || functions->linkInterfaces == nullptr) return failure("This build can't run Link Export.");
+    return juce::JSON::parse(callJson([&] { return functions->linkInterfaces(); }));
+}
+
+juce::var Rekordbox::linkStart(const juce::var& request, std::function<void(const juce::var&)> progress)
+{
+    if (functions == nullptr || functions->linkStart == nullptr) return failure("This build can't run Link Export.");
+    ExportCallbacks callbacks{std::move(progress), {}};
+    const auto text = juce::JSON::toString(request, true);
+    auto result = juce::JSON::parse(callJson([&] { return functions->linkStart(text.toRawUTF8(), exportProgress, &callbacks); }));
+    if (!result.isObject()) return failure("Link gave no answer.");
+    log::info("rekordbox", "link: " + juce::JSON::toString(result, true).substring(0, 1000));
+    return result;
+}
+
+juce::var Rekordbox::linkStatus()
+{
+    if (functions == nullptr || functions->linkStatus == nullptr) return failure("This build can't run Link Export.");
+    return juce::JSON::parse(callJson([&] { return functions->linkStatus(); }));
+}
+
+void Rekordbox::linkStop()
+{
+    if (functions != nullptr && functions->linkStop != nullptr) functions->linkStop();
 }
 
 Rekordbox& sharedRekordbox()
