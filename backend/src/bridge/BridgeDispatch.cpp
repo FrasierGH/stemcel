@@ -505,6 +505,14 @@ bool dispatchTrack(const DispatchContext& ctx)
         stemcel::log::info("bridge", "recv TRACK_DUPLICATE trackId=" + payload.getProperty("trackId", "").toString());
         stemcel::handleTrackDuplicate(payload, engine, projectState, bridge, ctx.peakPool, ctx.decodedCache, ctx.session);
     }
+    else if (type == "TRACK_SET_BUS")
+    {
+        stemcel::handleTrackSetBus(payload, engine, projectState);
+    }
+    else if (type == "TRACK_SET_OUTPUT")
+    {
+        stemcel::handleTrackSetOutput(payload, engine, projectState);
+    }
     else if (type == "TRACK_REMOVE")
     {
         stemcel::log::info("bridge", "recv TRACK_REMOVE trackId=" + payload.getProperty("trackId", "").toString());
@@ -654,6 +662,10 @@ bool dispatchTrack(const DispatchContext& ctx)
     else if (type == "TRACK_SET_PLUGIN_BYPASS")
     {
         stemcel::handleTrackSetPluginBypass(payload, engine, projectState, bridge);
+    }
+    else if (type == "TRACK_SET_PLUGIN_MIX")
+    {
+        stemcel::handleTrackSetPluginMix(payload, engine, projectState, bridge);
     }
     else if (type == "TRACK_OPEN_PLUGIN_EDITOR")
     {

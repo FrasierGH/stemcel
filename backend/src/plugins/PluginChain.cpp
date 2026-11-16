@@ -53,6 +53,8 @@ PluginSlot::PluginSlot(PluginSlotDescriptor slotDescriptor,
 {
     bypassed.store(descriptor.bypassed, std::memory_order_relaxed);
     wetGain = descriptor.bypassed ? 0.0F : 1.0F;
+    setMix(descriptor.mix);
+    mixGain = mix.load(std::memory_order_relaxed);
 }
 
 PluginSlot::~PluginSlot() { release(); }
@@ -82,6 +84,10 @@ void PluginSlot::prepare(double sampleRate, int maxBlockSize)
 
     scratch.setSize(busChannels, blockSize, false, true, false);
     scratch.clear();
+    // The dry sound, delayed as long as the plugin's latency (up to two seconds), for the mix.
+    dry.setSize(2, blockSize, false, true, false);
+    dryDelay.prepare(2, static_cast<int>(sampleRate * 2.0), blockSize);
+    dryDelay.setDelaySamples(juce::jmax(0, instance->getLatencySamples()));
     scratchChannels.assign(static_cast<std::size_t>(busChannels), nullptr);
     midiScratch.ensureSize(256);
     midiScratch.clear();
@@ -159,10 +165,39 @@ void PluginSlot::process(juce::AudioBuffer<float>& buffer, int startSample,
 
     midiScratch.clear();
 
+    // The dry sound for the mix, kept in step with the plugin's latency.
+    const bool mixing = mixUsed.load(std::memory_order_relaxed) && numSamples <= dry.getNumSamples();
+    if (mixing)
+    {
+        for (int ch = 0; ch < 2; ++ch)
+            dry.copyFrom(ch, 0, buffer, juce::jmin(ch, buffer.getNumChannels() - 1), startSample, numSamples);
+        dryDelay.setDelaySamples(juce::jmax(0, instance->getLatencySamples()));
+        dryDelay.process(dry, 0, numSamples);
+    }
+
     // Third-party code: it may allocate or lock inside this call and we cannot prevent
     // it. This is the bounded exception to ADR 0006 that ADR 0025 documents.
     juce::AudioBuffer<float> view(scratchChannels.data(), busChannels, numSamples);
     instance->processBlock(view, midiScratch);
+
+    // The mix: the plugin's output against the aligned dry sound, ramped across the block.
+    const float mixTarget = mix.load(std::memory_order_relaxed);
+    if (mixing && (mixTarget < 0.9999F || mixGain < 0.9999F))
+    {
+        const float step = (mixTarget - mixGain) / static_cast<float>(numSamples);
+        for (int ch = 0; ch < sourceChannels; ++ch)
+        {
+            auto* wet = view.getWritePointer(ch);
+            const auto* d = dry.getReadPointer(juce::jmin(ch, 1));
+            float m = mixGain;
+            for (int i = 0; i < numSamples; ++i)
+            {
+                m += step;
+                wet[i] = d[i] + (wet[i] - d[i]) * m;
+            }
+        }
+    }
+    mixGain = mixTarget;
 
     if (wetGain == target)
     {
@@ -297,6 +332,23 @@ bool PluginChain::setSlotBypassed(const juce::String& slotId, bool shouldBypass)
     return true;
 }
 
+bool PluginChain::setSlotMix(const juce::String& slotId, float newMix)
+{
+    auto* slot = findSlot(slotId);
+    if (slot == nullptr) return false;
+    slot->setMix(newMix);
+    return true;
+}
+
+PluginSlot* PluginChain::findPublishedSlot(const juce::String& slotId) const noexcept
+{
+    const auto* snapshot = published.load(std::memory_order_acquire);
+    if (snapshot == nullptr) return nullptr;
+    for (auto* slot : snapshot->slots)
+        if (slot != nullptr && slot->getSlotId() == slotId) return slot;
+    return nullptr;
+}
+
 void PluginChain::prepare(double sampleRate, int maxBlockSize)
 {
     preparedRate = sampleRate;
@@ -351,7 +403,10 @@ std::vector<PluginSlotDescriptor> PluginChain::getDescriptors() const
     std::vector<PluginSlotDescriptor> out;
     out.reserve(slots.size());
     for (const auto& slot : slots)
+    {
         out.push_back(slot->getDescriptor());
+        out.back().mix = slot->getMix();
+    }
 
     return out;
 }

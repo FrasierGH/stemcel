@@ -594,6 +594,38 @@ juce::String TimelineActions::addTrack()
     return id;
 }
 
+juce::String TimelineActions::addBus()
+{
+    int buses = 0;
+    for (const auto& t : model().tracks) buses += static_cast<bool>(t.raw.getProperty("isBus", false)) ? 1 : 0;
+    juce::String id;
+    engine.inUndoGroup("Add bus",
+                       [&]
+                       {
+                           id = addTrack();
+                           renameTrack(id, "Bus " + juce::String(buses + 1));
+                           engine.send("TRACK_SET_BUS", obj({{"trackId", id}, {"isBus", true}}));
+                       });
+    return id;
+}
+
+void TimelineActions::setTrackOutput(const juce::String& trackId, const juce::String& busId)
+{
+    engine.send("TRACK_SET_OUTPUT", obj({{"trackId", trackId}, {"busId", busId}}));
+}
+
+juce::String TimelineActions::sendToNewBus(const juce::String& trackId)
+{
+    juce::String id;
+    engine.inUndoGroup("Send to a new bus",
+                       [&]
+                       {
+                           id = addBus();
+                           setTrackOutput(trackId, id);
+                       });
+    return id;
+}
+
 void TimelineActions::removeTrack(const juce::String& trackId)
 {
     engine.send("TRACK_REMOVE", obj({{"trackId", trackId}}));
@@ -981,7 +1013,14 @@ void TimelineActions::toggleAutomation(const juce::String& trackId)
     std::vector<automation::Lane> next;
     if (const auto it = hiddenLanes.find(trackId); it != hiddenLanes.end()) next = it->second;
     if (next.empty())
-        for (const auto& id : automatedParams(trackId)) next.push_back({id, automation::kDefaultLaneHeight});
+        for (const auto& id : automatedParams(trackId))
+        {
+            // Only what changes: a curve held at one value the whole way isn't worth a lane.
+            const auto points = automation::pointsOf(*track, id);
+            const bool moves = std::any_of(points.begin(), points.end(),
+                                           [&](const automation::Point& p) { return std::abs(p.value - points.front().value) > 1.0e-3; });
+            if (moves) next.push_back({id, automation::kDefaultLaneHeight});
+        }
     if (next.empty()) next.push_back({"level", automation::kDefaultLaneHeight});
     setAutomationLanes(trackId, next);
 }

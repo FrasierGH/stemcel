@@ -20,7 +20,9 @@ class PluginCatalogue
     explicit PluginCatalogue(const juce::File& dataDirectory = {});
     ~PluginCatalogue();
 
-    juce::Array<juce::PluginDescription> getKnownPlugins() const;
+    juce::Array<juce::PluginDescription> getKnownPlugins() const; // what scans found
+    // Those, and Stemcel's own effects (BuiltInFx): what a track can be given.
+    juce::Array<juce::PluginDescription> getAvailablePlugins() const;
     juce::StringArray getBlacklistedFiles() const;
 
     /** True when a plugin with this `fileOrIdentifier` is installed and scanned. */

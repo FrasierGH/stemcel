@@ -104,6 +104,22 @@ bool AudioEngine::setTrackPluginBypassed(const juce::String& trackId, const juce
     return chain->setSlotBypassed(slotId, bypassed);
 }
 
+bool AudioEngine::setTrackPluginMix(const juce::String& trackId, const juce::String& slotId, float mix)
+{
+    auto* chain = busGraph.getTrackPlugins(trackId);
+    return chain != nullptr && chain->setSlotMix(slotId, mix);
+}
+
+bool AudioEngine::setTrackPluginParameterValue(const juce::String& trackId, const juce::String& slotId, int index, float value)
+{
+    auto* chain = busGraph.getTrackPlugins(trackId);
+    auto* slot = chain != nullptr ? chain->findSlot(slotId) : nullptr;
+    auto* instance = slot != nullptr ? slot->getInstance() : nullptr;
+    if (instance == nullptr || index < 0 || index >= instance->getParameters().size()) return false;
+    instance->getParameters()[index]->setValueNotifyingHost(juce::jlimit(0.0F, 1.0F, value));
+    return true;
+}
+
 std::vector<plugins::PluginSlotDescriptor> AudioEngine::getTrackPluginSlots(
     const juce::String& trackId)
 {

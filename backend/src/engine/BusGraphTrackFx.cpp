@@ -21,24 +21,36 @@ void BusGraph::updateLatencyCompensation() noexcept
                           ? static_cast<int>(kMaxLatencyCompensationSeconds * preparedRate)
                           : 0;
 
+    // Each track's path to the master: its own chain, and its bus's when it is sent to one.
+    // Every path is delayed to the longest, so tracks stay in time whichever way they go.
+    const auto ownLatency = [&](const juce::String& id)
+    {
+        const auto chain = trackPlugins.find(id);
+        return chain != trackPlugins.end() && chain->second != nullptr ? juce::jlimit(0, bound, chain->second->getLatencySamples()) : 0;
+    };
+    const auto pathLatency = [&](const juce::String& id)
+    {
+        int path = ownLatency(id);
+        if (const auto* bus = outputOf(id)) path += ownLatency(bus->trackId);
+        return path;
+    };
     int alignment = 0;
     for (const auto& [trackId, chain] : trackPlugins)
     {
         // The master's latency delays every track alike, so it needs no alignment.
         if (chain == nullptr || trackId == plugins::kMasterChainId) continue;
-        alignment = juce::jmax(alignment, juce::jlimit(0, bound, chain->getLatencySamples()));
+        alignment = juce::jmax(alignment, juce::jlimit(0, bound, pathLatency(trackId)));
     }
+    for (const auto& [trackId, runtime] : runtimes)
+        if (runtime != nullptr && !runtime->isBus) alignment = juce::jmax(alignment, juce::jlimit(0, bound, pathLatency(trackId)));
 
     latencyCompensationSamples.store(alignment, std::memory_order_relaxed);
 
     for (auto& [trackId, runtime] : runtimes)
     {
         if (runtime == nullptr) continue;
-        const auto chain = trackPlugins.find(trackId);
-        const int own = chain != trackPlugins.end() && chain->second != nullptr
-                            ? juce::jlimit(0, bound, chain->second->getLatencySamples())
-                            : 0;
-        runtime->compensationDelay.setDelaySamples(alignment - own);
+        // A bus adds no delay of its own: the tracks sent to it carry the alignment.
+        runtime->compensationDelay.setDelaySamples(runtime->isBus ? 0 : alignment - pathLatency(trackId));
     }
 }
 

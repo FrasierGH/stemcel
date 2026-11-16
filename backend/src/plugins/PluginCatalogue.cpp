@@ -1,4 +1,5 @@
 #include "PluginCatalogue.h"
+#include "BuiltInFx.h"
 
 #include "AppPaths.h"
 #include "Log.h"
@@ -55,6 +56,14 @@ juce::Array<juce::PluginDescription> PluginCatalogue::getKnownPlugins() const
     return knownPlugins.getTypes();
 }
 
+juce::Array<juce::PluginDescription> PluginCatalogue::getAvailablePlugins() const
+{
+    // Stemcel's own effects are always there, after what a scan found.
+    auto all = knownPlugins.getTypes();
+    all.addArray(builtInDescriptions());
+    return all;
+}
+
 juce::StringArray PluginCatalogue::getBlacklistedFiles() const
 {
     return knownPlugins.getBlacklistedFiles();
@@ -62,6 +71,7 @@ juce::StringArray PluginCatalogue::getBlacklistedFiles() const
 
 bool PluginCatalogue::hasPlugin(const juce::String& fileOrIdentifier) const
 {
+    if (isBuiltInIdentifier(fileOrIdentifier)) return true;
     for (const auto& type : knownPlugins.getTypes())
         if (type.fileOrIdentifier == fileOrIdentifier) return true;
 
@@ -162,6 +172,12 @@ void PluginCatalogue::clearBlacklist()
 std::unique_ptr<juce::AudioPluginInstance> PluginCatalogue::createInstance(
     const juce::PluginDescription& description, double sampleRate, int blockSize, juce::String& errorMessage)
 {
+    if (isBuiltIn(description))
+    {
+        auto plugin = createBuiltIn(description, sampleRate, blockSize);
+        if (plugin == nullptr) errorMessage = "unknown built-in effect " + description.fileOrIdentifier;
+        return plugin;
+    }
     return formatManager.createPluginInstance(description, sampleRate, blockSize, errorMessage);
 }
 

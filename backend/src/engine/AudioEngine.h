@@ -162,6 +162,11 @@ class AudioEngine : private AudioEngineGraphState,
     void setTrackSends(const juce::String& trackId, float reverbSend, float delaySend);
 
     void setTrackPan(const juce::String& trackId, float pan);
+    // Buses: a track id with no clips that other tracks are sent to (see BusGraph).
+    void ensureBus(const juce::String& busId);
+    void removeBus(const juce::String& busId);
+    void setTrackOutput(const juce::String& trackId, const juce::String& busId);
+    void setBusGain(const juce::String& busId, float gain);
     void retireTrackFxState(const juce::String& trackId);
 
     // ── VST3 plugin inserts (ADR 0025) ──────────────────────────────────
@@ -201,6 +206,10 @@ class AudioEngine : private AudioEngineGraphState,
     /** Message thread: an insert parameter's current normalised value (0..1), or nothing when
      *  the slot or index is unknown. Read-only; for checks and display. */
     std::optional<float> getTrackPluginParameterValue(const juce::String& trackId, const juce::String& slotId, int index);
+    // A parameter's normalised value (0..1) set from Track FX's knobs; the plugin's state
+    // carries it into the project when it is saved.
+    bool setTrackPluginParameterValue(const juce::String& trackId, const juce::String& slotId, int index, float value);
+    bool setTrackPluginMix(const juce::String& trackId, const juce::String& slotId, float mix);
 
     /** Replaces a track's whole insert chain from persisted slots. Idempotent, so load,
      *  undo/redo, and a full engine rebuild can all share it. Slots whose plugin is not in

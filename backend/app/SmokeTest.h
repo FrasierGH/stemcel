@@ -98,6 +98,7 @@ class SmokeTest final : private juce::Timer
     juce::StringArray uvrLibraryBefore; // item ids before the best-of-both run
     juce::String lastTempoLine;
     juce::String renameKeyBefore, renameFileBefore;
+    juce::String busId; // the buses step's
     juce::String trackId;
     juce::String itemId;
     juce::String clipId;

@@ -25,6 +25,12 @@ float applyEffectiveClipGains(const juce::String& trackId,
                               stemcel::ProjectState& projectState)
 {
     const float effective = projectState.getEffectiveTrackGain(trackId);
+    // A bus has no clips: its gain is the bus's own (and it always renders).
+    if (projectState.isTrackBus(trackId))
+    {
+        engine.setBusGain(trackId, effective);
+        return 1.0F;
+    }
     const auto clipIds = projectState.getTrackClipIds(trackId);
     for (const auto& clipId : clipIds)
     {
@@ -33,10 +39,18 @@ float applyEffectiveClipGains(const juce::String& trackId,
     return effective;
 }
 
+void pushAllEffectiveGainsToEngine(stemcel::AudioEngine& engine, stemcel::ProjectState& projectState);
+
 void applyEffectiveTrackState(const juce::String& trackId,
                               stemcel::AudioEngine& engine,
                               stemcel::ProjectState& projectState)
 {
+    // A bus's mute or solo reaches the tracks sent to it.
+    if (projectState.isTrackBus(trackId))
+    {
+        pushAllEffectiveGainsToEngine(engine, projectState);
+        return;
+    }
     const float effective =
         applyEffectiveClipGains(trackId, engine, projectState);
     engine.setTrackAudible(trackId, effective > 0.0F);
@@ -62,6 +76,32 @@ void pushAllEffectiveGainsToEngine(stemcel::AudioEngine& engine,
     engine.setTracksAudible(audibility);
 }
 } // namespace
+
+void handleTrackSetBus(const juce::var& payload, stemcel::AudioEngine& engine, stemcel::ProjectState& projectState)
+{
+    const juce::String trackId = tryGetRequiredString(payload, "trackId").value_or(juce::String{});
+    const auto isBus = readOptionalBool(payload, "isBus");
+    if (trackId.isEmpty() || !isBus.has_value()) return;
+    if (!projectState.setTrackIsBus(trackId, *isBus)) return;
+    if (*isBus)
+    {
+        engine.setTrackOutput(trackId, {});
+        engine.ensureBus(trackId);
+    }
+    else
+        engine.removeBus(trackId);
+    pushAllEffectiveGainsToEngine(engine, projectState);
+}
+
+void handleTrackSetOutput(const juce::var& payload, stemcel::AudioEngine& engine, stemcel::ProjectState& projectState)
+{
+    const juce::String trackId = tryGetRequiredString(payload, "trackId").value_or(juce::String{});
+    const juce::String busId = payload.getProperty("busId", "").toString();
+    if (trackId.isEmpty()) return;
+    if (!projectState.setTrackOutputBus(trackId, busId)) return;
+    engine.setTrackOutput(trackId, projectState.getTrackOutputBus(trackId));
+    pushAllEffectiveGainsToEngine(engine, projectState);
+}
 
 void handleTrackAdd(const juce::var& payload, stemcel::ProjectState& projectState, stemcel::BridgeServer& bridge)
 {
@@ -122,8 +162,19 @@ void handleTrackRemove(const juce::var& payload, stemcel::AudioEngine& engine, s
         engine.removeClip(clipId);
     }
     engine.clearTrackBeatRepeatRegions(trackId);
+    const bool wasBus = projectState.isTrackBus(trackId);
+    std::vector<juce::String> sent;
+    if (wasBus)
+        for (const auto& t : projectState.getTrackIds())
+            if (projectState.getTrackOutputBus(t) == trackId) sent.push_back(t);
     projectState.removeTrack(trackId);
     engine.retireTrackFxState(trackId);
+    if (wasBus)
+    {
+        engine.removeBus(trackId);
+        for (const auto& t : sent) engine.setTrackOutput(t, {});
+        pushAllEffectiveGainsToEngine(engine, projectState);
+    }
 
     // Removing the last track empties the timeline, and a marker or a selection over
     // nothing has nothing left to name: the ruler draws no time without tracks, so the

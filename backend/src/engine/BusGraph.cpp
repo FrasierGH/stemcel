@@ -135,7 +135,7 @@ void BusGraph::detachClip(const juce::String& clipId,
     if (releaseSource)
         clipTransport->releaseResources();
 
-    if (removeRuntime || rt->clips.empty())
+    if (!rt->isBus && (removeRuntime || rt->clips.empty()))
     {
         rt->chain.reset();
         runtimes.erase(rt->trackId);
@@ -194,9 +194,72 @@ void BusGraph::detachClips(const std::vector<ClipDetachment>& clips,
 
     for (auto* rt : emptyRuntimes)
     {
+        if (rt->isBus) continue; // a bus has no clips of its own to lose
         rt->chain.reset();
         runtimes.erase(rt->trackId);
     }
+}
+
+void BusGraph::ensureBus(const juce::String& busId)
+{
+    if (busId.isEmpty()) return;
+    const juce::ScopedLock sl(lock);
+    auto it = runtimes.find(busId);
+    if (it == runtimes.end())
+    {
+        auto rt = std::make_unique<TrackRuntime>();
+        rt->trackId = busId;
+        rt->isBus = true;
+        if (preparedMax > 0) rt->prepareToPlay(preparedMax, preparedRate);
+        if (const auto a = pendingAutomation.find(busId); a != pendingAutomation.end())
+        {
+            rt->publishedAutomation = a->second;
+            if (a->second != nullptr && a->second->usesDjFx()) rt->chain.ensureDjFx();
+        }
+        it = runtimes.emplace(busId, std::move(rt)).first;
+    }
+    else if (!it->second->isBus)
+    {
+        it->second->isBus = true;
+        if (preparedMax > 0) it->second->prepareToPlay(preparedMax, preparedRate);
+    }
+    if (const auto g = pendingBusGains.find(busId); g != pendingBusGains.end())
+    {
+        it->second->busGain.store(g->second, std::memory_order_relaxed);
+        it->second->currentBusGain = g->second;
+    }
+    applyPendingTrackFx(*it->second);
+    publishRenderSnapshot();
+    updateLatencyCompensation();
+}
+
+void BusGraph::removeBus(const juce::String& busId)
+{
+    const juce::ScopedLock sl(lock);
+    const auto it = runtimes.find(busId);
+    if (it == runtimes.end() || !it->second->isBus) return;
+    // Out of the snapshot first; the publish waits out any callback still using it.
+    auto node = runtimes.extract(it);
+    publishRenderSnapshot();
+    node.mapped()->chain.reset();
+    pendingBusGains.erase(busId);
+    updateLatencyCompensation();
+}
+
+void BusGraph::setTrackOutput(const juce::String& trackId, const juce::String& busId)
+{
+    const juce::ScopedLock sl(lock);
+    if (busId.isEmpty() || busId == trackId) trackOutputs.erase(trackId);
+    else trackOutputs[trackId] = busId;
+    publishRenderSnapshot();
+    updateLatencyCompensation();
+}
+
+void BusGraph::setBusGain(const juce::String& busId, float gain)
+{
+    pendingBusGains[busId] = gain;
+    if (const auto it = runtimes.find(busId); it != runtimes.end() && it->second->isBus)
+        it->second->busGain.store(gain, std::memory_order_relaxed);
 }
 
 bool BusGraph::consumeTrackPeaks(const juce::String& trackId,
@@ -411,6 +474,8 @@ void BusGraph::clear()
     clearPendingTrackFx();
     pendingAutomation.clear();
     pendingBeatRepeats.clear();
+    trackOutputs.clear();
+    pendingBusGains.clear();
     sharedFx.reset();
 }
 

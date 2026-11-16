@@ -547,6 +547,74 @@ void SmokeTest::addSteps()
                          return t != nullptr && std::abs(static_cast<double>(t->raw.getProperty("toneBassDb", 0.0)) - 4.5) < 0.01
                                 && std::abs(static_cast<double>(t->raw.getProperty("sendReverb", 0.0)) - 0.3) < 0.01;
                      }});
+    // One of performance mode's effects on the track (a built-in plugin) and its mix, live and
+    // saved; then taken off again. (Its module in Track FX is checked once the window is up.)
+    steps.push_back({"track effects",
+                     [this] { engine.send("TRACK_ADD_PLUGIN", object({{"trackId", trackId}, {"identifier", "djfx:beat:1"}})); },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         static juce::String slot;
+                         mirror.refreshNow();
+                         const auto* t = model().findTrack(trackId);
+                         if (t == nullptr) return false;
+                         juce::var entry;
+                         if (const auto* list = t->raw.getProperty("plugins", {}).getArray())
+                             for (const auto& s : *list)
+                                 if (s.getProperty("identifier", "").toString() == "djfx:beat:1") entry = s;
+                         if (!entry.isObject()) return false;
+                         if (slot.isEmpty())
+                         {
+                             slot = entry.getProperty("slotId", "").toString();
+                             engine.send("TRACK_SET_PLUGIN_MIX", object({{"trackId", trackId}, {"slotId", slot}, {"mix", 0.4}}));
+                             return false;
+                         }
+                         if (std::abs(static_cast<double>(entry.getProperty("mix", 1.0)) - 0.4) > 1.0e-3) return false;
+                         float liveMix = -1.0F;
+                         for (const auto& d : engine.host().engine().getTrackPluginSlots(trackId))
+                             if (d.slotId == slot) liveMix = d.mix;
+                         if (std::abs(liveMix - 0.4F) > 1.0e-3F) return false;
+                         const auto names = engine.host().engine().getTrackPluginParameterNames(trackId, slot);
+                         report.add("track effects: " + entry.getProperty("name", "").toString() + " added, mix 0.4 live and saved, parameters "
+                                    + names.joinIntoString(", "));
+                         engine.send("TRACK_REMOVE_PLUGIN", object({{"trackId", trackId}, {"slotId", slot}}));
+                         return true;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 10000.0;
+    // A bus: the track sent to it (one undo step), the bus taking no clips, and the track back
+    // on the master when the bus goes.
+    steps.push_back({"buses",
+                     [this] { busId = actions.sendToNewBus(trackId); },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         static int phase = 0;
+                         mirror.refreshNow();
+                         const auto* bus = model().findTrack(busId);
+                         const auto* t = model().findTrack(trackId);
+                         if (bus == nullptr || t == nullptr) return phase == 1 && t != nullptr && t->raw.getProperty("outputBus", "").toString().isEmpty();
+                         if (phase == 0)
+                         {
+                             if (!static_cast<bool>(bus->raw.getProperty("isBus", false)) || t->raw.getProperty("outputBus", "").toString() != busId) return false;
+                             // A clip offered to the bus is refused.
+                             const auto before = bus->clips.size();
+                             if (const auto* clip = t->clips.empty() ? nullptr : &t->clips.front())
+                                 engine.send("CLIP_ADD", object({{"trackId", busId}, {"clipId", "smoke-bus-clip"}, {"libraryItemId", clip->libraryItemId},
+                                                                 {"positionMs", 0.0}, {"inMs", 0.0}, {"durationMs", 500.0}}));
+                             mirror.refreshNow();
+                             const auto* again = model().findTrack(busId);
+                             report.add("buses: " + bus->name + " made and " + t->name + " sent to it; the bus took "
+                                        + juce::String(static_cast<int>(again != nullptr ? again->clips.size() - before : 0)) + " clip(s)");
+                             if (again == nullptr || again->clips.size() != before) return false;
+                             actions.removeTrack(busId);
+                             phase = 1;
+                             return false;
+                         }
+                         return false;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 10000.0;
     steps.push_back({"automation",
                      [this]
                      {
@@ -2601,6 +2669,59 @@ void SmokeTest::addTempoJourney()
     // Every parameter there is to tweak can be automated: each knob of Track FX and Project FX
     // has a lane, every track and master lane is stored and understood by the audio engine, and
     // every parameter a transition writes is one of them.
+    // An effect in Track FX: its module (Mix, Strength, Beats, On) and its (A) showing its lanes.
+    steps.push_back({"track effects in Track FX",
+                     [this]
+                     {
+                         mirror.refreshNow();
+                         if (!model().tracks.empty())
+                             engine.send("TRACK_ADD_PLUGIN", object({{"trackId", model().tracks.front().id}, {"identifier", "djfx:beat:1"}}));
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         static int phase = 0;
+                         static juce::String slot;
+                         mirror.refreshNow();
+                         if (model().tracks.empty()) return false;
+                         const auto& t = model().tracks.front();
+                         juce::var entry;
+                         if (const auto* list = t.raw.getProperty("plugins", {}).getArray())
+                             for (const auto& s : *list)
+                                 if (s.getProperty("identifier", "").toString() == "djfx:beat:1") entry = s;
+                         auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
+                         auto* workspace = window != nullptr ? findDescendant<Workspace>(window) : nullptr;
+                         auto* library = window != nullptr ? findDescendant<LibraryPanel>(window) : nullptr;
+                         auto* fx = library != nullptr ? dynamic_cast<TrackFxView*>(library->trackFxPanel()) : nullptr;
+                         if (!entry.isObject() || workspace == nullptr || fx == nullptr) return false;
+                         slot = entry.getProperty("slotId", "").toString();
+                         if (phase == 0)
+                         {
+                             workspace->viewState().selectedTrackId = t.id;
+                             workspace->viewState().changed();
+                             phase = 1;
+                             return false;
+                         }
+                         auto* module = fx->effectModuleForTest(slot);
+                         if (module == nullptr) return false;
+                         if (phase == 1)
+                         {
+                             fx->toggleLanesForTest(*module);
+                             phase = 2;
+                             return false;
+                         }
+                         const auto lanes = automation::lanesOf(t);
+                         const auto has = [&](const juce::String& id)
+                         { return std::any_of(lanes.begin(), lanes.end(), [&](const automation::Lane& l) { return l.paramId == id; }); };
+                         if (!has("plugin:" + slot + ":0") || !has("plugin:" + slot + ":mix") || !has("plugin:" + slot + ":2")) return false;
+                         report.add("track effects in Track FX: " + juce::String(module->automationLanes().size()) + " lanes from its (A): "
+                                    + module->automationLanes().joinIntoString(", "));
+                         actions.setAutomationLanes(t.id, {});
+                         engine.send("TRACK_REMOVE_PLUGIN", object({{"trackId", t.id}, {"slotId", slot}}));
+                         return true;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 10000.0;
     steps.push_back({"every parameter automatable",
                      [this]
                      {

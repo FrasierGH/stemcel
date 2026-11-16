@@ -40,6 +40,11 @@ void handleClipMove(const juce::var& payload, stemcel::AudioEngine& engine, stem
     // Reapply destination track gain so cross-track moves preserve mute/solo audibility.
     // trackId is optional: present only for cross-track moves, absent for same-track drags.
     const juce::String newTrackId = readOptionalString(payload, "trackId").value_or(juce::String{});
+    if (newTrackId.isNotEmpty() && projectState.isTrackBus(newTrackId))
+    {
+        stemcel::log::info("clip", "a bus takes no clips: " + clipId + " stays on its track");
+        return;
+    }
     if (newTrackId.isNotEmpty())
     {
         if (projectState.setClipTrack(clipId, newTrackId))

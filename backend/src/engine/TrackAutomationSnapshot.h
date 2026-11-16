@@ -95,15 +95,20 @@ inline bool automationParamFromString(const juce::String& id, AutomationParam& o
 }
 
 // A plugin parameter's lane id, "plugin:<slotId>:<parameter index>" (its values 0..1, the
-// parameter's normalised range).
+// parameter's normalised range), or "plugin:<slotId>:mix" for the slot's mix (index
+// kPluginMixIndex).
+constexpr int kPluginMixIndex = -1;
 inline bool parsePluginParamId(const juce::String& id, juce::String& slotId, int& index)
 {
     if (!id.startsWith("plugin:")) return false;
     const auto rest = id.substring(7);
     const int colon = rest.lastIndexOfChar(':');
-    if (colon <= 0 || !rest.substring(colon + 1).containsOnly("0123456789") || rest.substring(colon + 1).isEmpty()) return false;
+    if (colon <= 0) return false;
+    const auto tail = rest.substring(colon + 1);
+    if (tail == "mix") index = kPluginMixIndex;
+    else if (tail.isNotEmpty() && tail.containsOnly("0123456789")) index = tail.getIntValue();
+    else return false;
     slotId = rest.substring(0, colon);
-    index = rest.substring(colon + 1).getIntValue();
     return true;
 }
 

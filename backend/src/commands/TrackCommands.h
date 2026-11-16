@@ -25,6 +25,8 @@ void handleTrackGain(const juce::var& payload, AudioEngine& engine, ProjectState
                      BridgeServer& bridge);
 void handleTrackMute(const juce::var& payload, AudioEngine& engine, ProjectState& projectState,
                      BridgeServer& bridge);
+void handleTrackSetBus(const juce::var& payload, AudioEngine& engine, ProjectState& projectState);
+void handleTrackSetOutput(const juce::var& payload, AudioEngine& engine, ProjectState& projectState);
 void handleTrackSolo(const juce::var& payload, AudioEngine& engine, ProjectState& projectState,
                      BridgeServer& bridge);
 void handleTrackSetSends(const juce::var& payload, AudioEngine& engine, ProjectState& projectState,

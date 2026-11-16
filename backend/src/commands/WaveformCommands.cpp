@@ -152,6 +152,15 @@ void handleClipAdd(const juce::var& payload, stemcel::AudioEngine& engine, stemc
         stemcel::log::warn("bridge", "CLIP_ADD missing trackId / clipId / libraryItemId");
         return;
     }
+    if (projectState.isTrackBus(trackId))
+    {
+        // A bus mixes the tracks sent to it; it holds no clips of its own.
+        auto* notice = new juce::DynamicObject();
+        notice->setProperty("message", "A bus holds no clips: drop onto a track, and send the track to the bus from its Out menu.");
+        notice->setProperty("severity", "info");
+        bridge.broadcast("PLUGIN_NOTICE", juce::var(notice));
+        return;
+    }
 
     // Library item is the single source of truth for clip source path.
     const juce::String filePath = projectState.getLibraryItemFilePath(libraryItemId);

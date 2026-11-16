@@ -1,6 +1,12 @@
 #include "FxPanels.h"
 
 #include "Theme.h"
+#include "Automation.h"
+#include "DjFx.h"
+#include "AudioEngine.h"
+#include "EngineHost.h"
+#include "PluginCatalogue.h"
+#include "TimelineActions.h"
 
 #include <tuple>
 
@@ -83,7 +89,31 @@ void FxKnob::resized()
 }
 
 // ── FxModule ───────────────────────────────────────────────────────────────
-FxModule::FxModule(const juce::String& moduleTitle) : title(moduleTitle) {}
+FxModule::FxModule(const juce::String& moduleTitle) : title(moduleTitle)
+{
+    automate.setClickingTogglesState(false);
+    automate.setTooltip("Show or hide this effect's automation lanes on the timeline, to draw them by hand");
+    addChildComponent(automate);
+}
+
+void FxModule::addTitleButton(juce::Component& button, int width)
+{
+    addAndMakeVisible(button);
+    titleButtons.emplace_back(&button, width);
+}
+
+void FxModule::setAutomation(juce::StringArray laneIds, std::function<void()> toggle)
+{
+    lanes = std::move(laneIds);
+    automate.onClick = std::move(toggle);
+    automate.setVisible(!lanes.isEmpty());
+}
+
+void FxModule::setTitle(const juce::String& newTitle)
+{
+    title = newTitle;
+    repaint();
+}
 
 FxKnob& FxModule::add(std::unique_ptr<FxKnob> knob)
 {
@@ -111,13 +141,21 @@ void FxModule::paint(juce::Graphics& g)
     g.fillRoundedRectangle(getLocalBounds().toFloat(), 6.0f);
     g.setColour(colours::text);
     g.setFont(uiFont(12.0f, true));
-    g.drawText(title, 8, 4, getWidth() - 16, 16, juce::Justification::centredLeft);
+    int right = getWidth() - 8 - (automate.isVisible() ? 22 : 0);
+    for (const auto& b : titleButtons) right -= b.second + 2;
+    g.drawText(title, 8, 4, juce::jmax(10, right - 8), 16, juce::Justification::centredLeft, true);
 }
 
 void FxModule::resized()
 {
     auto area = getLocalBounds().reduced(8, 4);
-    area.removeFromTop(18);
+    auto titleRow = area.removeFromTop(18);
+    if (automate.isVisible()) automate.setBounds(titleRow.removeFromRight(20).reduced(0, 1));
+    for (auto& [b, w] : titleButtons)
+    {
+        titleRow.removeFromRight(2);
+        b->setBounds(titleRow.removeFromRight(w).reduced(0, 1));
+    }
     for (auto& k : knobs) k->setBounds(area.removeFromLeft(72));
     for (auto& [c, w] : extras)
     {
@@ -222,6 +260,10 @@ TrackFxView::TrackFxView(LibraryContext& context) : ctx(context)
         return *modules.back();
     };
 
+    addEffect.setTooltip("Add one of performance mode's effects, or a plugin, to this track");
+    addEffect.onClick = [this] { showAddMenu(); };
+    addAndMakeVisible(addEffect);
+
     auto& tone = module("Tone");
     for (const auto& [key, label, field] : std::vector<std::tuple<juce::String, juce::String, const char*>>{
              {"toneBassDb", "Bass", "bassDb"}, {"toneMidDb", "Mid", "midDb"}, {"toneTrebleDb", "Treble", "trebleDb"}})
@@ -267,6 +309,17 @@ TrackFxView::TrackFxView(LibraryContext& context) : ctx(context)
     knob(crusher, "bitCrusherMix", "Mix", 0.0, 1.0, 0.01, 0.0,
          [this](double v, const juce::String& g, bool end) { sendTrack("TRACK_SET_BIT_CRUSHER", {{"mix", v}}, g, end); }, percent);
 
+    // Each module's (A): the lanes of its knobs.
+    for (auto& m : modules)
+    {
+        juce::StringArray lanes;
+        for (const auto& [key, knob] : knobs)
+            if (knob->getParentComponent() == m.get())
+                if (const auto it = knobLanes().find(key); it != knobLanes().end()) lanes.add(it->second);
+        auto* raw = m.get();
+        m->setAutomation(lanes, [this, raw] { toggleLanes(*raw); });
+    }
+
     ctx.mirror.addChangeListener(this);
     ctx.view.addChangeListener(this);
     sync();
@@ -300,6 +353,8 @@ void TrackFxView::sync()
     heading.setText(track != nullptr ? "Track FX - " + track->name : juce::String("Select a track to edit its effects."),
                     juce::dontSendNotification);
     content.setEnabled(track != nullptr);
+    addEffect.setEnabled(track != nullptr);
+    syncEffects(track != nullptr ? track->raw.getProperty("plugins", {}) : juce::var());
     if (track == nullptr) return;
     static const std::map<juce::String, double> defaults{{"saturationMix", 1.0}, {"bitCrusherRate", 1.0}, {"bitCrusherBits", 16.0}};
     for (auto& [key, knob] : knobs)
@@ -307,6 +362,192 @@ void TrackFxView::sync()
         const auto it = defaults.find(key);
         knob->setValue(num(track->raw, key.toRawUTF8(), it != defaults.end() ? it->second : 0.0));
     }
+    // Which modules' lanes the timeline shows.
+    const auto shown = automation::lanesOf(*track);
+    const auto showing = [&](const FxModule& m)
+    {
+        if (m.automationLanes().isEmpty()) return false;
+        for (const auto& id : m.automationLanes())
+            if (std::none_of(shown.begin(), shown.end(), [&](const automation::Lane& l) { return l.paramId == id; })) return false;
+        return true;
+    };
+    for (auto& m : modules) m->setAutomationShown(showing(*m));
+    for (auto& e : effects) e.module->setAutomationShown(showing(*e.module));
+}
+
+FxModule* TrackFxView::effectModuleForTest(const juce::String& slotId)
+{
+    for (auto& e : effects)
+        if (e.slotId == slotId) return e.module.get();
+    return nullptr;
+}
+
+void TrackFxView::toggleLanes(FxModule& module)
+{
+    const auto* track = ctx.mirror.model().findTrack(ctx.view.selectedTrackId);
+    if (track == nullptr || module.automationLanes().isEmpty()) return;
+    auto lanes = automation::lanesOf(*track);
+    const auto has = [&](const juce::String& id)
+    { return std::any_of(lanes.begin(), lanes.end(), [&](const automation::Lane& l) { return l.paramId == id; }); };
+    bool all = true;
+    for (const auto& id : module.automationLanes()) all = all && has(id);
+    if (all)
+        lanes.erase(std::remove_if(lanes.begin(), lanes.end(), [&](const automation::Lane& l) { return module.automationLanes().contains(l.paramId); }),
+                    lanes.end());
+    else
+        for (const auto& id : module.automationLanes())
+            if (!has(id)) lanes.push_back({id, automation::kDefaultLaneHeight});
+    ctx.actions.setAutomationLanes(track->id, lanes);
+}
+
+void TrackFxView::showAddMenu()
+{
+    if (ctx.mirror.model().findTrack(ctx.view.selectedTrackId) == nullptr) return;
+    juce::PopupMenu beat, color, plugins;
+    std::map<juce::String, juce::PopupMenu> byMaker;
+    for (const auto& d : ctx.engine.host().engine().pluginCatalogue().getAvailablePlugins())
+    {
+        if (d.isInstrument) continue;
+        const auto identifier = d.fileOrIdentifier;
+        auto add = [this, identifier]
+        { ctx.engine.send("TRACK_ADD_PLUGIN", object({{"trackId", ctx.view.selectedTrackId}, {"identifier", identifier}})); };
+        if (d.pluginFormatName == "Stemcel") (d.category == "Beat FX" ? beat : color).addItem(d.name, add);
+        else byMaker[d.manufacturerName.isNotEmpty() ? d.manufacturerName : "Other"].addItem(d.name + "  (" + d.pluginFormatName + ")", add);
+    }
+    for (auto& [maker, sub] : byMaker) plugins.addSubMenu(maker, sub);
+    juce::PopupMenu menu;
+    menu.addSubMenu("Beat FX", beat);
+    menu.addSubMenu("Sound Color FX", color);
+    menu.addSeparator();
+    if (byMaker.empty()) menu.addItem("No plugins found yet (Plugins > Scan for plugins)", false, false, [] {});
+    else menu.addSubMenu("Plugins", plugins);
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&addEffect));
+}
+
+void TrackFxView::syncEffects(const juce::var& slots)
+{
+    // Rebuilt only when the chain itself changes (added, removed, moved).
+    juce::String key = ctx.view.selectedTrackId;
+    if (const auto* list = slots.getArray())
+        for (const auto& s : *list) key << "|" << s.getProperty("slotId", "").toString();
+    auto& engine = ctx.engine.host().engine();
+    const auto trackId = ctx.view.selectedTrackId;
+    if (key != effectsKey)
+    {
+        effectsKey = key;
+        for (auto& e : effects) content.removeChildComponent(e.module.get());
+        effects.clear();
+        if (const auto* list = slots.getArray())
+            for (const auto& s : *list)
+            {
+                Effect e;
+                e.slotId = s.getProperty("slotId", "").toString();
+                e.identifier = s.getProperty("identifier", "").toString();
+                e.builtIn = s.getProperty("format", "").toString() == "Stemcel";
+                e.beat = e.identifier.startsWith("djfx:beat:");
+                e.module = std::make_unique<FxModule>(s.getProperty("name", "Effect").toString());
+                auto& m = *e.module;
+                const auto slotId = e.slotId;
+                // Mix: the effect against the track's own sound (a plugin's latency allowed for).
+                e.mix = &m.add(std::make_unique<FxKnob>(
+                    "Mix", 0.0, 1.0, 0.01, 1.0,
+                    [this, slotId](double v, const juce::String& g, bool end)
+                    {
+                        auto p = object({{"trackId", ctx.view.selectedTrackId}, {"slotId", slotId}, {"mix", v}});
+                        if (g.isNotEmpty()) p.getDynamicObject()->setProperty("gestureId", g);
+                        if (end) p.getDynamicObject()->setProperty("gestureEnd", true);
+                        ctx.engine.send("TRACK_SET_PLUGIN_MIX", p);
+                    },
+                    percent));
+                juce::StringArray lanes;
+                if (e.builtIn)
+                {
+                    // Strength (and for Beat FX its beats and on/off): the effect's own parameters.
+                    const auto setParam = [this, slotId](int index, double normalised)
+                    { ctx.engine.host().engine().setTrackPluginParameterValue(ctx.view.selectedTrackId, slotId, index, static_cast<float>(normalised)); };
+                    if (e.beat)
+                    {
+                        e.strength = &m.add(std::make_unique<FxKnob>("Strength", 0.0, 1.0, 0.01, 0.5,
+                                                                      [setParam](double v, const juce::String&, bool) { setParam(0, v); }, percent));
+                        const int last = static_cast<int>(djfx::kBeatSteps.size()) - 1;
+                        e.beats = &m.add(std::make_unique<FxKnob>("Beats", 0.0, last, 1.0, djfx::kDefaultBeatStep,
+                                                                   [setParam, last](double v, const juce::String&, bool) { setParam(1, v / last); },
+                                                                   [](double v) { return djfx::beatStepLabel(juce::roundToInt(v)); }));
+                        e.on = std::make_unique<juce::TextButton>("On");
+                        e.on->setClickingTogglesState(true);
+                        e.on->onClick = [setParam, b = e.on.get()] { setParam(2, b->getToggleState() ? 1.0 : 0.0); };
+                        m.addExtra(*e.on, 44);
+                        lanes.add(automation::pluginParamId(slotId, 2));
+                    }
+                    else
+                        e.strength = &m.add(std::make_unique<FxKnob>("Strength", -1.0, 1.0, 0.01, 0.5,
+                                                                      [setParam](double v, const juce::String&, bool) { setParam(0, (v + 1.0) * 0.5); },
+                                                                      [](double v)
+                                                                      {
+                                                                          return std::abs(v) < 0.01 ? juce::String("Off")
+                                                                                                    : (v > 0 ? "+" : "-") + percent(std::abs(v));
+                                                                      }));
+                    lanes.insert(0, automation::pluginParamId(slotId, 0));
+                }
+                else
+                {
+                    // A plugin: its mix here, everything else in its own window.
+                    e.edit = std::make_unique<juce::TextButton>("Edit");
+                    e.edit->setTooltip("Open the plugin's own window");
+                    e.edit->onClick = [this, slotId]
+                    { ctx.engine.send("TRACK_OPEN_PLUGIN_EDITOR", object({{"trackId", ctx.view.selectedTrackId}, {"slotId", slotId}})); };
+                    m.addExtra(*e.edit, 52);
+                }
+                lanes.add("plugin:" + slotId + ":mix");
+                // Names for the lanes' captions.
+                const auto name = s.getProperty("name", "Effect").toString();
+                automation::namePluginParam("plugin:" + slotId + ":mix", name + ": Mix");
+                if (e.builtIn)
+                {
+                    automation::namePluginParam(automation::pluginParamId(slotId, 0), name + ": Strength");
+                    if (e.beat) automation::namePluginParam(automation::pluginParamId(slotId, 2), name + ": On");
+                }
+                e.bypass = std::make_unique<juce::TextButton>("Off");
+                e.bypass->setClickingTogglesState(true);
+                e.bypass->setTooltip("Bypass");
+                e.bypass->onClick = [this, slotId, b = e.bypass.get()]
+                {
+                    ctx.engine.send("TRACK_SET_PLUGIN_BYPASS",
+                                    object({{"trackId", ctx.view.selectedTrackId}, {"slotId", slotId}, {"bypassed", b->getToggleState()}}));
+                };
+                e.remove = std::make_unique<juce::TextButton>("x");
+                e.remove->setTooltip("Remove from the track");
+                e.remove->onClick = [this, slotId]
+                { ctx.engine.send("TRACK_REMOVE_PLUGIN", object({{"trackId", ctx.view.selectedTrackId}, {"slotId", slotId}})); };
+                m.addTitleButton(*e.remove, 20);
+                m.addTitleButton(*e.bypass, 32);
+                auto* raw = e.module.get();
+                m.setAutomation(lanes, [this, raw] { toggleLanes(*raw); });
+                content.addAndMakeVisible(m);
+                effects.push_back(std::move(e));
+            }
+        relayout();
+    }
+    // Their values.
+    if (const auto* list = slots.getArray())
+        for (const auto& s : *list)
+            for (auto& e : effects)
+            {
+                if (e.slotId != s.getProperty("slotId", "").toString()) continue;
+                e.mix->setValue(static_cast<double>(s.getProperty("mix", 1.0)));
+                const bool bypassed = static_cast<bool>(s.getProperty("bypassed", false));
+                e.bypass->setToggleState(bypassed, juce::dontSendNotification);
+                e.module->setAlpha(bypassed ? 0.6F : 1.0F);
+                if (e.strength != nullptr)
+                    if (const auto v = engine.getTrackPluginParameterValue(trackId, e.slotId, 0))
+                        e.strength->setValue(e.beat ? *v : *v * 2.0 - 1.0);
+                if (e.beats != nullptr)
+                    if (const auto v = engine.getTrackPluginParameterValue(trackId, e.slotId, 1))
+                        e.beats->setValue(juce::roundToInt(*v * static_cast<float>(djfx::kBeatSteps.size() - 1)));
+                if (e.on != nullptr)
+                    if (const auto v = engine.getTrackPluginParameterValue(trackId, e.slotId, 2))
+                        e.on->setToggleState(*v >= 0.5F, juce::dontSendNotification);
+            }
 }
 
 void TrackFxView::paint(juce::Graphics& g)
@@ -317,11 +558,38 @@ void TrackFxView::paint(juce::Graphics& g)
 void TrackFxView::resized()
 {
     auto area = getLocalBounds();
-    heading.setBounds(area.removeFromTop(24));
+    auto top = area.removeFromTop(24);
+    addEffect.setBounds(top.removeFromRight(110).reduced(0, 1));
+    heading.setBounds(top);
     viewport.setBounds(area);
-    const int width = area.getWidth() - viewport.getScrollBarThickness();
-    content.setSize(width, modulesHeight(modules, width));
-    layoutModules(modules, content.getLocalBounds());
+    relayout();
+}
+
+void TrackFxView::relayout()
+{
+    // The built-in modules, then the track's effects in chain order.
+    std::vector<std::unique_ptr<FxModule>> all;
+    const int width = juce::jmax(100, viewport.getWidth() - viewport.getScrollBarThickness());
+    auto place = [&](std::vector<FxModule*> list)
+    {
+        int x = 0, y = 0;
+        for (auto* m : list)
+        {
+            const int w = m->preferredWidth();
+            if (x + w > width && x > 0)
+            {
+                x = 0;
+                y += kModuleHeight + 8;
+            }
+            m->setBounds(x, y, w, kModuleHeight);
+            x += w + 8;
+        }
+        return y + kModuleHeight + 8;
+    };
+    std::vector<FxModule*> list;
+    for (auto& m : modules) list.push_back(m.get());
+    for (auto& e : effects) list.push_back(e.module.get());
+    content.setSize(width, place(list));
 }
 
 // ── Project FX ─────────────────────────────────────────────────────────────

@@ -134,6 +134,11 @@ void AudioEngine::setTrackPan(const juce::String& trackId, float pan)
     busGraph.setTrackPan(trackId, pan);
 }
 
+void AudioEngine::ensureBus(const juce::String& busId) { busGraph.ensureBus(busId); }
+void AudioEngine::removeBus(const juce::String& busId) { busGraph.removeBus(busId); }
+void AudioEngine::setTrackOutput(const juce::String& trackId, const juce::String& busId) { busGraph.setTrackOutput(trackId, busId); }
+void AudioEngine::setBusGain(const juce::String& busId, float gain) { busGraph.setBusGain(busId, gain); }
+
 void AudioEngine::retireTrackFxState(const juce::String& trackId)
 {
     // Retiring the track destroys its plugin instances, and an open editor's content

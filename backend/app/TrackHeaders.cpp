@@ -1,6 +1,7 @@
 #include "TrackHeaders.h"
 
 #include "Db.h"
+#include "BusMenu.h"
 #include "Theme.h"
 #include "TimelineView.h"
 
@@ -51,6 +52,16 @@ TrackHeaderRow::TrackHeaderRow(TimelineActions& timelineActions, TimelineViewSta
     automationButton.setColour(juce::TextButton::buttonOnColourId, colours::sky600);
     automationButton.setTooltip("Automation: show or hide this track's lanes (A)");
     automationButton.onClick = [this] { actions.toggleAutomation(trackId); };
+    if (!isMaster())
+    {
+        outCaption.setText("Out", juce::dontSendNotification);
+        outCaption.setFont(uiFont(11.0f));
+        outCaption.setColour(juce::Label::textColourId, colours::textFaint);
+        addAndMakeVisible(outCaption);
+        output.setTooltip("Where this track goes: the master, or a bus");
+        output.onClick = [this] { buses::showOutputMenu(actions, actions.projectModel(), trackId, &output); };
+        addAndMakeVisible(output);
+    }
     for (auto* l : {&gainCaption, &panCaption})
     {
         l->setFont(uiFont(11.0f));
@@ -101,6 +112,12 @@ void TrackHeaderRow::update(const TrackModel& track, int displayIndex, bool sile
         c->setVisible(!isMaster());
     automated = actions.automatedParams(track.id);
     automationButton.setToggleState(!lanes.empty(), juce::dontSendNotification);
+    if (const auto* track = actions.projectModel().findTrack(trackId))
+    {
+        const bool bus = buses::isBus(*track);
+        output.setButtonText(bus ? juce::String("BUS > Master") : "> " + buses::outputLabel(actions.projectModel(), *track));
+        output.setEnabled(!bus);
+    }
     automationButton.setTooltip(lanes.empty() ? "Show automation (A)" : "Hide automation (A)");
     this->displayIndex = displayIndex;
     colourIndex = track.colorIndex >= 0 ? track.colorIndex : displayIndex;
@@ -250,6 +267,17 @@ void TrackHeaderRow::resized()
     auto panRow = area.removeFromTop(18);
     panCaption.setBounds(panRow.removeFromLeft(34));
     pan.setBounds(panRow);
+    // The output, where the row has room for it.
+    area.removeFromTop(4);
+    const bool room = area.getHeight() >= 18 && !isMaster();
+    outCaption.setVisible(room);
+    output.setVisible(room);
+    if (room)
+    {
+        auto outRow = area.removeFromTop(18);
+        outCaption.setBounds(outRow.removeFromLeft(34));
+        output.setBounds(outRow);
+    }
 }
 
 bool resizeZone(int y, int clipHeight)
@@ -376,7 +404,7 @@ juce::String TrackHeaderRow::laneCaption(const juce::String& paramId) const
         for (const auto& s : *list)
             if (s.getProperty("slotId", {}).toString() == slotId) pluginName = s.getProperty("name", pluginName).toString();
     const auto names = actions.engineClient().host().engine().getTrackPluginParameterNames(trackId, slotId);
-    const auto caption = pluginName + ": " + (index < names.size() ? names[index] : "parameter " + juce::String(index + 1));
+    const auto caption = pluginName + ": " + (index < 0 ? juce::String("Mix") : index < names.size() ? names[index] : "parameter " + juce::String(index + 1));
     automation::namePluginParam(paramId, caption);
     return caption;
 }
@@ -412,6 +440,17 @@ void TrackHeaderRow::addPluginLaneMenus(juce::PopupMenu& menu)
             else sub.addSubMenu(juce::String(start + 1) + "-" + juce::String(juce::jmin(names.size(), start + kBlock)), block);
         }
         if (names.isEmpty()) sub.addItem(s.getProperty("unresolved", false) ? "Not installed" : "No parameters", false, false, [] {});
+        {
+            const auto id = "plugin:" + slotId + ":mix";
+            bool shown = false;
+            for (const auto& l : lanes) shown = shown || l.paramId == id;
+            sub.addSeparator();
+            sub.addItem("Mix", true, shown, [this, id, caption = pluginName + ": Mix"]
+                        {
+                            automation::namePluginParam(id, caption);
+                            toggleLane(id);
+                        });
+        }
         menu.addSubMenu(pluginName, sub);
     }
 }

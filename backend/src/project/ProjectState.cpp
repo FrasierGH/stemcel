@@ -14,6 +14,8 @@ const juce::Identifier ProjectState::kName{"name"};
 const juce::Identifier ProjectState::kGain{"gain"};
 const juce::Identifier ProjectState::kMuted{"muted"};
 const juce::Identifier ProjectState::kSoloed{"soloed"};
+const juce::Identifier ProjectState::kIsBus{"isBus"};
+const juce::Identifier ProjectState::kOutputBus{"outputBus"};
 const juce::Identifier ProjectState::kHeightPx{"heightPx"};
 const juce::Identifier ProjectState::kFilePath{"filePath"};
 const juce::Identifier ProjectState::kOffsetMs{"offsetMs"};

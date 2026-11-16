@@ -1,6 +1,7 @@
 #pragma once
 
 #include "InsertProcessor.h"
+#include "LatencyDelayLine.h"
 
 #include <atomic>
 #include <memory>
@@ -25,6 +26,7 @@ struct PluginSlotDescriptor
     juce::String name;
     juce::String manufacturer;
     bool bypassed = false;
+    float mix = 1.0F; // the plugin's output against the track's own sound (1 = all plugin)
 };
 
 /** What a prepared slot actually negotiated. Inserts are fed stereo audio and no MIDI in
@@ -73,6 +75,16 @@ public:
         descriptor.bypassed = shouldBypass;
     }
 
+    // How much of the plugin is heard, 0..1, against the dry sound delayed by the plugin's
+    // latency so the two line up. Any thread (automation sets it on the audio thread).
+    void setMix(float newMix) noexcept
+    {
+        const float m = juce::jlimit(0.0F, 1.0F, newMix);
+        mix.store(m, std::memory_order_relaxed);
+        if (m < 0.9999F) mixUsed.store(true, std::memory_order_relaxed);
+    }
+    float getMix() const noexcept { return mix.load(std::memory_order_relaxed); }
+
     const PluginSlotDescriptor& getDescriptor() const noexcept { return descriptor; }
     const juce::String& getSlotId() const noexcept { return descriptor.slotId; }
 
@@ -101,6 +113,11 @@ private:
 
     std::atomic<bool> bypassed{false};
     float wetGain = 1.0F;
+    std::atomic<float> mix{1.0F};
+    std::atomic<bool> mixUsed{false}; // the dry path runs once a mix below 1 has been asked for
+    float mixGain = 1.0F;             // where the mix ramp has got to
+    juce::AudioBuffer<float> dry;
+    LatencyDelayLine dryDelay;
     bool prepared = false;
     double preparedRate = 0.0;
     int preparedBlockSize = 0;
@@ -133,6 +150,7 @@ public:
     bool removeSlot(const juce::String& slotId);
     bool moveSlot(const juce::String& slotId, int newIndex);
     bool setSlotBypassed(const juce::String& slotId, bool shouldBypass);
+    bool setSlotMix(const juce::String& slotId, float mix);
 
     /** Message thread. Takes a slot out of the chain and hands back ownership *without*
      *  retiring it, so a caller rebuilding the chain can put a live instance back rather
@@ -161,6 +179,8 @@ public:
     PluginSlot* findSlot(const juce::String& slotId) noexcept;
     /** Audio thread: the instance in the published chain with this slot id (automation). */
     juce::AudioPluginInstance* findPublishedInstance(const juce::String& slotId) const noexcept;
+    /** Audio thread: the slot itself (its mix's automation). */
+    PluginSlot* findPublishedSlot(const juce::String& slotId) const noexcept;
     std::vector<PluginSlotDescriptor> getDescriptors() const;
     std::size_t size() const noexcept { return slots.size(); }
     bool isEmpty() const noexcept { return slots.empty(); }

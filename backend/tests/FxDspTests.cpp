@@ -788,6 +788,43 @@ void testBusGraphPanAppliedThroughMix()
     bg.releaseResources();
 }
 
+// Buses: two tracks sent to a bus come out through the bus's gain and pan; a track left on
+// the master is untouched; taking the bus away sends them back to the master.
+void testBusGraphRoutesTracksThroughABus()
+{
+    constexpr int kBlock = 256;
+    constexpr double kRate = 48000.0;
+    stemcel::BusGraph bg;
+    bg.prepareToPlay(kBlock, kRate);
+    ConstantSource a(0.1F), b(0.2F), c(0.05F);
+    bg.attachClip("a", "ca", &a);
+    bg.attachClip("b", "cb", &b);
+    bg.attachClip("c", "cc", &c);
+    bg.ensureBus("bus");
+    bg.setBusGain("bus", 0.5F);
+    bg.setTrackPan("bus", -1.0F); // the bus hard left
+    bg.setTrackOutput("a", "bus");
+    bg.setTrackOutput("b", "bus");
+    juce::AudioBuffer<float> out(2, kBlock);
+    juce::AudioSourceChannelInfo info(&out, 0, kBlock);
+    for (int i = 0; i < 3; ++i)
+    {
+        out.clear();
+        bg.getNextAudioBlock(info);
+    }
+    // Left: (0.1 + 0.2) x 0.5 x sqrt2 (the bus hard left) + 0.05 (c, centre); right: c alone.
+    requireNear(out.getSample(0, kBlock - 1), 0.3 * 0.5 * std::sqrt(2.0) + 0.05, 1.0e-4, "the bus's gain and pan should apply to what is sent to it");
+    requireNear(out.getSample(1, kBlock - 1), 0.05, 1.0e-4, "a track on the master should pass as it was");
+    bg.removeBus("bus");
+    for (int i = 0; i < 3; ++i)
+    {
+        out.clear();
+        bg.getNextAudioBlock(info);
+    }
+    requireNear(out.getSample(1, kBlock - 1), 0.35, 1.0e-4, "with the bus gone, its tracks should reach the master again");
+    bg.releaseResources();
+}
+
 void testBusGraphExcludesBypassedTrackProcessing()
 {
     class CountingSource final : public juce::AudioSource
@@ -1746,6 +1783,7 @@ void addFxDspTests(std::vector<TestCase>& tests)
     tests.push_back({"SharedFx maximum delay preserves feedback repeats beyond four seconds", testSharedFxLongDelayPreservesFeedbackRepeat});
     tests.push_back({"BusGraph equal-power pan gains (unity centre, constant power)", testEqualPowerPanGains});
     tests.push_back({"BusGraph lock-free pan publishes equal-power gains through the mix", testBusGraphPanAppliedThroughMix});
+    tests.push_back({"BusGraph routes tracks through a bus", testBusGraphRoutesTracksThroughABus});
     tests.push_back({"BusGraph excludes bypassed tracks from processing", testBusGraphExcludesBypassedTrackProcessing});
     tests.push_back({"BusGraph structural edits do not drop callback audio", testBusGraphStructuralEditsDoNotDropAudio});
     tests.push_back({"BusGraph batch detachment removes all completed clips", testBusGraphBatchDetachmentRemovesCompletedClips});

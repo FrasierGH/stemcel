@@ -45,6 +45,7 @@ class MixerPanel final : public juce::Component, private juce::ChangeListener, p
     juce::OwnedArray<Strip> strips;
     std::unique_ptr<Strip> master;
     juce::StringArray shownTrackIds;
+    juce::TextButton addBus{"+ Bus"};
 };
 
 } // namespace stemcel::native

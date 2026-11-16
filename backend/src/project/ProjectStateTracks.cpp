@@ -46,6 +46,14 @@ juce::StringArray ProjectState::removeTrack(const juce::String& trackId)
             removedClipIds.add(clip.getProperty(kId).toString());
         }
     }
+    // Tracks sent to a bus that goes go to the master instead.
+    if (static_cast<bool>(track.getProperty(kIsBus, false)))
+        for (int i = 0; i < root.getNumChildren(); ++i)
+        {
+            auto other = root.getChild(i);
+            if (other.hasType(kTrack) && other.getProperty(kOutputBus).toString() == trackId)
+                other.removeProperty(kOutputBus, &undoManager);
+        }
     root.removeChild(track, &undoManager);
     return removedClipIds;
 }
@@ -214,8 +222,58 @@ float ProjectState::getEffectiveTrackGain(const juce::String& trackId) const
     const bool muted = static_cast<bool>(track.getProperty(kMuted, false));
     if (muted) return 0.0F;
     const bool soloed = static_cast<bool>(track.getProperty(kSoloed, false));
-    if (anyTrackSoloed() && !soloed) return 0.0F;
+    const auto bus = isTrackBus(trackId) ? juce::String() : getTrackOutputBus(trackId);
+    const auto busTree = bus.isNotEmpty() ? findTrack(bus) : juce::ValueTree();
+    // A track sent to a muted bus is silent with it.
+    if (busTree.isValid() && static_cast<bool>(busTree.getProperty(kMuted, false))) return 0.0F;
+    if (anyTrackSoloed() && !soloed)
+    {
+        // Soloing a bus solos what is sent to it; soloing a track keeps its bus playing.
+        bool heard = busTree.isValid() && static_cast<bool>(busTree.getProperty(kSoloed, false));
+        if (isTrackBus(trackId))
+            for (int i = 0; i < root.getNumChildren() && !heard; ++i)
+            {
+                const auto other = root.getChild(i);
+                heard = other.hasType(kTrack) && other.getProperty(kOutputBus).toString() == trackId
+                        && static_cast<bool>(other.getProperty(kSoloed, false));
+            }
+        if (!heard) return 0.0F;
+    }
     return static_cast<float>(static_cast<double>(track.getProperty(kGain, 1.0)));
+}
+
+bool ProjectState::isTrackBus(const juce::String& trackId) const
+{
+    const auto track = findTrack(trackId);
+    return track.isValid() && static_cast<bool>(track.getProperty(kIsBus, false));
+}
+
+bool ProjectState::setTrackIsBus(const juce::String& trackId, bool isBus)
+{
+    auto track = findTrack(trackId);
+    if (!track.isValid()) return false;
+    if (isBus) track.setProperty(kIsBus, true, &undoManager);
+    else track.removeProperty(kIsBus, &undoManager);
+    track.removeProperty(kOutputBus, &undoManager); // buses go to the master
+    return true;
+}
+
+juce::String ProjectState::getTrackOutputBus(const juce::String& trackId) const
+{
+    const auto track = findTrack(trackId);
+    if (!track.isValid()) return {};
+    const auto bus = track.getProperty(kOutputBus).toString();
+    return bus.isNotEmpty() && isTrackBus(bus) ? bus : juce::String();
+}
+
+bool ProjectState::setTrackOutputBus(const juce::String& trackId, const juce::String& busId)
+{
+    auto track = findTrack(trackId);
+    if (!track.isValid() || isTrackBus(trackId) || busId == trackId) return false;
+    if (busId.isNotEmpty() && !isTrackBus(busId)) return false;
+    if (busId.isEmpty()) track.removeProperty(kOutputBus, &undoManager);
+    else track.setProperty(kOutputBus, busId, &undoManager);
+    return true;
 }
 
 bool ProjectState::setTrackName(const juce::String& trackId, const juce::String& name)

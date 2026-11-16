@@ -532,6 +532,7 @@ add_library(stemcel_backend_core STATIC
     src/project/ValueTreeJson.cpp
     # plugins (VST3 hosting — ADR 0025)
     src/plugins/PluginCatalogue.cpp
+    src/plugins/BuiltInFx.cpp
     src/plugins/PluginChain.cpp
     src/plugins/PluginEditorWindow.cpp
     src/plugins/PluginScanCoordinator.cpp

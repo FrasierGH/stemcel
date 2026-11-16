@@ -42,7 +42,7 @@ void restoreTrackPlugins(BusGraph& busGraph, plugins::PluginCatalogue& catalogue
             reusable[i] = canReuse(existingChain->findSlot(slots[i].slotId), slots[i]);
     }
 
-    const auto known = catalogue.getKnownPlugins();
+    const auto known = catalogue.getAvailablePlugins();
 
     if (onSlotDestroyed != nullptr && existingChain != nullptr)
     {
@@ -72,6 +72,7 @@ void restoreTrackPlugins(BusGraph& busGraph, plugins::PluginCatalogue& catalogue
         descriptor.name = saved.name;
         descriptor.manufacturer = saved.manufacturer;
         descriptor.bypassed = saved.bypassed;
+        descriptor.mix = saved.mix;
 
         std::unique_ptr<juce::AudioPluginInstance> instance;
         for (const auto& candidate : known)
@@ -110,6 +111,7 @@ void restoreTrackPlugins(BusGraph& busGraph, plugins::PluginCatalogue& catalogue
                 if (found != detached.end())
                 {
                     (*found)->setBypassed(slots[i].bypassed);
+                    (*found)->setMix(slots[i].mix);
                     chain.addSlot(std::move(*found));
                     continue;
                 }

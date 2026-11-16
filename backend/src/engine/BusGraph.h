@@ -57,6 +57,13 @@ public:
         std::atomic<bool> bypassReady{false};
         std::atomic<bool> beatRepeatResetRequested{false};
         bool renderEnabled = true;
+        // A bus: no clips of its own; the tracks sent to it are summed into `busInput`, which
+        // then runs through its chain (tone, effects, plugins, level), its gain and pan, to
+        // the master. Its gain (fader, mute, solo) is its own, as it has no clips to carry it.
+        bool isBus = false;
+        juce::AudioBuffer<float> busInput;
+        std::atomic<float> busGain{1.0F};
+        float currentBusGain = 1.0F;
         // Message-thread-owned pointer copied into each immutable RenderSnapshot.
         const TrackAutomationSnapshot* publishedAutomation = nullptr;
         const BeatRepeatSnapshot* publishedBeatRepeat = nullptr;
@@ -74,6 +81,12 @@ public:
                          const juce::AudioSourceChannelInfo& info,
                          juce::int64 timelineStart,
                          const BeatRepeatSnapshot* beatRepeat);
+
+        void meter(const juce::AudioBuffer<float>& b, int start, int n) noexcept
+        {
+            if (b.getNumChannels() > 0) atomicMaxFloat(peakL, b.getMagnitude(0, start, n));
+            if (b.getNumChannels() > 1) atomicMaxFloat(peakR, b.getMagnitude(1, start, n));
+        }
 
         void consumePeaks(float& outL, float& outR) noexcept
         {
@@ -100,6 +113,7 @@ private:
     struct RenderTrack
     {
         TrackRuntime* runtime = nullptr;
+        TrackRuntime* output = nullptr; // the bus it is sent to; null for the master
         std::vector<juce::AudioSource*> clips;
         const TrackAutomationSnapshot* automation = nullptr;
         const BeatRepeatSnapshot* beatRepeat = nullptr;
@@ -108,6 +122,7 @@ private:
     struct RenderSnapshot
     {
         std::vector<RenderTrack> tracks;
+        std::vector<RenderTrack> buses; // after the tracks, into the master
         const TrackAutomationSnapshot* master = nullptr; // the master bus's automation
         bool hasAutomation = false;
     };
@@ -170,6 +185,13 @@ public:
 
     /** Immediately include or exclude a track at a quiescent graph boundary. */
     void setTrackRenderingEnabled(const juce::String& trackId, bool enabled);
+
+    // Buses (message thread). A bus is a track id with no clips; a track sent to it (empty
+    // `busId`: the master) is summed into it after its own chain, pan and level.
+    void ensureBus(const juce::String& busId);
+    void removeBus(const juce::String& busId);
+    void setTrackOutput(const juce::String& trackId, const juce::String& busId);
+    void setBusGain(const juce::String& busId, float gain);
 
     void setTrackTone(const juce::String& trackId,
                       float bassDb, float midDb, float trebleDb, float filter,
@@ -378,6 +400,9 @@ private:
     void applyMasterAutomation(const TrackAutomationSnapshot* snap, juce::int64 subStartSamples, double rate) noexcept;
     juce::AudioPlayHead* pluginPlayHead = nullptr;
     std::unordered_map<juce::String, const TrackAutomationSnapshot*> pendingAutomation;
+    std::unordered_map<juce::String, juce::String> trackOutputs; // track → bus
+    std::unordered_map<juce::String, float> pendingBusGains;
+    TrackRuntime* outputOf(const juce::String& trackId) const;
     std::unordered_map<juce::String, const BeatRepeatSnapshot*> pendingBeatRepeats;
 
     SharedFx sharedFx;

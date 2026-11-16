@@ -104,6 +104,9 @@ MixdownSnapshot snapshotProjectForMixdown(const ProjectState& project,
                                            ? static_cast<float>(static_cast<double>(trackTree.getProperty(kGain, 1.0)))
                                            : project.getEffectiveTrackGain(track.id);
         track.gain = juce::jlimit(kMinTrackGain, kMaxTrackGain, rawEffectiveGain);
+        track.isBus = project.isTrackBus(track.id);
+        // A stem plays alone, straight to the master.
+        if (onlyTrackId.isEmpty()) track.outputBus = project.getTrackOutputBus(track.id);
 
         // Snapshot live per-track parameters so offline render stays in parity with playback.
         track.toneBassDb = project.getTrackToneBassDb(track.id);
@@ -137,7 +140,8 @@ MixdownSnapshot snapshotProjectForMixdown(const ProjectState& project,
                 " effectiveGainRaw=" + juce::String(rawEffectiveGain, 4) +
                 " effectiveGainClamped=" + juce::String(track.gain, 4) +
                 (track.gain <= 0.0F ? " (silent — skipped)" : ""));
-        if (track.gain <= 0.0F) continue;
+        // A bus stays even when silent: the tracks sent to it are silent through it, not loud past it.
+        if (track.gain <= 0.0F && !track.isBus) continue;
 
         for (int c = 0; c < trackTree.getNumChildren(); ++c)
         {

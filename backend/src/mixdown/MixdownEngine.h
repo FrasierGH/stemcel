@@ -70,6 +70,8 @@ struct MixdownSnapshot
     {
         juce::String id;
         float gain{1.0F};
+        bool isBus{false};
+        juce::String outputBus; // the bus it is sent to; empty for the master
         // Snapshot live per-track parameters so offline render stays in parity with playback.
         float toneBassDb{0.0F};
         float toneMidDb{0.0F};

@@ -1,4 +1,5 @@
 #include "MixerPanel.h"
+#include "BusMenu.h"
 
 #include "Db.h"
 #include "Theme.h"
@@ -70,6 +71,9 @@ class MixerPanel::Strip final : public juce::Component
             }
             mute.onClick = [this] { panel.actions.setTrackMuted(ownerId, !mute.getToggleState()); };
             solo.onClick = [this] { panel.actions.setTrackSoloed(ownerId, !solo.getToggleState()); };
+            output.setTooltip("Where this channel goes: the master, or a bus");
+            output.onClick = [this] { buses::showOutputMenu(panel.actions, panel.mirror.model(), ownerId, &output); };
+            addAndMakeVisible(output);
         }
         sync();
     }
@@ -89,7 +93,10 @@ class MixerPanel::Strip final : public juce::Component
         }
         else if (const auto* track = model.findTrack(ownerId))
         {
-            name.setText(track->name, juce::dontSendNotification);
+            bus = buses::isBus(*track);
+            name.setText(bus ? "BUS " + track->name : track->name, juce::dontSendNotification);
+            output.setButtonText(bus ? juce::String("> Master") : "> " + buses::outputLabel(model, *track));
+            output.setEnabled(!bus);
             int index = 0;
             for (size_t i = 0; i < model.tracks.size(); ++i)
                 if (model.tracks[i].id == ownerId) index = static_cast<int>(i);
@@ -127,6 +134,12 @@ class MixerPanel::Strip final : public juce::Component
         {
             g.fillAll(ownerId == kMasterId ? colours::zinc900 : colours::zinc950);
             g.setColour(colours::zinc700);
+        }
+        // A bus strip is tinted, so the buses stand apart from the tracks.
+        if (bus)
+        {
+            g.setColour(colours::accent.withAlpha(0.08f));
+            g.fillAll();
         }
         g.drawRect(getLocalBounds());
         // The track's colour along the top, with a faint wash of it below.
@@ -204,6 +217,8 @@ class MixerPanel::Strip final : public juce::Component
             mute.setBounds(buttons.removeFromLeft(buttons.getWidth() / 2 - 1));
             buttons.removeFromLeft(2);
             solo.setBounds(buttons);
+            area.removeFromTop(2);
+            output.setBounds(area.removeFromTop(20));
             area.removeFromTop(4);
         }
         readout.setBounds(area.removeFromBottom(16));
@@ -313,7 +328,8 @@ class MixerPanel::Strip final : public juce::Component
     juce::Colour colour = colours::zinc500;
     juce::Label name, readout;
     juce::Slider fader, pan;
-    juce::TextButton mute{"M"}, solo{"S"};
+    juce::TextButton mute{"M"}, solo{"S"}, output;
+    bool bus = false;
     juce::Rectangle<int> meter;
     std::vector<Slot> slots;
 };
@@ -328,6 +344,9 @@ MixerPanel::MixerPanel(EngineClient& client, ProjectMirror& projectMirror, Timel
     addAndMakeVisible(viewport);
     master = std::make_unique<Strip>(*this, kMasterId);
     addAndMakeVisible(*master);
+    addBus.setTooltip("A new bus: send tracks to it from their Out menu, and it mixes them on to the master");
+    addBus.onClick = [this] { actions.addBus(); };
+    addAndMakeVisible(addBus);
     mirror.addChangeListener(this);
     if (engine.latest("PLUGIN_LIST").isVoid()) engine.send("PLUGIN_LIST_REQUEST");
     rebuild();
@@ -342,7 +361,7 @@ MixerPanel::~MixerPanel()
 void MixerPanel::changeListenerCallback(juce::ChangeBroadcaster*)
 {
     juce::StringArray ids;
-    for (const auto& t : mirror.model().tracks) ids.add(t.id);
+    for (const auto& t : mirror.model().tracks) ids.add(t.id + (buses::isBus(t) ? "#bus" : ""));
     if (ids != shownTrackIds) rebuild();
     else
     {
@@ -355,11 +374,11 @@ void MixerPanel::rebuild()
 {
     strips.clear();
     shownTrackIds.clear();
-    for (const auto& t : mirror.model().tracks)
-    {
-        shownTrackIds.add(t.id);
-        content.addAndMakeVisible(strips.add(new Strip(*this, t.id)));
-    }
+    // The tracks, then the buses (beside the master they feed).
+    for (const bool wantBuses : {false, true})
+        for (const auto& t : mirror.model().tracks)
+            if (buses::isBus(t) == wantBuses) content.addAndMakeVisible(strips.add(new Strip(*this, t.id)));
+    for (const auto& t : mirror.model().tracks) shownTrackIds.add(t.id + (buses::isBus(t) ? "#bus" : ""));
     master->sync();
     resized();
 }
@@ -380,7 +399,10 @@ void MixerPanel::paint(juce::Graphics& g)
 void MixerPanel::resized()
 {
     auto area = getLocalBounds().reduced(4);
-    master->setBounds(area.removeFromRight(kStripWidth + 10));
+    auto masterColumn = area.removeFromRight(kStripWidth + 10);
+    addBus.setBounds(masterColumn.removeFromTop(24).reduced(2, 1));
+    masterColumn.removeFromTop(2);
+    master->setBounds(masterColumn);
     area.removeFromRight(8);
     viewport.setBounds(area);
     const int height = juce::jmax(0, area.getHeight() - viewport.getScrollBarThickness());
