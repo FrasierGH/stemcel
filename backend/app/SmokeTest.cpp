@@ -598,13 +598,16 @@ void SmokeTest::addSteps()
                          {
                              if (!static_cast<bool>(bus->raw.getProperty("isBus", false)) || t->raw.getProperty("outputBus", "").toString() != busId) return false;
                              // A clip offered to the bus is refused.
+                             // Copied: the refresh below rebuilds the model these point into.
                              const auto before = bus->clips.size();
-                             if (const auto* clip = t->clips.empty() ? nullptr : &t->clips.front())
-                                 engine.send("CLIP_ADD", object({{"trackId", busId}, {"clipId", "smoke-bus-clip"}, {"libraryItemId", clip->libraryItemId},
+                             const auto busName = bus->name, trackName = t->name;
+                             const auto item = t->clips.empty() ? juce::String() : t->clips.front().libraryItemId;
+                             if (item.isNotEmpty())
+                                 engine.send("CLIP_ADD", object({{"trackId", busId}, {"clipId", "smoke-bus-clip"}, {"libraryItemId", item},
                                                                  {"positionMs", 0.0}, {"inMs", 0.0}, {"durationMs", 500.0}}));
                              mirror.refreshNow();
                              const auto* again = model().findTrack(busId);
-                             report.add("buses: " + bus->name + " made and " + t->name + " sent to it; the bus took "
+                             report.add("buses: " + busName + " made and " + trackName + " sent to it; the bus took "
                                         + juce::String(static_cast<int>(again != nullptr ? again->clips.size() - before : 0)) + " clip(s)");
                              if (again == nullptr || again->clips.size() != before) return false;
                              actions.removeTrack(busId);
@@ -2716,8 +2719,9 @@ void SmokeTest::addTempoJourney()
                          if (!has("plugin:" + slot + ":0") || !has("plugin:" + slot + ":mix") || !has("plugin:" + slot + ":2")) return false;
                          report.add("track effects in Track FX: " + juce::String(module->automationLanes().size()) + " lanes from its (A): "
                                     + module->automationLanes().joinIntoString(", "));
-                         actions.setAutomationLanes(t.id, {});
-                         engine.send("TRACK_REMOVE_PLUGIN", object({{"trackId", t.id}, {"slotId", slot}}));
+                         const auto trackOfSlot = t.id; // copied: the sends below can refresh the model
+                         actions.setAutomationLanes(trackOfSlot, {});
+                         engine.send("TRACK_REMOVE_PLUGIN", object({{"trackId", trackOfSlot}, {"slotId", slot}}));
                          return true;
                      }});
     steps.back().poll = true;
