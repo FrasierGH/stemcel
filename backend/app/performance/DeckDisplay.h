@@ -32,6 +32,11 @@ class DeckDisplay final : public juce::Component
     // The deck's platter, a child in the top corner on the outer side (deck 1 left, deck 2
     // right), beside the title and the overview: shown or not, the layout follows.
     void setPlatter(juce::Component* platter) { platterComponent = platter; }
+    // Stacked waveforms: the close-up is drawn elsewhere (paintCloseUpInto), on a time scale
+    // the other deck shares, and this screen keeps only the header and the overview.
+    void setCloseUpShown(bool shown) { closeUpShown = shown; }
+    void paintCloseUpInto(juce::Graphics&, juce::Rectangle<float> area);
+    static int compactHeight(); // the header and overview alone
 
     void paint(juce::Graphics&) override;
     void resized() override;
@@ -42,7 +47,9 @@ class DeckDisplay final : public juce::Component
     bool platterShown() const { return platterComponent != nullptr && platterComponent->isVisible(); }
     juce::Rectangle<int> overviewArea() const;
     juce::Rectangle<int> closeUpArea() const;
-    void paintCloseUp(juce::Graphics&, juce::Rectangle<float> area);
+    // `scale`: source seconds per second of the window (the deck's tempo, when stacked).
+    void paintCloseUp(juce::Graphics&, juce::Rectangle<float> area, double scale = 1.0);
+    void paintTrackCloseUp(juce::Graphics&, juce::Rectangle<float> area);
     void paintOverview(juce::Graphics&, juce::Rectangle<float> area);
     void paintTrack(juce::Graphics&);
     void drawClips(juce::Graphics&, juce::Rectangle<float> area, double fromMs, double toMs);
@@ -59,6 +66,7 @@ class DeckDisplay final : public juce::Component
     std::vector<TrackClip> trackClips;
     double trackPlayheadMs = 0.0, trackLengthMs = 0.0;
     juce::Component* platterComponent = nullptr;
+    bool closeUpShown = true;
 };
 
 } // namespace stemcel::native::perf

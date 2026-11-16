@@ -6,6 +6,7 @@
 // recorded and written into the timeline when the take ends (PerformanceTake).
 
 #include "JogPlatter.h"
+#include "StackedWaveforms.h"
 #include "TimelineStrip.h"
 #include "AppPreferences.h"
 #include "AudioImport.h"
@@ -63,6 +64,8 @@ class PerformanceView final : public juce::Component, private juce::Timer, priva
     PerfBrowser& browserForTest() { return browser; }
     TimelineStrip& stripForTest() { return *timelineStrip; }
     JogPlatter* platterForTest(int deck) { return platters[static_cast<size_t>(deck - 1)].get(); }
+    StackedWaveforms* stackedForTest() { return stacked.get(); }
+    void setStackedForTest(bool on) { stackButton.setToggleState(on, juce::sendNotification); }
     void loadForTest(const juce::String& itemId, int deck) { loadItem(itemId, deck); }
     const PerformanceTake& takeForTest() const { return take; }
     void bindForTest(int deck, const juce::String& trackId)
@@ -103,6 +106,14 @@ class PerformanceView final : public juce::Component, private juce::Timer, priva
     void build(int deck);
     void onState(const juce::var&);
     void onLoaded(const juce::var&);
+    void onLoadComplete(const juce::var&);
+    void onItemAttached(const juce::var&);
+    // A track off the disk at once (path and hints), while it joins the project's library.
+    void loadFile(const juce::File& file, int deck, const juce::DynamicObject::Ptr& hints, ImportRequest request);
+    // Reading ahead the track the browser cursor rests on, so LOAD is instant.
+    void preloadSelected();
+    juce::String preloadCandidate, preloaded;
+    double preloadSince = 0.0;
     void onUi(const juce::var&);
     void onCues(const juce::var&);
     void loadRow(const BrowserRow& row, int deck);
@@ -135,7 +146,9 @@ class PerformanceView final : public juce::Component, private juce::Timer, priva
     juce::Rectangle<int> fxArea;
     std::array<juce::String, 64> sampleNames;
     PerfBrowser browser;
-    juce::TextButton exitButton{"Exit"}, recButton{"REC"}, autoGainButton{"AUTO GAIN"}, plattersButton{"DISCS"};
+    juce::TextButton exitButton{"Exit"}, recButton{"REC"}, autoGainButton{"AUTO GAIN"}, plattersButton{"DISCS"},
+        stackButton{"STACKED"};
+    std::unique_ptr<StackedWaveforms> stacked; // the close-ups one above the other (STACKED)
     std::unique_ptr<TimelineStrip> timelineStrip;
     std::array<std::unique_ptr<JogPlatter>, 2> platters;
     // The take being recorded, as the timeline strip shows it: each deck's audible stretches.

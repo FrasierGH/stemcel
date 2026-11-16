@@ -45,7 +45,9 @@ void pushEnginePreferences(EngineClient& engine, AppPreferences& prefs)
                                                   {"speed", spinSpeed(prefs.get("backspin", "intensity", "medium").toString())},
                                                   {"curve", 3.0}}));
     juce::Array<juce::var> enabled;
-    if (const auto* o = prefs.getSection("enabledMidiInputs").getDynamicObject())
+    // The smoke test drives MIDI by injection: a controller on the desk stays closed.
+    const bool smokeTest = juce::JUCEApplicationBase::getCommandLineParameters().contains("--smoke-test");
+    if (const auto* o = prefs.getSection("enabledMidiInputs").getDynamicObject(); o != nullptr && !smokeTest)
         for (const auto& p : o->getProperties())
             if (static_cast<bool>(p.value)) enabled.add(p.name.toString());
     engine.send("MIDI_INPUTS_SET", payload({{"identifiers", enabled}}));
