@@ -21,9 +21,20 @@ Open it with the **Perform** button in the transport bar, or **View ▸ Performa
     cue point on it.
   - The record glows while its jog is touched.
   - **DISCS** in the top bar turns them off.
-- **Meters:** each channel's level in three bands (LOW, MID, HI), with the dB of each under
-  the fader.
+- **Meters:** one bar per channel beside its fader, green to -9 dB, amber to -3 dB and red
+  above, with its level in dB under the fader.
+- **STACKED** in the top bar puts both decks' close-up waveforms one above the other across
+  the width, on one time scale around one centre line, so two decks in sync line up beat for
+  beat. The deck screens keep the title, the time and the overview.
 - **AUTO GAIN:** see [the library guide](dj-library.md#auto-gain).
+- **Loading:** a deck plays as soon as the first seconds of a track are read, and the rest
+  follows in the background. A track the browser's cursor rests on is read ahead, so LOAD on
+  it is instant. A track from the DJ collection or rekordbox goes on the deck straight from its
+  file while it joins the project's library.
+- **The filter** is voiced after Pioneer's DJM mixers: a small turn off the centre detent is
+  already clearly heard, a full turn leaves only the hats (high-pass) or the sub (low-pass),
+  and the resonance rises as it closes. The timeline's filter is the same, so takes play back
+  as they sounded.
 
 ## Recording into the timeline
 
@@ -89,6 +100,40 @@ With REC on, the take replaces that stretch:
 - **Clearing:** the stretch is cleared in the arrangement. For a track, only that track;
   for the mix, every track. Clips are split at its edges and nothing after it moves.
 - **Undo:** it's one undo step.
+
+## Redo from here
+
+**REDO** goes back over a recorded take to redo part of it, a transition say, in real time.
+
+1. Put the timeline's playhead a little before the stretch to redo, inside the take.
+2. Press **REDO**. Each channel is put on its deck's track of the take, and the timeline plays.
+   Untouched, the take plays exactly as it was.
+3. Touch a control and it is yours from that moment:
+   - **A knob or fader** (trim, EQ, filter, the channel fader, effects) takes over once you move
+     it to the value the take has there (or past it), so a knob left elsewhere doesn't jump.
+     Everything you don't touch keeps following the take.
+   - **A deck control** (the tempo slider, SYNC, loops, hot cues and pads, the jog while it
+     plays) takes the deck over: it loads what the take was playing, at the point and tempo the
+     take had reached, and plays on live while the take's track falls silent. The tempo slider
+     picks the tempo up when you move it to it.
+4. Stop the timeline (PLAY on the controller, or Space) to end the pass. Press PLAY again for
+   another pass from where it stopped; press **REDO** again to finish.
+
+With **REC on**, each pass is written when it stops, as one undo step:
+
+- **Mixer moves** are written from your first touch to the stop, ramping back to the take's
+  values over a beat after it.
+- **A deck taken over:** its playing replaces the take's track from the takeover to the stop,
+  and the rest of the take joins on:
+  - The **JOIN** light is lit while stopping now would join seamlessly: the deck is playing a
+    moment the rest of the take also plays (the same track, at about the same tempo).
+  - Stopping there splices the take at that moment. If the deck got there earlier or later
+    than the take did, everything after the stop moves back or up by the difference, so the
+    rest of the mix carries on as it was.
+  - Stopping elsewhere asks whether to replace the rest of that deck's track or leave it.
+
+With **REC off**, passes are rehearsals: nothing is written, and **KEEP** writes the last one's
+mixer moves. A deck taken over plays but isn't written with REC off.
 
 ## Headphones
 

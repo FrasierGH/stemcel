@@ -15,6 +15,7 @@
 
 #include <array>
 #include <map>
+#include <optional>
 
 namespace stemcel::native::perf
 {
@@ -36,6 +37,12 @@ class TrackDriver
     // Writes what is held (when it was recording) and lets every track go.
     void finish();
 
+    // A redo rehearsing (REC off): each pass's moves are kept, not written, until keepPass().
+    void setHoldPasses(bool hold) { holdPasses = hold; }
+    bool hasHeldPass() const { return heldPass.has_value(); }
+    bool keepPass(); // writes the last held pass; false when there is none
+    void dropPass() { heldPass.reset(); }
+
     // The channel's values as track parameters (also for tests).
     static std::map<juce::String, double> valuesFor(const State& state, int deck, double bpm);
 
@@ -50,9 +57,22 @@ class TrackDriver
         juce::String trackId;
         std::map<juce::String, double> last;
         std::map<juce::String, Touch> held; // controls moved since the timeline started (or ever, stopped)
+        // The pickup: a control the track's curve has a value for takes over only once the
+        // knob reaches that value (or crosses it), so a knob left elsewhere doesn't jump it.
+        std::map<juce::String, double> pickup; // knob - curve, last seen
         bool primed = false;
     };
+    struct HeldPass
+    {
+        std::array<juce::String, kDecks> tracks;
+        std::array<std::map<juce::String, Touch>, kDecks> held;
+        double endMs = 0.0;
+    };
     void commit(bool write);
+    void writeTouches(const std::array<juce::String, kDecks>& tracks, const std::array<std::map<juce::String, Touch>, kDecks>& held,
+                      double endMs);
+    bool holdPasses = false;
+    std::optional<HeldPass> heldPass;
     void sendLive(const juce::String& trackId, const std::map<juce::String, double>& values);
     void clearLive(const juce::String& trackId);
 

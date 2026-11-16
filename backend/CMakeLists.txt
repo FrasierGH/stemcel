@@ -834,6 +834,7 @@ if(STEMCEL_BUILD_NATIVE_APP)
         app/performance/PerfBrowser.cpp
         app/performance/PerformanceTake.cpp
         app/performance/PerformanceView.cpp
+        app/performance/PerformanceRedo.cpp
         app/performance/TrackDriver.cpp
         app/Toasts.cpp
         app/TransitionEditor.cpp

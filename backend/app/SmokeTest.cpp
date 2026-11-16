@@ -4600,6 +4600,156 @@ void SmokeTest::addTempoJourney()
                      }});
     steps.back().poll = true;
     steps.back().timeoutMs = 10000.0;
+    // Redo from here, rehearsed (REC off): the take's Deck 1 track plays as it was; EQ LOW
+    // brought through the take's value takes over, then killed; KEEP writes the pass, which
+    // ramps back to the take over a beat after the stop.
+    steps.push_back({"performance redo rehearses and keeps",
+                     [this, perfWorkspace]
+                     {
+                         auto* view = perfWorkspace() != nullptr ? perfWorkspace()->performanceView() : nullptr;
+                         if (view == nullptr) return;
+                         view->bindForTest(1, {});
+                         view->recForTest(false);
+                         mirror.refreshNow();
+                         redoTrack.clear();
+                         redoFromMs = 0.0;
+                         redoPhase = 0;
+                         for (const auto& t : model().tracks)
+                             if (t.name.startsWith("Deck 1"))
+                                 for (const auto& c : t.clips)
+                                     if (c.endMs() - c.offsetMs > 2500.0 && redoTrack.isEmpty())
+                                     {
+                                         redoTrack = t.id;
+                                         redoFromMs = c.offsetMs + 100.0;
+                                     }
+                         actions.seek(redoFromMs);
+                     },
+                     {},
+                     [this, perfWorkspace, inject](const juce::var&)
+                     {
+                         auto* w = perfWorkspace();
+                         auto* view = w != nullptr ? w->performanceView() : nullptr;
+                         if (view == nullptr || redoTrack.isEmpty()) return false;
+                         const auto& live = w->liveState();
+                         if (redoPhase == 0)
+                         {
+                             if (std::abs(live.positionMs - redoFromMs) > 30.0) return false;
+                             view->redoForTest(true);
+                             redoPhase = 1;
+                             return false;
+                         }
+                         if (redoPhase == 1)
+                         {
+                             if (!live.playing || live.positionMs < redoFromMs + 300.0) return false;
+                             inject({0xB0, 0x0F, 0x40, 0xB0, 0x2F, 0x00}); // EQ LOW through the take's value (centre)
+                             redoPhase = 2;
+                             return false;
+                         }
+                         if (redoPhase == 2)
+                         {
+                             if (live.positionMs < redoFromMs + 450.0) return false;
+                             redoTouchMs = live.positionMs;
+                             inject({0xB0, 0x0F, 0x00, 0xB0, 0x2F, 0x00}); // killed
+                             redoPhase = 3;
+                             return false;
+                         }
+                         if (redoPhase == 3)
+                         {
+                             if (live.positionMs < redoTouchMs + 500.0) return false;
+                             redoStopMs = live.positionMs;
+                             actions.pause();
+                             redoPhase = 4;
+                             return false;
+                         }
+                         if (redoPhase == 4)
+                         {
+                             if (live.playing || !view->heldPassForTest()) return false;
+                             if (!view->keepForTest()) return false;
+                             redoPhase = 5;
+                             return false;
+                         }
+                         mirror.refreshNow();
+                         const auto* track = model().findTrack(redoTrack);
+                         if (track == nullptr) return false;
+                         const auto bass = automation::pointsOf(*track, "toneBass");
+                         const double before = automation::valueAt(bass, redoFromMs + 100.0, 0.0);
+                         const double held = automation::valueAt(bass, redoTouchMs + 250.0, 0.0);
+                         report.add("performance redo (rehearsed, kept): toneBass " + juce::String(before, 1) + " dB before the touch, "
+                                    + juce::String(held, 1) + " dB after it, stopped at " + juce::String(redoStopMs, 0) + " ms");
+                         view->redoForTest(false);
+                         return std::abs(before) < 0.5 && held < -39.0;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 15000.0;
+    // Redo with REC on, a deck taken over: deck 1 loads what the take played, from where it had
+    // got, at its tempo; at the stop its playing replaces that stretch of the take's track and
+    // the rest of the take joins on where it plays the same moment.
+    steps.push_back({"performance redo takes a deck over and joins",
+                     [this, perfWorkspace]
+                     {
+                         auto* view = perfWorkspace() != nullptr ? perfWorkspace()->performanceView() : nullptr;
+                         if (view == nullptr) return;
+                         view->recForTest(true);
+                         redoPhase = 0;
+                         actions.seek(redoFromMs);
+                     },
+                     {},
+                     [this, perfWorkspace](const juce::var&)
+                     {
+                         auto* w = perfWorkspace();
+                         auto* view = w != nullptr ? w->performanceView() : nullptr;
+                         if (view == nullptr || redoTrack.isEmpty()) return false;
+                         const auto& live = w->liveState();
+                         if (redoPhase == 0)
+                         {
+                             if (std::abs(live.positionMs - redoFromMs) > 30.0) return false;
+                             view->redoForTest(true);
+                             redoPhase = 1;
+                             return false;
+                         }
+                         if (redoPhase == 1)
+                         {
+                             if (!live.playing || live.positionMs < redoFromMs + 300.0) return false;
+                             redoTouchMs = live.positionMs;
+                             if (!view->takeOverForTest(1)) return false;
+                             redoPhase = 2;
+                             return false;
+                         }
+                         if (redoPhase == 2)
+                         {
+                             const auto& d = view->stateForTest().decks[0];
+                             if (!d.playing || live.positionMs < redoTouchMs + 1200.0) return false;
+                             redoStopMs = live.positionMs;
+                             actions.pause();
+                             redoPhase = 3;
+                             return false;
+                         }
+                         mirror.refreshNow();
+                         const auto* track = model().findTrack(redoTrack);
+                         if (track == nullptr || live.playing) return false;
+                         const ClipModel* fromTouch = nullptr;
+                         const ClipModel* afterStop = nullptr;
+                         for (const auto& c : track->clips)
+                         {
+                             if (c.offsetMs >= redoTouchMs - 50.0 && c.offsetMs < redoTouchMs + 600.0 && c.offsetMs < redoStopMs - 200.0) fromTouch = &c;
+                             if (c.offsetMs >= redoStopMs - 200.0 && c.offsetMs < redoStopMs + 400.0) afterStop = &c;
+                         }
+                         if (fromTouch == nullptr || afterStop == nullptr)
+                         {
+                             juce::String clips;
+                             for (const auto& c : track->clips) clips << juce::String(c.offsetMs, 0) << "+" << juce::String(c.endMs() - c.offsetMs, 0) << " ";
+                             log::info("smoke", "redo takeover: touched " + juce::String(redoTouchMs, 0) + " stopped " + juce::String(redoStopMs, 0) + " clips " + clips);
+                             return false;
+                         }
+                         report.add("performance redo (deck taken over): its clip from " + juce::String(fromTouch->offsetMs, 0) + " ms (touched at "
+                                    + juce::String(redoTouchMs, 0) + "), the take on from " + juce::String(afterStop->offsetMs, 0) + " ms (stopped at "
+                                    + juce::String(redoStopMs, 0) + ")");
+                         view->redoForTest(false);
+                         view->recForTest(true); // REC on again, as the steps after expect
+                         return true;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 15000.0;
     // A stretch of the timeline onto a deck: the selected range's mix rendered onto deck 2, played
     // with REC on, and the take replaces that stretch.
     steps.push_back({"performance loads a timeline region",

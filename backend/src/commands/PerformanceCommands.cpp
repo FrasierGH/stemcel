@@ -388,15 +388,22 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
                 }
                 case perf::Control::sync:
                 case perf::Control::syncLong:
-                case perf::Control::syncShift:
                 case perf::Control::tempo:
                 case perf::Control::loopIn:
                 case perf::Control::loopInLong:
                 case perf::Control::loopOut:
                 case perf::Control::reloopExit:
-                case perf::Control::reloopShift:
                 case perf::Control::callPrev:
                 case perf::Control::callNext:
+                {
+                    // Not the deck's while it drives a track, but the app hears them: in a redo,
+                    // touching one takes the deck over from the take.
+                    const juce::SpinLock::ScopedLockType lock(appLock);
+                    appEvents.push_back(e);
+                    return;
+                }
+                case perf::Control::syncShift:
+                case perf::Control::reloopShift:
                 case perf::Control::callPrevShift:
                 case perf::Control::callNextShift:
                 case perf::Control::jogTouch:
@@ -406,7 +413,11 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
                 case perf::Control::pad:
                 case perf::Control::padShift:
                     if (e.mode != perf::PadMode::padFx1 && e.mode != perf::PadMode::padFx2 && e.mode != perf::PadMode::sampler)
+                    {
+                        const juce::SpinLock::ScopedLockType lock(appLock);
+                        appEvents.push_back(e);
                         return;
+                    }
                     break;
                 default:
                     break;

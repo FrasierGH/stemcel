@@ -59,7 +59,7 @@ class Param final : public juce::AudioPluginInstance::HostedParameter
     bool isDiscrete() const override { return steps > 0; }
     bool isBoolean() const override { return steps == 2; }
     juce::String getParameterID() const override { return id; }
-    juce::String getText(float v, int) const override
+    juce::String getText(float v, int /*maximumLength*/) const override
     {
         if (!labels.isEmpty()) return labels[index(v)];
         if (steps == 2) return v >= 0.5F ? "On" : "Off";
@@ -123,7 +123,7 @@ class DjFxPlugin final : public juce::AudioPluginInstance
     void fillInPluginDescription(juce::PluginDescription& d) const override { d = description; }
     const juce::String getName() const override { return description.name; }
 
-    void prepareToPlay(double sampleRate, int) override
+    void prepareToPlay(double sampleRate, int /*maximumBlockSize*/) override
     {
         if (beat)
         {
@@ -143,7 +143,7 @@ class DjFxPlugin final : public juce::AudioPluginInstance
         else colorUnit.reset();
     }
 
-    void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override
+    void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& /*midi*/) override
     {
         const juce::ScopedNoDenormals noDenormals;
         if (buffer.getNumChannels() < 2) return;
@@ -184,9 +184,9 @@ class DjFxPlugin final : public juce::AudioPluginInstance
     bool hasEditor() const override { return false; }
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
-    void setCurrentProgram(int) override {}
-    const juce::String getProgramName(int) override { return {}; }
-    void changeProgramName(int, const juce::String&) override {}
+    void setCurrentProgram(int /*index*/) override {}
+    const juce::String getProgramName(int /*index*/) override { return {}; }
+    void changeProgramName(int /*index*/, const juce::String& /*newName*/) override {}
 
     // The parameters' values, in their order.
     void getStateInformation(juce::MemoryBlock& data) override

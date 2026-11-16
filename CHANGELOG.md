@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Redo from here** in performance mode: REDO goes back over a recorded take in real time. The take plays as it was until you touch a control: a knob takes over once it reaches the take's value, a deck control takes the deck over from where the take had got. Each pass is written when it stops (REC on), the rest of the take joining on where it plays the same moment (the JOIN light), or kept with KEEP after a rehearsal (REC off). See [the guide](docs/performance-mode.md#redo-from-here).
+- **Effects on timeline tracks**: Track FX's Add effect... offers every Beat FX and Sound Color FX from performance mode, and the scanned plugins. Each effect has a Mix knob (a plugin's latency allowed for), the DJ effects Strength (and Beats, On), a plugin an Edit button for its window.
+- **(A)** on every Track FX module: shows or hides its automation lanes on the timeline.
+- **Buses**: + Bus in the mixer; a track's Out menu (in the sidebar and on its strip) sends it to a bus, which has its own effects, plugins, automation, fader, pan, mute and solo. Exports mix through them.
+- **The timeline's scrollbar zooms** from its ends (the zoom slider follows), and the **playhead drags** by its head in the ruler.
+- **STACKED** waveforms in performance mode: both decks' close-ups one above the other on one time scale.
+
+### Changed
+
+- A supported controller works on the timeline as soon as it is plugged in; switching it off in Preferences ▸ MIDI is remembered.
+- Performance mode's channel meter is one bar (green, amber, red) with one reading.
+- The filter is voiced after DJM mixers: a small turn is clearly heard, a full turn goes further, and its resonance rises as it closes.
+- Decks load faster: playable after the first seconds, read ahead while the browser rests on a track, and collection and rekordbox tracks load straight from their files.
+- A take writes only what was moved; showing automation shows only lanes that change.
+- Half beats show over the waveforms (deck screens, the track editor) and the grid over the timeline's clips.
+- The terminal theme's timeline and clips: green-tinted blacks and scope-like traces.
+
 ## 0.5.0
 
 ### Added

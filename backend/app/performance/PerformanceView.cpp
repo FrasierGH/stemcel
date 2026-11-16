@@ -92,6 +92,7 @@ PerformanceView::PerformanceView(Context context)
         ctx.prefs.set("performance", "platters", plattersButton.getToggleState());
         resized();
     };
+    setUpRedo();
     addAndMakeVisible(stackButton);
     stackButton.setClickingTogglesState(true);
     stackButton.setToggleState(static_cast<bool>(ctx.prefs.get("performance", "stackedWaveforms", false)), juce::dontSendNotification);
@@ -508,6 +509,8 @@ void PerformanceView::onUi(const juce::var& p)
     const auto control = p.getProperty("control", "").toString();
     const int deck = static_cast<int>(p.getProperty("deck", 0));
     const double value = static_cast<double>(p.getProperty("value", 0.0));
+    // Redo: a deck control on a channel playing the take takes the deck over.
+    if (redoTakesOver(control, deck)) return;
     // A channel driving a timeline track: its transport and jog work the timeline.
     if (deck >= 1 && deck <= kDecks && driver.boundTrack(deck).isNotEmpty() &&
         (control.startsWith("play") || control.startsWith("cue") || control.startsWith("jog")))
@@ -807,6 +810,8 @@ void PerformanceView::refreshTargets()
 
 void PerformanceView::finishTake(std::function<void()> then)
 {
+    // Leaving in a redo: its pass is written first, the channels go back to their decks.
+    if (redo.active) stopRedo();
     auto* o = new juce::DynamicObject();
     o->setProperty("on", false);
     ctx.engine.send("PERF_RECORD", juce::var(o));
@@ -991,6 +996,7 @@ void PerformanceView::timerCallback()
     }
     if (stacked != nullptr && stacked->isVisible()) stacked->repaint();
     preloadSelected();
+    redoTick();
     repaint(mixerArea);
 }
 
@@ -1161,6 +1167,9 @@ void PerformanceView::resized()
     autoGainButton.setBounds(bar.removeFromLeft(96).reduced(2));
     plattersButton.setBounds(bar.removeFromLeft(70).reduced(2));
     stackButton.setBounds(bar.removeFromLeft(80).reduced(2));
+    redoButton.setBounds(bar.removeFromLeft(64).reduced(2));
+    keepButton.setBounds(bar.removeFromLeft(56).reduced(2));
+    joinLight.setBounds(bar.removeFromLeft(44).reduced(2));
     status.setBounds(bar.removeFromLeft(bar.getWidth() / 2));
     midiLine.setBounds(bar);
     area.removeFromTop(4);

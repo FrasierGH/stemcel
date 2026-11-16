@@ -116,7 +116,7 @@ void TrackDriver::update(const State& state)
     {
         playStartMs = live.positionMs;
         // Controls set while stopped are written from where the timeline starts.
-        if (recording)
+        if (recording || holdPasses)
             for (auto& b : bindings)
                 for (auto& [param, touch] : b.held)
                     if (!touch.writing)
@@ -147,11 +147,31 @@ void TrackDriver::update(const State& state)
             continue;
         }
         std::map<juce::String, double> changed;
+        const auto* track = model.findTrack(b.trackId);
         for (const auto& [param, value] : values)
         {
             const auto last = b.last.find(param);
             const bool moved = last == b.last.end() || std::abs(last->second - value) > epsilonFor(param);
-            if (moved) changed[param] = value;
+            if (!moved) continue;
+            // The pickup, for a control not yet taken over that the track's curve drives.
+            if (b.held.count(param) == 0 && !stepped(param) && param != "fxBpm" && track != nullptr && playing)
+                if (const auto points = automation::pointsOf(*track, param); !points.empty())
+                {
+                    const double curve = automation::valueAt(points, live.positionMs, value);
+                    const double diff = value - curve;
+                    // Where the knob was before this move counts: a move across the curve's value
+                    // takes over at once.
+                    const auto before = b.pickup.find(param);
+                    const double prior = before != b.pickup.end() ? before->second : last != b.last.end() ? last->second - curve : diff;
+                    const bool reached = std::abs(diff) <= epsilonFor(param) * 4.0 || prior * diff <= 0.0;
+                    b.pickup[param] = diff;
+                    if (!reached)
+                    {
+                        b.last[param] = value;
+                        continue;
+                    }
+                }
+            changed[param] = value;
         }
         // The tempo the effects follow goes along with the effects.
         if (!changed.empty() && changed.count("fxBpm") == 0) changed["fxBpm"] = values.at("fxBpm");
@@ -160,7 +180,7 @@ void TrackDriver::update(const State& state)
         {
             b.last[param] = value;
             auto& touch = b.held[param];
-            if (playing && recording)
+            if (playing && (recording || holdPasses))
             {
                 touch.writing = true;
                 touch.points.push_back({live.positionMs, value});
@@ -172,23 +192,58 @@ void TrackDriver::update(const State& state)
 
 void TrackDriver::commit(bool write)
 {
-    bool any = false;
+    bool touched = false;
     for (const auto& b : bindings)
         for (const auto& [param, touch] : b.held)
-            any = any || (write && touch.writing && !touch.points.empty());
+            touched = touched || (touch.writing && !touch.points.empty());
     const double endMs = live.positionMs;
-    if (any)
-        engine.inUndoGroup(
+    std::array<juce::String, kDecks> tracks;
+    std::array<std::map<juce::String, Touch>, kDecks> held;
+    for (size_t i = 0; i < bindings.size(); ++i)
+    {
+        tracks[i] = bindings[i].trackId;
+        held[i] = bindings[i].held;
+    }
+    const bool any = touched && write && !holdPasses;
+    if (touched && holdPasses) heldPass = HeldPass{tracks, held, endMs}; // KEEP writes it
+    if (any) writeTouches(tracks, held, endMs);
+    for (auto& b : bindings)
+    {
+        if (b.trackId.isNotEmpty() && !b.held.empty()) clearLive(b.trackId);
+        b.held.clear();
+        b.pickup.clear();
+    }
+    if (any) mirror.refreshNow();
+}
+
+bool TrackDriver::keepPass()
+{
+    if (!heldPass.has_value()) return false;
+    const auto pass = *heldPass;
+    heldPass.reset();
+    writeTouches(pass.tracks, pass.held, pass.endMs);
+    mirror.refreshNow();
+    return true;
+}
+
+void TrackDriver::writeTouches(const std::array<juce::String, kDecks>& tracks,
+                               const std::array<std::map<juce::String, Touch>, kDecks>& heldTouches, double endMs)
+{
+    engine.inUndoGroup(
             "Live automation",
             [&]
             {
-                for (auto& b : bindings)
+                for (size_t i = 0; i < tracks.size(); ++i)
                 {
-                    const auto* track = mirror.model().findTrack(b.trackId);
+                    const auto& trackId = tracks[i];
+                    const auto& heldHere = heldTouches[i];
+                    const auto* track = mirror.model().findTrack(trackId);
                     if (track == nullptr) continue;
                     auto lanes = automation::lanesOf(*track);
                     bool lanesChanged = false;
-                    for (const auto& [param, touch] : b.held)
+                    // Back to the curve over a beat after the stretch, not a jump.
+                    const double beatMs = 60000.0 / juce::jmax(20.0, mirror.model().tempoCurve().bpmAt(endMs));
+                    for (const auto& [param, touch] : heldHere)
                     {
                         if (!touch.writing || touch.points.empty() || param == "fxBpm") continue;
                         const auto existing = automation::pointsOf(*track, param);
@@ -202,10 +257,11 @@ void TrackDriver::commit(bool write)
                             merged.push_back({t0 - 1.0, automation::valueAt(existing, t0, fallback), stepped(param) ? "hold" : "linear"});
                         for (const auto& [t, v] : shapeCurve(touch.points, param, t1))
                             merged.push_back({t, v, stepped(param) ? "hold" : "linear"});
-                        merged.push_back({t1 + 1.0, automation::valueAt(existing, t1, fallback), stepped(param) ? "hold" : "linear"});
+                        const double back = stepped(param) ? t1 + 1.0 : t1 + beatMs;
+                        merged.push_back({back, automation::valueAt(existing, back, fallback), stepped(param) ? "hold" : "linear"});
                         for (const auto& p : existing)
-                            if (p.timeMs > t1 + 1.0) merged.push_back(p);
-                        actions.setAutomation(b.trackId, param, merged);
+                            if (p.timeMs > back) merged.push_back(p);
+                        actions.setAutomation(trackId, param, merged);
                         if (std::none_of(lanes.begin(), lanes.end(), [&](const auto& l) { return l.paramId == param; }))
                         {
                             lanes.push_back({param, automation::kDefaultLaneHeight});
@@ -213,17 +269,11 @@ void TrackDriver::commit(bool write)
                         }
                     }
                     // The effects' tempo along with any effect written.
-                    if (const auto bpm = b.held.find("fxBpm"); bpm != b.held.end() && bpm->second.writing && !bpm->second.points.empty())
-                        actions.setAutomation(b.trackId, "fxBpm", {{bpm->second.points.front().first, bpm->second.points.front().second}});
-                    if (lanesChanged) actions.setAutomationLanes(b.trackId, lanes);
+                    if (const auto bpm = heldHere.find("fxBpm"); bpm != heldHere.end() && bpm->second.writing && !bpm->second.points.empty())
+                        actions.setAutomation(trackId, "fxBpm", {{bpm->second.points.front().first, bpm->second.points.front().second}});
+                    if (lanesChanged) actions.setAutomationLanes(trackId, lanes);
                 }
             });
-    for (auto& b : bindings)
-    {
-        if (b.trackId.isNotEmpty() && !b.held.empty()) clearLive(b.trackId);
-        b.held.clear();
-    }
-    if (any) mirror.refreshNow();
 }
 
 void TrackDriver::transport(const juce::String& control, double value)

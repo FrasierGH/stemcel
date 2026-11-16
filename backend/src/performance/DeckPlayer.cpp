@@ -416,6 +416,10 @@ void DeckPlayer::handle(const Event& e) noexcept
         case Control::seek:
             if (loaded != nullptr) jumpTo(std::clamp(static_cast<double>(e.value) * sr(), 0.0, length()));
             break;
+        case Control::tempoHold:
+            // An exact tempo (a redo taking over from a take); the slider takes over at it.
+            if (e.value > 0.05F) holdTempo(static_cast<double>(e.value));
+            break;
         default:
             break;
     }

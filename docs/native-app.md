@@ -328,6 +328,12 @@ in Fusion Dark); `applyTheme` sets them all. Clips keep their per-track colours 
 `STEMCEL_THEME=fusionDark` runs the app (or its smoke test) in a theme without touching the
 preferences.
 
+The timeline's scrollbar zooms as well as scrolls: drag its middle to scroll, either end to
+show more or less of the arrangement (the zoom slider follows); double-click it to fit the
+project. The playhead's head in the ruler drags it (snapped to the grid, free with Alt). The
+grid's lines show faintly over the clips too, so half and quarter beats stay visible over a
+waveform.
+
 The top bar has the timeline zoom slider (beside − + Fit) and the master section: the master
 volume slider and a stereo meter (L and R from -60 dBFS in green, amber above -12 and red above
 -3, a peak hold on each, and a clip light that a click clears). Transport commands live on the
@@ -342,8 +348,26 @@ its folders `~/Stemcel` and the app-data `Stemcel`).
 
 **View > Mixer** (F9), or the **Mixer** button in the top bar, swaps the bottom panel for a
 mixer docked in the workspace: a strip per track (colour, name, five insert slots, pan knob,
-mute and solo, fader and stereo meter) and the master strip on the right (its own inserts,
-the master fader and meter). Click an empty slot's **+ insert** to add a plugin (grouped by
+mute and solo, its output, fader and stereo meter) and the master strip on the right (its own
+inserts, the master fader and meter).
+
+### Buses
+
+**+ Bus** (above the master strip) adds a bus. A bus is a track with no clips: the tracks sent
+to it are mixed into it, through its own Track FX, plugins, automation, fader, pan, mute and
+solo, and on to the master. Send a track to a bus from its **Out** menu, in the track sidebar
+or on its mixer strip (**New Bus** makes one and sends the track to it in one step). Bus strips
+sit after the tracks, tinted.
+
+- Muting a bus silences what is sent to it; soloing a bus solos what is sent to it, and
+  soloing a track keeps its bus playing.
+- Plugin latency is allowed for along each path (a track's own plugins and its bus's), so
+  tracks stay in time whichever way they go.
+- A bus takes no clips; deleting it sends its tracks back to the master.
+- Exports mix through the buses exactly as playback does (`BusGraph`'s bus runtimes, the same
+  in `MixdownRenderPass1`).
+
+On a strip, click an empty slot's **+ insert** to add a plugin (grouped by
 format, then maker); click a filled slot to open, bypass, move or remove it; double-click to
 open its editor. The Plugins tab's **Master bus** switch shows the same master chain.
 
@@ -370,6 +394,25 @@ VST 2 in the registry's folder, `Program Files\VstPlugins`, `Program Files\Stein
 system's component registry. Checked on Windows: a VST 2 scan reads Image-Line's FL Studio
 VSTi plugins' names, makers and categories through FST.
 
+## Track FX effects
+
+Track FX's **Add effect…** adds, after the built-in modules:
+
+- **Beat FX** and **Sound Color FX**: performance mode's effects, every one of them. Each has
+  **Strength** (Beat FX: LEVEL/DEPTH; Sound Color FX: the FILTER knob, centre off, one
+  character each way), and the Beat FX also **Beats** and **On**. Their tempo is the
+  timeline's.
+- **Plugins**: the scanned VST3, VST 2 and Audio Unit effects. A plugin has an **Edit** button
+  for its own window.
+
+Every effect has a **Mix** knob: how much of it is heard against the track's own sound (the
+dry sound delayed by the plugin's latency, so they line up). Its title row has bypass and
+remove. Stemcel's effects are hosted as built-in plugins (`plugins::BuiltInFx`), so they are
+saved, automated, exported and reordered like any plugin.
+
+Every Track FX module has an **(A)** button beside its name: it shows or hides that module's
+automation lanes on the timeline, to draw them by hand.
+
 ## Automation curves
 
 **What can be automated.** Every parameter of the effects, plugins and transitions:
@@ -382,7 +425,11 @@ VSTi plugins' names, makers and categories through FST.
   setting the engine holds while playing, so it is not a lane; the safety limiter and
   metronome are switches.
 - **Plugins**: every parameter of every plugin on a track or on the master, listed in
-  blocks of 32 under the plugin's name in the lane menu.
+  blocks of 32 under the plugin's name in the lane menu, and each one's **Mix**.
+
+Showing a track's automation (its **A**) shows only lanes whose curves change. A performance
+take writes only what was moved: an effect never switched on, or a knob left where it does
+nothing, isn't written at all, and what stayed put the whole take is kept but not shown.
 - **Transitions** write their moves as automation on the two tracks (gain, filter, the
   EQ bands, sends and the crusher), shaped by every setting in the transition editor; a
   tempo ramp goes into the tempo map. **Beat stutter** lays its divisions down as beat
