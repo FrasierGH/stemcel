@@ -118,6 +118,12 @@ class ProjectState : public juce::ValueTree::Listener
 
     // Mute/solo persist; effective gain is derived from volume and solo context.
     bool getTrackMuted(const juce::String& trackId) const;
+    // Buses: a track with no clips that others are sent to; a track's output is a bus's id,
+    // or empty for the master.
+    bool isTrackBus(const juce::String& trackId) const;
+    bool setTrackIsBus(const juce::String& trackId, bool isBus);
+    juce::String getTrackOutputBus(const juce::String& trackId) const;
+    bool setTrackOutputBus(const juce::String& trackId, const juce::String& busId);
     bool getTrackSoloed(const juce::String& trackId) const;
     bool anyTrackSoloed() const;
 
@@ -183,6 +189,7 @@ class ProjectState : public juce::ValueTree::Listener
                                 bool bypassed);
     bool setTrackPluginState(const juce::String& trackId, const juce::String& slotId,
                              const juce::String& base64State);
+    bool setTrackPluginMix(const juce::String& trackId, const juce::String& slotId, float mix);
     std::vector<TrackPluginSlot> getTrackPlugins(const juce::String& trackId) const;
 
     /** Tells the serialiser whether a plugin identifier is installed on this machine, so an
@@ -1066,6 +1073,8 @@ class ProjectState : public juce::ValueTree::Listener
     static const juce::Identifier kGain;
     static const juce::Identifier kMuted;
     static const juce::Identifier kSoloed;
+    static const juce::Identifier kIsBus;
+    static const juce::Identifier kOutputBus;
     static const juce::Identifier kHeightPx;
     static const juce::Identifier kFilePath;
     static const juce::Identifier kOffsetMs;

@@ -27,6 +27,7 @@ constexpr float kEdgeGrabPx = 6.0f;
 constexpr float kClipHeaderPx = 16.0f;
 constexpr float kClipPadding = 2.0f;
 constexpr int kDragThresholdPx = 3;
+constexpr float kPlayheadHead = 5.0f; // half the playhead head's width in the ruler
 constexpr double kBeatsPerBar = 4.0;
 constexpr double kTailPaddingMs = 30000.0;
 constexpr int kViewPersistDelayMs = 400;
@@ -216,12 +217,22 @@ TimelineView::TimelineView(ProjectMirror& projectMirror, TimelineViewState& view
     clipNameEditor.onEscapeKey = [this] { commitClipRename(false); };
     clipNameEditor.onFocusLost = [this] { commitClipRename(true); };
     addChildComponent(clipNameEditor);
-    for (auto* bar : {&hScroll, &vScroll})
+    vScroll.setAutoHide(true);
+    vScroll.addListener(this);
+    addAndMakeVisible(vScroll);
+    addAndMakeVisible(hScroll);
+    hScroll.onChange = [this](double startMs, double endMs)
     {
-        bar->setAutoHide(true);
-        bar->addListener(this);
-        addAndMakeVisible(*bar);
-    }
+        // The span shown sets the zoom; where it starts, the scroll.
+        const double canvas = juce::jmax(1.0, static_cast<double>(getWidth()));
+        view.pxPerSecond = juce::jlimit(minPxPerSecond(), VS::kMaxPxPerSecond, canvas / juce::jmax(0.001, (endMs - startMs) / 1000.0));
+        view.scrollXPx = startMs / 1000.0 * view.pxPerSecond;
+        userScrolled();
+        clampScroll();
+        view.changed();
+        persistView();
+    };
+    hScroll.onShowAll = [this] { zoomToFit(); };
     if (model().pxPerSecond > 0.0) view.pxPerSecond = model().pxPerSecond;
     view.scrollXPx = model().scrollX;
     startTimerHz(60);
@@ -232,7 +243,6 @@ TimelineView::~TimelineView()
     mirror.removeChangeListener(this);
     view.removeChangeListener(this);
     waveforms.removeChangeListener(this);
-    hScroll.removeListener(this);
     vScroll.removeListener(this);
 }
 
@@ -253,27 +263,20 @@ void TimelineView::resized()
 void TimelineView::syncScrollBars()
 {
     constexpr int kBar = 10;
+    constexpr int kZoomBar = 12;
     const int top = view.headerHeight();
-    hScroll.setBounds(0, getHeight() - kBar, getWidth() - kBar, kBar);
-    vScroll.setBounds(getWidth() - kBar, top, kBar, juce::jmax(0, getHeight() - top - kBar));
+    hScroll.setBounds(0, getHeight() - kZoomBar, getWidth() - kBar, kZoomBar);
+    vScroll.setBounds(getWidth() - kBar, top, kBar, juce::jmax(0, getHeight() - top - kZoomBar));
     // The same limits clampScroll() keeps the view within.
-    const double contentPx = contentLengthMs() / 1000.0 * view.pxPerSecond;
-    hScroll.setRangeLimits(0.0, juce::jmax(contentPx, static_cast<double>(getWidth())), juce::dontSendNotification);
-    hScroll.setCurrentRange(view.scrollXPx, getWidth(), juce::dontSendNotification);
+    hScroll.setRange(contentLengthMs(), view.xToMs(0), view.xToMs(getWidth()));
     const int visibleY = getHeight() - top;
     vScroll.setRangeLimits(0.0, juce::jmax(contentHeight(rows) + 40, visibleY), juce::dontSendNotification);
     vScroll.setCurrentRange(view.scrollY, visibleY, juce::dontSendNotification);
 }
 
-void TimelineView::scrollBarMoved(juce::ScrollBar* bar, double newRangeStart)
+void TimelineView::scrollBarMoved(juce::ScrollBar*, double newRangeStart)
 {
-    if (bar == &hScroll)
-    {
-        view.scrollXPx = newRangeStart;
-        userScrolled();
-    }
-    else
-        view.scrollY = newRangeStart;
+    view.scrollY = newRangeStart;
     clampScroll();
     view.changed();
     persistView();
@@ -388,8 +391,9 @@ void TimelineView::timerCallback()
         // Erase it where it was drawn and draw it where it is, in the same paint.
         const auto oldX = static_cast<int>(std::round(playheadX));
         playheadX = x;
-        repaint(oldX - 3, 0, 7, getHeight());
-        repaint(static_cast<int>(std::round(x)) - 3, 0, 7, getHeight());
+        constexpr int halfWidth = static_cast<int>(kPlayheadHead) + 2; // the head is wider than the line
+        repaint(oldX - halfWidth, 0, halfWidth * 2 + 1, getHeight());
+        repaint(static_cast<int>(std::round(x)) - halfWidth, 0, halfWidth * 2 + 1, getHeight());
     }
 }
 
@@ -463,7 +467,7 @@ const MarkerModel* TimelineView::markerAt(juce::Point<int> p) const
 }
 
 // ── painting ────────────────────────────────────────────────────────────────
-void TimelineView::paintGrid(juce::Graphics& g, juce::Rectangle<int> area)
+void TimelineView::paintGrid(juce::Graphics& g, juce::Rectangle<int> area, bool overClips)
 {
     // Beats along the tempo map (evenly spaced at the constant tempo without one).
     const auto curve = model().tempoCurve();
@@ -478,6 +482,7 @@ void TimelineView::paintGrid(juce::Graphics& g, juce::Rectangle<int> area)
     if (!drawBeats)
     {
         // Far out: every bar would crowd into a solid wash, so every 2nd, 4th, ... bar.
+        if (overClips) return;
         juce::int64 every = 1;
         while (beatPx * kBeatsPerBar * static_cast<double>(every) < 8.0) every *= 2;
         const double stepBars = static_cast<double>(every) * kBeatsPerBar;
@@ -502,8 +507,11 @@ void TimelineView::paintGrid(juce::Graphics& g, juce::Rectangle<int> area)
         const bool isBar = isBeat && (i / subdivisions) % static_cast<juce::int64>(kBeatsPerBar) == 0;
         if (!isBeat && !drawBeats) continue;
         if (isBeat && !isBar && !drawBeats) continue;
-        g.setColour(isBar ? colours::grey500.withAlpha(0.7f)
-                          : isBeat ? colours::grey600.withAlpha(0.7f) : colours::grey700.withAlpha(0.6f));
+        if (overClips)
+            g.setColour(colours::text.withAlpha(isBar ? 0.22f : isBeat ? 0.14f : 0.12f));
+        else
+            g.setColour(isBar ? colours::grey500.withAlpha(0.7f)
+                              : isBeat ? colours::grey600.withAlpha(0.7f) : colours::grey700.withAlpha(0.6f));
         g.drawVerticalLine(static_cast<int>(x), static_cast<float>(area.getY()), static_cast<float>(area.getBottom()));
     }
 }
@@ -869,6 +877,7 @@ void TimelineView::paint(juce::Graphics& g)
             }
             paintLanes(g, row, *track);
         }
+        paintGrid(g, tracksArea, true);
 
         // Drag ghost for move / trim.
         if (drag == DragKind::move || drag == DragKind::trimStart || drag == DragKind::trimEnd)
@@ -970,10 +979,15 @@ void TimelineView::paint(juce::Graphics& g)
     paintRuler(g, getLocalBounds().withHeight(VS::kRulerHeight));
     if (view.tempoLaneVisible) paintTempoLane(g);
 
-    // Playhead.
+    // Playhead, with a head in the ruler to drag it by.
     const auto px = static_cast<float>(playheadX);
     g.setColour(colours::red500);
     g.drawLine(px, 0.0f, px, static_cast<float>(getHeight()), 1.5f);
+    juce::Path head;
+    const auto bottom = static_cast<float>(VS::kRulerHeight);
+    head.addTriangle(px - kPlayheadHead, bottom - 9.0f, px + kPlayheadHead, bottom - 9.0f, px, bottom);
+    head.addRectangle(px - kPlayheadHead, bottom - 15.0f, kPlayheadHead * 2.0f, 6.0f);
+    g.fillPath(head);
 }
 
 // ── DJ transitions ──────────────────────────────────────────────────────────
@@ -1404,6 +1418,12 @@ void TimelineView::mouseDown(const juce::MouseEvent& e)
             dragMarkerId = m->id;
             return;
         }
+        // On the playhead: drag it (snapped to the grid, free with Alt).
+        if (std::abs(static_cast<double>(e.x) - playheadX) <= kPlayheadHead + 2.0)
+        {
+            drag = DragKind::playhead;
+            return;
+        }
         drag = DragKind::seek;
         dragAnchorMs = actions.snap(ms);
         actions.seek(e.mods.isAltDown() ? ms : dragAnchorMs);
@@ -1694,6 +1714,9 @@ void TimelineView::mouseDrag(const juce::MouseEvent& e)
         repaint();
         break;
     }
+    case DragKind::playhead:
+        actions.seek(juce::jmax(0.0, e.mods.isAltDown() ? ms : snapped(ms)));
+        break;
     case DragKind::seek:
     case DragKind::range:
         if (std::abs(e.getDistanceFromDragStartX()) > kDragThresholdPx)
@@ -2264,6 +2287,7 @@ void TimelineView::mouseUp(const juce::MouseEvent& e)
             actions.setTimelineSelection(rangePreview, model().loopSelection);
         rangePreview.reset();
         break;
+    case DragKind::playhead: break; // it moved as it was dragged
     case DragKind::seek:
         // A plain click on the ruler clears the range.
         if (model().timelineSelection.has_value()) actions.setTimelineSelection(std::nullopt, false);
@@ -2328,8 +2352,9 @@ void TimelineView::mouseMove(const juce::MouseEvent& e)
     }
     if (e.y < VS::kRulerHeight)
     {
-        setMouseCursor(markerAt(e.getPosition()) != nullptr ? juce::MouseCursor::LeftRightResizeCursor
-                                                            : juce::MouseCursor::PointingHandCursor);
+        const bool onPlayhead = std::abs(static_cast<double>(e.x) - playheadX) <= kPlayheadHead + 2.0;
+        setMouseCursor(markerAt(e.getPosition()) != nullptr || onPlayhead ? juce::MouseCursor::LeftRightResizeCursor
+                                                                          : juce::MouseCursor::PointingHandCursor);
         return;
     }
     if (const auto handle = transitionHandleAt(e.getPosition().toFloat()))

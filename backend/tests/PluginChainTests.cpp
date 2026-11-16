@@ -5,6 +5,7 @@
 #include "TestRegistry.h"
 
 #include "BusGraph.h"
+#include "BuiltInFx.h"
 #include "PluginChain.h"
 #include "PluginPlayHead.h"
 
@@ -362,8 +363,94 @@ void testPluginParameterFollowsItsAutomation()
 
 } // namespace
 
+// A slot's mix blends the plugin's output with the dry sound delayed by its latency, so a
+// half mix of a latent plugin is the two lined up, not a comb.
+void testSlotMixBlendsWithTheAlignedDrySound()
+{
+    constexpr int latency = 16;
+    plugins::PluginChain chain;
+    chain.prepare(kRate, kBlock);
+    // The plugin doubles and delays by `latency` (as a latent plugin does: its output is late).
+    class LatentDouble final : public FakeGainPlugin
+    {
+      public:
+        LatentDouble() : FakeGainPlugin(2.0F, latency) {}
+        void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override
+        {
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                auto* x = buffer.getWritePointer(ch);
+                for (int i = 0; i < buffer.getNumSamples(); ++i)
+                {
+                    history[ch].push_back(x[i]);
+                    x[i] = history[ch].size() > latency ? 2.0F * history[ch][history[ch].size() - 1 - latency] : 0.0F;
+                }
+            }
+        }
+        std::vector<float> history[2];
+    };
+    chain.addSlot(std::make_unique<plugins::PluginSlot>(makeDescriptor("m"), std::make_unique<LatentDouble>()));
+    chain.publish();
+    require(chain.setSlotMix("m", 0.5F), "the slot's mix should be settable");
+    // An impulse: wet and dry both arrive `latency` later, 2 and 1 high, mixed half and half.
+    juce::AudioBuffer<float> buffer(2, kBlock);
+    for (int block = 0; block < 3; ++block)
+    {
+        buffer.clear();
+        if (block == 1) buffer.setSample(0, 0, 1.0F), buffer.setSample(1, 0, 1.0F);
+        chain.processInserts(buffer, 0, kBlock);
+        if (block == 1)
+        {
+            float peak = 0.0F;
+            int at = -1;
+            for (int i = 0; i < kBlock; ++i)
+                if (std::abs(buffer.getSample(0, i)) > peak) peak = std::abs(buffer.getSample(0, i)), at = i;
+            require(at == latency, "the mixed impulse should come out once, at the plugin's latency");
+            require(std::abs(peak - 1.5F) < 0.05F, "half of 2 (the plugin) and half of 1 (the dry) is 1.5");
+        }
+    }
+}
+
+// Stemcel's own effects are plugins: listed, created, with Strength (and Beats, On) and silence
+// in a dry pass-through when their strength is off.
+void testBuiltInEffectsArePlugins()
+{
+    const auto list = plugins::builtInDescriptions();
+    require(list.size() == 23 + 9, "every Beat FX and Sound Color FX should be listed");
+    juce::PluginDescription echo;
+    for (const auto& d : list)
+        if (d.name == "Echo") echo = d;
+    require(plugins::isBuiltIn(echo) && plugins::isBuiltInIdentifier(echo.fileOrIdentifier), "Echo should be a built-in");
+    auto plugin = plugins::createBuiltIn(echo, kRate, kBlock);
+    require(plugin != nullptr, "a built-in should be created from its description");
+    require(plugin->getParameters().size() == 3, "a Beat FX has Strength, Beats and On");
+    plugin->prepareToPlay(kRate, kBlock);
+    // An impulse through the echo (once it has faded in) comes back later: its repeats.
+    juce::AudioBuffer<float> buffer(2, kBlock);
+    juce::MidiBuffer midi;
+    float later = 0.0F;
+    const int impulseAt = static_cast<int>(kRate * 0.25 / kBlock);
+    for (int block = 0; block < static_cast<int>(kRate * 2.0 / kBlock); ++block)
+    {
+        buffer.clear();
+        if (block == impulseAt) buffer.setSample(0, 0, 1.0F), buffer.setSample(1, 0, 1.0F);
+        plugin->processBlock(buffer, midi);
+        if (block > impulseAt + static_cast<int>(kRate * 0.3 / kBlock)) later = std::max(later, buffer.getMagnitude(0, kBlock));
+    }
+    require(later > 0.01F, "the echo should repeat the impulse");
+    // Its state round-trips its parameters.
+    plugin->getParameters()[0]->setValue(0.8F);
+    juce::MemoryBlock state;
+    plugin->getStateInformation(state);
+    auto again = plugins::createBuiltIn(echo, kRate, kBlock);
+    again->setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+    require(std::abs(again->getParameters()[0]->getValue() - 0.8F) < 1.0e-4F, "a built-in's state should keep its parameters");
+}
+
 void addPluginChainTests(std::vector<TestCase>& tests)
 {
+    tests.push_back({"PluginChain slot mix lines the dry sound up with the plugin", testSlotMixBlendsWithTheAlignedDrySound});
+    tests.push_back({"Stemcel's effects are plugins", testBuiltInEffectsArePlugins});
     tests.push_back({"PluginChain runs its slots in order once published", testChainRunsSlotsInOrder});
     tests.push_back({"PluginChain removes a slot from the audio path", testRemovedSlotLeavesTheAudioPath});
     tests.push_back({"PluginChain passes audio through an unresolved slot", testUnresolvedSlotPassesAudioThrough});

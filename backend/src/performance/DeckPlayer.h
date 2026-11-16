@@ -11,6 +11,7 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 
 #include <array>
+#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -35,6 +36,10 @@ struct DeckTrack
     int serial = 0;
     juce::String itemId, title, artist, key; // message thread only
     std::shared_ptr<const juce::AudioBuffer<float>> audio; // stereo
+    // A track still loading: how much of `audio` has arrived (written by the loader, read by
+    // the deck), and its length (the estimate until the read ends). Null when read whole.
+    std::shared_ptr<const std::atomic<int>> readyFrames, totalFrames;
+    juce::String sourcePath;     // message thread only
     double sampleRate = 44100.0; // of `audio`
     double bpm = 0.0;            // 0 = no beat grid
     double anchorSec = 0.0;      // a downbeat
@@ -140,6 +145,7 @@ class DeckPlayer
     };
 
     // Positions are in source samples of the loaded track.
+    int readyLength() const noexcept; // the frames of the loaded track read so far
     double length() const noexcept;
     double sr() const noexcept;
     double beatLen() const noexcept; // samples per beat (0 = no grid)

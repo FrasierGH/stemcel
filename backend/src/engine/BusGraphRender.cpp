@@ -21,6 +21,11 @@ void BusGraph::TrackRuntime::prepareToPlay(int samplesPerBlockExpected, double s
     compensationDelay.prepare(2,
                               static_cast<int>(kMaxLatencyCompensationSeconds * sampleRate),
                               preparedBlockSize);
+    if (isBus)
+    {
+        busInput.setSize(2, preparedBlockSize, false, true, false);
+        busInput.clear();
+    }
     for (auto* source : clips)
         if (source != nullptr) source->prepareToPlay(preparedBlockSize, preparedRate);
     chain.prepare(sampleRate, samplesPerBlockExpected, /*numChannels*/ 2);
@@ -132,10 +137,16 @@ std::unique_ptr<BusGraph::RenderSnapshot> BusGraph::buildRenderSnapshot() const
     {
         if (runtime == nullptr || runtime->clips.empty() || !runtime->renderEnabled) continue;
         snapshot->tracks.push_back(
-            {runtime.get(), runtime->clips, runtime->publishedAutomation, runtime->publishedBeatRepeat});
+            {runtime.get(), outputOf(trackId), runtime->clips, runtime->publishedAutomation, runtime->publishedBeatRepeat});
         snapshot->hasAutomation =
             snapshot->hasAutomation || runtime->publishedAutomation != nullptr;
     }
+    for (const auto& [busId, runtime] : runtimes)
+        if (runtime != nullptr && runtime->isBus)
+        {
+            snapshot->buses.push_back({runtime.get(), nullptr, {}, runtime->publishedAutomation, nullptr});
+            snapshot->hasAutomation = snapshot->hasAutomation || runtime->publishedAutomation != nullptr;
+        }
     snapshot->master = masterAutomation;
     snapshot->hasAutomation = snapshot->hasAutomation || masterAutomation != nullptr;
     return snapshot;
@@ -152,6 +163,7 @@ std::unique_ptr<BusGraph::RenderSnapshot> BusGraph::buildRenderSnapshotExcluding
 
         RenderTrack track;
         track.runtime = runtime.get();
+        track.output = outputOf(trackId);
         track.automation = runtime->publishedAutomation;
         track.beatRepeat = runtime->publishedBeatRepeat;
         track.clips.reserve(runtime->clips.size());
@@ -164,9 +176,24 @@ std::unique_ptr<BusGraph::RenderSnapshot> BusGraph::buildRenderSnapshotExcluding
             snapshot->hasAutomation || track.automation != nullptr;
         snapshot->tracks.push_back(std::move(track));
     }
+    for (const auto& [busId, runtime] : runtimes)
+        if (runtime != nullptr && runtime->isBus)
+        {
+            snapshot->buses.push_back({runtime.get(), nullptr, {}, runtime->publishedAutomation, nullptr});
+            snapshot->hasAutomation = snapshot->hasAutomation || runtime->publishedAutomation != nullptr;
+        }
     snapshot->master = masterAutomation;
     snapshot->hasAutomation = snapshot->hasAutomation || masterAutomation != nullptr;
     return snapshot;
+}
+
+BusGraph::TrackRuntime* BusGraph::outputOf(const juce::String& trackId) const
+{
+    const auto out = trackOutputs.find(trackId);
+    if (out == trackOutputs.end()) return nullptr;
+    const auto bus = runtimes.find(out->second);
+    return bus != runtimes.end() && bus->second != nullptr && bus->second->isBus && out->second != trackId ? bus->second.get()
+                                                                                                             : nullptr;
 }
 
 void BusGraph::publishRenderSnapshot()
@@ -242,6 +269,8 @@ void BusGraph::getNextAudioBlock(const juce::AudioSourceChannelInfo& info)
             reverbSendBuf.clear(ch, 0, n);
             delaySendBuf.clear(ch, 0, n);
         }
+        for (const auto& bus : renderSnapshot.buses)
+            if (bus.runtime->busInput.getNumSamples() >= n) bus.runtime->busInput.clear(0, n);
 
         for (const auto& track : renderSnapshot.tracks)
         {
@@ -261,10 +290,15 @@ void BusGraph::getNextAudioBlock(const juce::AudioSourceChannelInfo& info)
                 if (dSend != 0.0F)
                     delaySendBuf.addFrom(ch, 0, scratch, ch, 0, n, dSend);
             }
-            if (outChannels < 2)
+            // Into its bus, or the master.
+            auto* bus = track.output != nullptr && track.output->busInput.getNumSamples() >= n ? track.output : nullptr;
+            auto& out = bus != nullptr ? bus->busInput : *info.buffer;
+            const int outAt = bus != nullptr ? 0 : dst;
+            const int channels = bus != nullptr ? 2 : outChannels;
+            if (channels < 2)
             {
-                for (int ch = 0; ch < outChannels; ++ch)
-                    info.buffer->addFrom(ch, dst, scratch, ch, 0, n);
+                for (int ch = 0; ch < channels; ++ch)
+                    out.addFrom(ch, outAt, scratch, ch, 0, n);
             }
             else
             {
@@ -272,15 +306,52 @@ void BusGraph::getNextAudioBlock(const juce::AudioSourceChannelInfo& info)
                 float targetPanGainR = 1.0F;
                 equalPowerPanGains(runtime.pan.load(std::memory_order_relaxed),
                                    targetPanGainL, targetPanGainR);
-                info.buffer->addFromWithRamp(0, dst, scratch.getReadPointer(0), n,
-                                              runtime.currentPanGainL, targetPanGainL);
-                info.buffer->addFromWithRamp(1, dst, scratch.getReadPointer(1), n,
-                                              runtime.currentPanGainR, targetPanGainR);
+                out.addFromWithRamp(0, outAt, scratch.getReadPointer(0), n,
+                                    runtime.currentPanGainL, targetPanGainL);
+                out.addFromWithRamp(1, outAt, scratch.getReadPointer(1), n,
+                                    runtime.currentPanGainR, targetPanGainR);
                 runtime.currentPanGainL = targetPanGainL;
                 runtime.currentPanGainR = targetPanGainR;
-                for (int ch = 2; ch < outChannels; ++ch)
-                    info.buffer->addFrom(ch, dst, scratch, ch, 0, n);
+                for (int ch = 2; ch < channels; ++ch)
+                    out.addFrom(ch, outAt, scratch, ch, 0, n);
             }
+        }
+
+        // The buses: what was sent to each, through its own chain, gain and pan.
+        for (const auto& bus : renderSnapshot.buses)
+        {
+            auto& runtime = *bus.runtime;
+            if (runtime.busInput.getNumSamples() < n) continue;
+            applyTrackAutomation(runtime, bus.automation, subStartSamples, n, rate);
+            scratch.clear(0, n);
+            for (int ch = 0; ch < juce::jmin(2, scratch.getNumChannels()); ++ch)
+                scratch.copyFrom(ch, 0, runtime.busInput, ch, 0, n);
+            runtime.chain.process(scratch, 0, n);
+            runtime.compensationDelay.process(scratch, 0, n);
+            const float targetGain = runtime.busGain.load(std::memory_order_relaxed);
+            for (int ch = 0; ch < juce::jmin(2, scratch.getNumChannels()); ++ch)
+                scratch.applyGainRamp(ch, 0, n, runtime.currentBusGain, targetGain);
+            runtime.currentBusGain = targetGain;
+            runtime.meter(scratch, 0, n);
+            const float rSend = runtime.reverbSend.load(std::memory_order_relaxed);
+            const float dSend = runtime.delaySend.load(std::memory_order_relaxed);
+            for (int ch = 0; ch < sendChannels; ++ch)
+            {
+                if (rSend != 0.0F) reverbSendBuf.addFrom(ch, 0, scratch, ch, 0, n, rSend);
+                if (dSend != 0.0F) delaySendBuf.addFrom(ch, 0, scratch, ch, 0, n, dSend);
+            }
+            if (outChannels < 2)
+            {
+                info.buffer->addFrom(0, dst, scratch, 0, 0, n);
+                continue;
+            }
+            float targetPanGainL = 1.0F;
+            float targetPanGainR = 1.0F;
+            equalPowerPanGains(runtime.pan.load(std::memory_order_relaxed), targetPanGainL, targetPanGainR);
+            info.buffer->addFromWithRamp(0, dst, scratch.getReadPointer(0), n, runtime.currentPanGainL, targetPanGainL);
+            info.buffer->addFromWithRamp(1, dst, scratch.getReadPointer(1), n, runtime.currentPanGainR, targetPanGainR);
+            runtime.currentPanGainL = targetPanGainL;
+            runtime.currentPanGainR = targetPanGainR;
         }
 
         applyMasterAutomation(renderSnapshot.master, subStartSamples, rate);
@@ -383,6 +454,12 @@ void BusGraph::applyPluginAutomation(const TrackAutomationSnapshot& snap, const 
         if (lane.curve.isEmpty()) continue;
         const float value = juce::jlimit(0.0F, 1.0F, lane.curve.valueAtMs(ms, lane.cursor));
         if (std::abs(value - lane.lastSent) < 1.0e-4F) continue;
+        if (lane.index == kPluginMixIndex)
+        {
+            if (auto* slot = chain->findPublishedSlot(lane.slotId)) slot->setMix(value);
+            lane.lastSent = value;
+            continue;
+        }
         auto* instance = chain->findPublishedInstance(lane.slotId);
         if (instance == nullptr) continue;
         const auto& parameters = instance->getParameters();

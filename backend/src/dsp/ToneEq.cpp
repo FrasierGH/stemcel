@@ -163,14 +163,15 @@ bool ToneEq::isNeutralState(float bassDb, float midDb, float trebleDb,
 void ToneEq::filterToCorners(float filter, float& lowCutHz, float& highCutHz) noexcept
 {
     const float f = std::isfinite(filter) ? juce::jlimit(-1.0F, 1.0F, filter) : 0.0F;
-    if (f > kFilterEpsilon)
+    const float t = std::pow((std::abs(f) - kFilterDeadZone) / (1.0F - kFilterDeadZone), kFilterShape);
+    if (f > kFilterDeadZone)
     {
-        lowCutHz  = kHpfMinHz * std::pow(kHpfMaxHz / kHpfMinHz, f);
+        lowCutHz  = kHpfMinHz * std::pow(kHpfMaxHz / kHpfMinHz, t);
         highCutHz = kHighCutOffHz;
     }
-    else if (f < -kFilterEpsilon)
+    else if (f < -kFilterDeadZone)
     {
-        highCutHz = kLpfMaxHz * std::pow(kLpfMinHz / kLpfMaxHz, -f);
+        highCutHz = kLpfMaxHz * std::pow(kLpfMinHz / kLpfMaxHz, t);
         lowCutHz  = kLowCutOffHz;
     }
     else
@@ -210,10 +211,14 @@ void ToneEq::recomputeCoeffs() noexcept
     designLowShelf(bass,   kBassHz,   curBassDb);
     designPeak    (mid,    kMidHz,    curMidDb);
     designHighShelf(treble, kTrebleHz, curTrebleDb);
+    // How far each corner has closed (0 at the open end, 1 fully closed), for the resonance.
+    const auto closed = [](double hz, double open, double shut)
+    { return juce::jlimit(0.0, 1.0, std::log(hz / open) / std::log(shut / open)); };
     if (curLowCutHz > kLowCutIdentityHz)
     {
+        const double q = kButterQ2 + (kResonanceQ - kButterQ2) * closed(curLowCutHz, kHpfMinHz, kHpfMaxHz);
         designHighPass(lowCut1, static_cast<double>(curLowCutHz), kButterQ1);
-        designHighPass(lowCut2, static_cast<double>(curLowCutHz), kButterQ2);
+        designHighPass(lowCut2, static_cast<double>(curLowCutHz), q);
     }
     else
     {
@@ -222,8 +227,9 @@ void ToneEq::recomputeCoeffs() noexcept
     }
     if (curHighCutHz < kHighCutIdentityHz)
     {
+        const double q = kButterQ2 + (kResonanceQ - kButterQ2) * closed(curHighCutHz, kLpfMaxHz, kLpfMinHz);
         designLowPass(highCut1, static_cast<double>(curHighCutHz), kButterQ1);
-        designLowPass(highCut2, static_cast<double>(curHighCutHz), kButterQ2);
+        designLowPass(highCut2, static_cast<double>(curHighCutHz), q);
     }
     else
     {

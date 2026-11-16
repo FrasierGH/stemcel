@@ -100,6 +100,16 @@ Pass1Result runPass1(const MixdownSnapshot& snapshot,
         busGraph.attachClip(cp->trackId, cp->id, cp->summingSource.get());
     }
 
+    // Buses (no clips), and each track's route to its bus.
+    for (const auto& trackSnap : snapshot.tracks)
+        if (trackSnap.isBus)
+        {
+            busGraph.ensureBus(trackSnap.id);
+            busGraph.setBusGain(trackSnap.id, trackSnap.gain);
+        }
+    for (const auto& trackSnap : snapshot.tracks)
+        if (!trackSnap.isBus && trackSnap.outputBus.isNotEmpty()) busGraph.setTrackOutput(trackSnap.id, trackSnap.outputBus);
+
     for (const auto& trackSnap : snapshot.tracks)
     {
         busGraph.setTrackTone(trackSnap.id, trackSnap.toneBassDb, trackSnap.toneMidDb,

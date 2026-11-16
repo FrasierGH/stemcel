@@ -417,6 +417,26 @@ void rebuildEngineFromProject(stemcel::AudioEngine& engine, stemcel::ProjectStat
         }
     }
 
+    // Buses before the tracks sent to them, so each route finds its bus.
+    for (int t = 0; t < root.getNumChildren(); ++t)
+    {
+        const auto track = root.getChild(t);
+        if (!track.hasType(juce::Identifier{"TRACK"})) continue;
+        const auto id = track.getProperty("id").toString();
+        if (projectState.isTrackBus(id))
+        {
+            engine.ensureBus(id);
+            engine.setBusGain(id, projectState.getEffectiveTrackGain(id));
+        }
+    }
+    for (int t = 0; t < root.getNumChildren(); ++t)
+    {
+        const auto track = root.getChild(t);
+        if (!track.hasType(juce::Identifier{"TRACK"})) continue;
+        const auto id = track.getProperty("id").toString();
+        if (!projectState.isTrackBus(id)) engine.setTrackOutput(id, projectState.getTrackOutputBus(id));
+    }
+
     for (int t = 0; t < root.getNumChildren(); ++t)
     {
         const auto track = root.getChild(t);

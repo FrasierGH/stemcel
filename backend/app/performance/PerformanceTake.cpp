@@ -69,6 +69,41 @@ bool stepped(const juce::String& param)
     return param.endsWith("Type") || param.endsWith("Beats") || param.endsWith("On");
 }
 
+// A curve that never moves (within the parameter's tolerance).
+bool constantCurve(const juce::String& param, const std::vector<std::pair<double, double>>& curve)
+{
+    for (const auto& p : curve)
+        if (std::abs(p.second - curve.front().second) > (stepped(param) ? 0.5 : tolerance(param))) return false;
+    return true;
+}
+
+// Takes leave out what the performance never touched: an effect never switched on, a knob left
+// where it does nothing. What stays the whole take but changes the sound (a trim left down)
+// is kept, though not shown as a lane.
+void dropUntouched(std::map<juce::String, std::vector<std::pair<double, double>>>& curves)
+{
+    const auto flatAt = [&](const juce::String& param, double neutral, double within)
+    {
+        const auto it = curves.find(param);
+        return it == curves.end() || it->second.empty()
+               || (constantCurve(param, it->second) && std::abs(it->second.front().second - neutral) <= within);
+    };
+    const auto drop = [&](std::initializer_list<const char*> params)
+    {
+        for (const auto* p : params) curves.erase(p);
+    };
+    const bool beatUsed = !flatAt("beatFxOn", 0.0, 0.5);
+    const bool padUsed = !flatAt("padFxOn", 0.0, 0.5);
+    const bool colorUsed = !flatAt("colorFx", 0.0, 0.005);
+    if (!beatUsed) drop({"beatFxType", "beatFxBeats", "beatFxLevel", "beatFxOn"});
+    if (!padUsed) drop({"padFxType", "padFxBeats", "padFxLevel", "padFxOn"});
+    if (!colorUsed) drop({"colorFxType", "colorFx"});
+    if (!beatUsed && !padUsed && !colorUsed) drop({"fxBpm"});
+    for (const auto* p : {"filter", "toneBass", "toneMid", "toneTreble"})
+        if (flatAt(p, 0.0, 0.05)) curves.erase(p);
+    if (flatAt("level", 0.0, 0.05)) curves.erase("level");
+}
+
 // A control's recorded values as a curve: the recorder only logs changes, so a value holds
 // until just before the next one (a knob moved later, not a ramp from the last change), and
 // the curve runs to the end of the take.
@@ -267,6 +302,7 @@ TakeEdits PerformanceTake::edits(double startMs) const
                 if (out.automation[deck][param].size() == 1)
                     out.automation[deck][param].push_back({ms(lastAt), out.automation[deck][param].front().second});
             }
+        if (const auto it = out.automation.find(deck); it != out.automation.end()) dropUntouched(it->second);
     }
     // The master's Beat FX (when it was on the master) and the sampler.
     if (const auto pit = params.find(0); pit != params.end())
@@ -302,18 +338,24 @@ TakeEdits PerformanceTake::edits(double startMs) const
 }
 
 bool PerformanceTake::write(EngineClient& engine, ProjectMirror& mirror, TimelineActions& actions, double startMs,
-                            int takeNumber, const std::function<void()>& before) const
+                            int takeNumber, const std::function<void()>& before, const std::map<int, juce::String>& onto,
+                            const juce::String& label) const
 {
     const auto e = edits(startMs);
     if (e.clips.empty() && e.samples.empty()) return false;
     engine.inUndoGroup(
-        "Live performance",
+        label,
         [&]
         {
             if (before) before();
             std::map<int, juce::String> tracks;
             for (const int deck : e.decksUsed)
             {
+                if (const auto existing = onto.find(deck); existing != onto.end())
+                {
+                    tracks[deck] = existing->second;
+                    continue;
+                }
                 const auto id = actions.addTrack();
                 actions.renameTrack(id, "Deck " + juce::String(deck) + (takeNumber > 1 ? " (take " + juce::String(takeNumber) + ")" : ""));
                 tracks[deck] = id;
@@ -351,13 +393,38 @@ bool PerformanceTake::write(EngineClient& engine, ProjectMirror& mirror, Timelin
                 const auto track = tracks.find(deck);
                 if (track == tracks.end()) continue;
                 std::vector<automation::Lane> lanes;
+                const bool merging = onto.count(deck) != 0;
+                // Onto an existing track: its curves outside the stretch the deck covers stay.
+                double from = 1.0e18, to = -1.0e18;
+                for (const auto& c : e.clips)
+                    if (c.deck == deck)
+                    {
+                        from = std::min(from, c.positionMs);
+                        to = std::max(to, c.positionMs + c.durationMs / std::max(0.01, c.tempoRatio));
+                    }
+                const auto* existingTrack = merging ? mirror.model().findTrack(track->second) : nullptr;
+                if (existingTrack != nullptr) lanes = automation::lanesOf(*existingTrack);
                 for (const auto& [param, pts] : curves)
                 {
                     std::vector<automation::Point> points;
-                    for (const auto& [t, v] : pts) points.push_back({t, v, stepped(param) ? "hold" : "linear"});
+                    if (existingTrack != nullptr)
+                    {
+                        const auto old = automation::pointsOf(*existingTrack, param);
+                        for (const auto& p : old)
+                            if (p.timeMs < from - 1.0) points.push_back(p);
+                        for (const auto& [t, v] : pts)
+                            if (t >= from - 1.0 && t <= to + 1.0) points.push_back({t, v, stepped(param) ? "hold" : "linear"});
+                        if (!old.empty()) points.push_back({to + 1.0, automation::valueAt(old, to + 1.0, pts.empty() ? 0.0 : pts.back().second), "linear"});
+                        for (const auto& p : old)
+                            if (p.timeMs > to + 1.0) points.push_back(p);
+                    }
+                    else
+                        for (const auto& [t, v] : pts) points.push_back({t, v, stepped(param) ? "hold" : "linear"});
                     if (points.empty()) continue;
                     actions.setAutomation(track->second, param, points);
-                    lanes.push_back({param, automation::kDefaultLaneHeight});
+                    if (merging && std::any_of(lanes.begin(), lanes.end(), [&](const automation::Lane& l) { return l.paramId == param; })) continue;
+                    // Shown as a lane only where the performance moved it.
+                    if (!constantCurve(param, pts)) lanes.push_back({param, automation::kDefaultLaneHeight});
                 }
                 if (!lanes.empty()) actions.setAutomationLanes(track->second, lanes);
             }

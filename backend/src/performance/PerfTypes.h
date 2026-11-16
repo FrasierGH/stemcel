@@ -99,6 +99,7 @@ enum class Control : std::uint8_t
     samplerVolume, // value 0..1
     samplerLoad,   // index = slot (the app loads the browser's item)
     channelBind,   // value 1: the channel drives a timeline track (the deck is silent), 0: the deck again
+    tempoHold,     // value = tempo factor: the deck plays at it until the TEMPO slider reaches it
     count
 };
 

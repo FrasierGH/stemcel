@@ -52,6 +52,8 @@ class TrackHeaderRow final : public juce::Component
     juce::TextButton automationButton{"A"};
     juce::TextButton mute{"M"};
     juce::TextButton solo{"S"};
+    juce::Label outCaption;
+    juce::TextButton output; // where the track goes: the master or a bus
     juce::Slider volume{juce::Slider::LinearHorizontal, juce::Slider::NoTextBox};
     juce::Slider pan{juce::Slider::LinearHorizontal, juce::Slider::NoTextBox};
     // What each slider is, and its value while it is dragged.

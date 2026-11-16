@@ -195,12 +195,13 @@ void applyTheme(ThemeId id)
         sky400 = juce::Colour(0xff6dff96);
         sky500 = juce::Colour(0xff33ff6e);
         sky600 = juce::Colour(0xff16c24e);
-        grey950 = juce::Colour(0xff050505);
-        grey900 = juce::Colour(0xff101010);
-        grey800 = juce::Colour(0xff1b1b1b);
-        grey700 = juce::Colour(0xff262626);
-        grey600 = juce::Colour(0xff353535);
-        grey500 = juce::Colour(0xff4d4d4d);
+        // The timeline's canvas and grid: blacks with the phosphor's green in them.
+        grey950 = juce::Colour(0xff010402);
+        grey900 = juce::Colour(0xff050d07);
+        grey800 = juce::Colour(0xff0a1a0f);
+        grey700 = juce::Colour(0xff0f2716);
+        grey600 = juce::Colour(0xff173a22);
+        grey500 = juce::Colour(0xff245636);
     }
     background = zinc900;
     panel = zinc800;
@@ -332,12 +333,13 @@ PaletteEntry paletteEntry(int colorIndex, bool silenced)
     }
     else
     {
-        // Dark glass tinted with the hue and a bright trace of the waveform, like a scope.
-        e.fill = juce::Colour::fromHSV(h, s * 0.85f, 0.16f, 1.0f);
-        e.border = juce::Colour::fromHSV(h, s * 0.75f, 0.62f, 1.0f);
-        e.wave = juce::Colour::fromHSV(h, s * 0.42f, 1.0f, 1.0f);
-        e.header = juce::Colour::fromHSV(h, s * 0.8f, 0.30f, 1.0f);
-        e.headerText = juce::Colour::fromHSV(h, s * 0.25f, 1.0f, 1.0f);
+        // Black glass tinted with the hue and a saturated trace of the waveform, like a scope's
+        // phosphor: no pastel blocks on the terminal's black.
+        e.fill = juce::Colour::fromHSV(h, s * 0.9f, 0.09f, 1.0f);
+        e.border = juce::Colour::fromHSV(h, s * 0.85f, 0.72f, 1.0f);
+        e.wave = juce::Colour::fromHSV(h, s * 0.78f, 0.92f, 0.9f);
+        e.header = juce::Colour::fromHSV(h, s * 0.9f, 0.2f, 1.0f);
+        e.headerText = juce::Colour::fromHSV(h, s * 0.3f, 1.0f, 1.0f);
     }
     if (silenced)
         for (auto* c : {&e.fill, &e.border, &e.wave, &e.header, &e.headerText})

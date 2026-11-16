@@ -41,6 +41,8 @@ void handleTrackRemovePlugin(const juce::var& payload, AudioEngine& engine,
 void handleTrackReorderPlugin(const juce::var& payload, AudioEngine& engine,
                               ProjectState& projectState, BridgeServer& bridge,
                               ProjectSession& session);
+void handleTrackSetPluginMix(const juce::var& payload, AudioEngine& engine, ProjectState& projectState,
+                             BridgeServer& bridge);
 void handleTrackSetPluginBypass(const juce::var& payload, AudioEngine& engine,
                                 ProjectState& projectState, BridgeServer& bridge);
 void handleTrackOpenPluginEditor(const juce::var& payload, AudioEngine& engine,

@@ -24,11 +24,13 @@ far). Stemcel does not sequence MIDI notes or control virtual instruments.
 
 ## Connect and enable a controller
 
-1. Connect and power on the controller.
-2. Open **Edit ▸ Preferences… ▸ MIDI**.
-3. Select **Rescan devices** if the controller is not already listed.
-4. Tick the controller. A recognised device is labelled **MIDI deck controls**.
-5. Select **Save** to keep the enabled device for future sessions.
+Connect and power on a supported controller: Stemcel notices it within a few seconds and it
+works on the timeline straight away, with nothing to switch on.
+
+To switch one off (or back on), open **Edit ▸ Preferences… ▸ MIDI** and click its row. Turning
+it off is remembered: it stays off until you turn it on again there. Select **Rescan devices**
+if a controller isn't listed. Performance mode opens a supported controller for itself either
+way, and gives it back when it closes.
 
 All detected MIDI inputs remain visible. An unsupported input is labelled
 **Not supported yet** and cannot be selected. Stemcel also rejects an

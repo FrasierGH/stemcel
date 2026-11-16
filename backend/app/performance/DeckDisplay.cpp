@@ -84,7 +84,11 @@ void DeckDisplay::paintTrack(juce::Graphics& g)
     g.setColour(colours::text);
     g.fillRect(overview.getX() + static_cast<float>(trackPlayheadMs / trackLengthMs) * overview.getWidth() - 1.0F, overview.getY(), 2.0F,
                overview.getHeight());
-    auto close = closeUpArea().toFloat();
+    if (closeUpShown) paintTrackCloseUp(g, closeUpArea().toFloat());
+}
+
+void DeckDisplay::paintTrackCloseUp(juce::Graphics& g, juce::Rectangle<float> close)
+{
     drawWell(g, close);
     g.saveState();
     g.reduceClipRegion(close.toNearestInt());
@@ -92,6 +96,19 @@ void DeckDisplay::paintTrack(juce::Graphics& g)
     g.restoreState();
     g.setColour(colours::red500);
     g.fillRect(close.getCentreX() - 1.0F, close.getY(), 2.0F, close.getHeight());
+}
+
+void DeckDisplay::paintCloseUpInto(juce::Graphics& g, juce::Rectangle<float> area)
+{
+    if (trackMode) paintTrackCloseUp(g, area);
+    // On the stacked scale, a second across is a second of what is heard: a faster deck's
+    // beats come closer together, so two decks in sync line up.
+    else paintCloseUp(g, area, juce::jlimit(0.25, 4.0, state.tempo > 0.0 ? state.tempo : 1.0));
+}
+
+int DeckDisplay::compactHeight()
+{
+    return 42 + 34 + 6 + 12;
 }
 
 namespace
@@ -192,7 +209,7 @@ void DeckDisplay::paint(juce::Graphics& g)
     }
 
     paintOverview(g, overviewArea().toFloat());
-    paintCloseUp(g, closeUpArea().toFloat());
+    if (closeUpShown) paintCloseUp(g, closeUpArea().toFloat());
 }
 
 void DeckDisplay::paintOverview(juce::Graphics& g, juce::Rectangle<float> area)
@@ -230,11 +247,11 @@ void DeckDisplay::paintOverview(juce::Graphics& g, juce::Rectangle<float> area)
     g.fillRect(xAt(pos) - 1.0F, area.getY(), 2.0F, area.getHeight());
 }
 
-void DeckDisplay::paintCloseUp(juce::Graphics& g, juce::Rectangle<float> area)
+void DeckDisplay::paintCloseUp(juce::Graphics& g, juce::Rectangle<float> area, double scale)
 {
     drawWell(g, area);
     if (!state.loaded) return;
-    const double from = pos - halfWindow, span = halfWindow * 2.0;
+    const double from = pos - halfWindow * scale, span = halfWindow * 2.0 * scale;
     auto xAt = [&](double sec) { return area.getX() + static_cast<float>((sec - from) / span) * area.getWidth(); };
     g.saveState();
     g.reduceClipRegion(area.toNearestInt());
@@ -243,7 +260,20 @@ void DeckDisplay::paintCloseUp(juce::Graphics& g, juce::Rectangle<float> area)
         g.setColour(colours::amber400.withAlpha(0.18F));
         g.fillRect(juce::Rectangle<float>(xAt(state.loopInSec), area.getY(), xAt(state.loopOutSec) - xAt(state.loopInSec), area.getHeight()));
     }
-    // The beat grid: the analysed beats (bars brighter), carried on at the tempo past them.
+    // The beat grid: the analysed beats (bars brighter), carried on at the tempo past them,
+    // and the half beats between them (cues snap to those too).
+    struct GridLine
+    {
+        double t;
+        bool bar, half;
+    };
+    std::vector<GridLine> grid;
+    const auto addBeat = [&](double t, bool bar, double period)
+    {
+        if (t >= from - period && t <= from + span && t >= 0.0 && t <= state.lengthSec) grid.push_back({t, bar, false});
+        if (const double half = t + period * 0.5; half >= from && half <= from + span && half >= 0.0 && half <= state.lengthSec)
+            grid.push_back({half, false, true});
+    };
     if (info.beats.size() >= 2)
     {
         const auto& b = info.beats;
@@ -252,40 +282,27 @@ void DeckDisplay::paintCloseUp(juce::Graphics& g, juce::Rectangle<float> area)
         long long downbeat = 0;
         for (size_t i = 0; i < b.size(); ++i)
             if (std::abs(b[i] - info.anchorSec) < std::abs(b[static_cast<size_t>(downbeat)] - info.anchorSec)) downbeat = static_cast<long long>(i);
-        auto drawBeat = [&](double t, long long k)
-        {
-            if (t < from || t > from + span || t < 0.0 || t > state.lengthSec) return;
-            const bool bar = (((k - downbeat) % 4) + 4) % 4 == 0;
-            g.setColour(bar ? colours::text.withAlpha(0.55F) : colours::textDim.withAlpha(0.3F));
-            g.fillRect(xAt(t), area.getY(), bar ? 1.5F : 1.0F, area.getHeight());
-            // The half beat after it, where cues can snap too.
-            if (const double half = t + period * 0.5; half <= from + span && half <= state.lengthSec)
-            {
-                g.setColour(colours::textDim.withAlpha(0.14F));
-                g.fillRect(xAt(half), area.getY() + area.getHeight() * 0.25F, 1.0F, area.getHeight() * 0.5F);
-            }
-        };
-        for (size_t i = 0; i < b.size(); ++i) drawBeat(b[i], static_cast<long long>(i));
+        const auto isBar = [&](long long k) { return (((k - downbeat) % 4) + 4) % 4 == 0; };
+        for (size_t i = 0; i < b.size(); ++i) addBeat(b[i], isBar(static_cast<long long>(i)), period);
         const auto n = static_cast<long long>(b.size());
         for (long long k = n; b.back() + static_cast<double>(k - n + 1) * period <= from + span; ++k)
-            drawBeat(b.back() + static_cast<double>(k - n + 1) * period, k);
+            addBeat(b.back() + static_cast<double>(k - n + 1) * period, isBar(k), period);
         for (long long k = -1; b.front() + static_cast<double>(k) * period >= from - period; --k)
-            drawBeat(b.front() + static_cast<double>(k) * period, k);
+            addBeat(b.front() + static_cast<double>(k) * period, isBar(k), period);
     }
     else if (info.bpm > 0.0)
     {
         const double beat = 60.0 / info.bpm;
         const auto first = static_cast<long long>(std::floor((from - info.anchorSec) / beat));
         for (long long k = first; k <= first + static_cast<long long>(span / beat) + 2; ++k)
-        {
-            const double t = info.anchorSec + static_cast<double>(k) * beat;
-            if (t < 0.0 || t > state.lengthSec) continue;
-            const bool bar = ((k % 4) + 4) % 4 == 0;
-            g.setColour(bar ? colours::text.withAlpha(0.55F) : colours::textDim.withAlpha(0.3F));
-            g.fillRect(xAt(t), area.getY(), bar ? 1.5F : 1.0F, area.getHeight());
-            g.setColour(colours::textDim.withAlpha(0.14F));
-            g.fillRect(xAt(t + beat * 0.5), area.getY() + area.getHeight() * 0.25F, 1.0F, area.getHeight() * 0.5F);
-        }
+            addBeat(info.anchorSec + static_cast<double>(k) * beat, ((k % 4) + 4) % 4 == 0, beat);
+    }
+    // Under the waveform: the beats as full-height lines.
+    for (const auto& line : grid)
+    {
+        if (line.half) continue;
+        g.setColour(line.bar ? colours::text.withAlpha(0.55F) : colours::textDim.withAlpha(0.3F));
+        g.fillRect(xAt(line.t), area.getY(), line.bar ? 1.5F : 1.0F, area.getHeight());
     }
     if (info.audioPath.isNotEmpty())
         if (auto peaks = waveforms.get(info.audioPath))
@@ -300,6 +317,22 @@ void DeckDisplay::paintCloseUp(juce::Graphics& g, juce::Rectangle<float> area)
                 drawPeaks(g, *peaks, r, startMs, endMs - startMs, false, isMaster ? colours::amber400 : colours::accent);
             }
         }
+    // Over the waveform, so it can't hide them: ticks along the top and bottom edges, as a
+    // CDJ draws its grid, and a fine line through for the half beats.
+    for (const auto& line : grid)
+    {
+        const float x = xAt(line.t);
+        const float tick = area.getHeight() * (line.half ? 0.14F : 0.2F);
+        g.setColour(line.bar ? colours::text.withAlpha(0.9F) : line.half ? colours::text.withAlpha(0.6F) : colours::text.withAlpha(0.75F));
+        const float w = line.bar ? 2.0F : 1.0F;
+        g.fillRect(x, area.getY(), w, tick);
+        g.fillRect(x, area.getBottom() - tick, w, tick);
+        if (line.half)
+        {
+            g.setColour(colours::text.withAlpha(0.2F));
+            g.fillRect(x, area.getY() + tick, 1.0F, area.getHeight() - 2.0F * tick);
+        }
+    }
     for (int i = 0; i < 8; ++i)
         if (const auto& c = state.hotCues[static_cast<size_t>(i)]; c.set())
         {

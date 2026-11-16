@@ -28,7 +28,7 @@ juce::var buildPluginListEnvelope(AudioEngine& engine)
     auto& catalogue = engine.pluginCatalogue();
 
     juce::Array<juce::var> plugins;
-    for (const auto& description : catalogue.getKnownPlugins())
+    for (const auto& description : catalogue.getAvailablePlugins())
     {
         // Instruments are listed but flagged: only effects can be used as an insert in v1.
         auto* obj = new juce::DynamicObject();
@@ -54,7 +54,7 @@ juce::var buildPluginListEnvelope(AudioEngine& engine)
 std::optional<juce::PluginDescription> findDescription(AudioEngine& engine,
                                                        const juce::String& identifier)
 {
-    for (const auto& description : engine.pluginCatalogue().getKnownPlugins())
+    for (const auto& description : engine.pluginCatalogue().getAvailablePlugins())
         if (description.fileOrIdentifier == identifier) return description;
 
     return std::nullopt;
@@ -314,6 +314,18 @@ void handleTrackSetPluginBypass(const juce::var& payload, AudioEngine& engine,
     broadcastApplied(bridge, "TRACK_PLUGIN_BYPASS_APPLIED",
                      {{"trackId", ref.trackId}, {"slotId", ref.slotId}, {"bypassed", *bypassed}},
                      stored);
+}
+
+void handleTrackSetPluginMix(const juce::var& payload, AudioEngine& engine, ProjectState& projectState,
+                             BridgeServer& bridge)
+{
+    const auto ref = readSlotRef(payload);
+    const auto mix = bridge::tryGetNumber(payload, "mix");
+    if (!ref.valid || !mix.has_value()) return;
+    const auto value = juce::jlimit(0.0F, 1.0F, static_cast<float>(*mix));
+    engine.setTrackPluginMix(ref.trackId, ref.slotId, value);
+    const bool stored = projectState.setTrackPluginMix(ref.trackId, ref.slotId, value);
+    broadcastApplied(bridge, "TRACK_PLUGIN_MIX_APPLIED", {{"trackId", ref.trackId}, {"slotId", ref.slotId}, {"mix", value}}, stored);
 }
 
 void handleTrackOpenPluginEditor(const juce::var& payload, AudioEngine& engine,

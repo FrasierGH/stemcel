@@ -89,9 +89,12 @@ class PerformanceTake
     // can be before 0 when the take began earlier). Empty when the take never played it.
     std::optional<double> alignedStart(const juce::String& itemId, double regionFromMs) const;
     // Writes it as tracks, clips and automation (one undo step); false when nothing was heard.
-    // `before` runs first in the same undo step (a region's stretch cleared).
+    // `before` runs first in the same undo step (a region's stretch cleared). `onto`: decks
+    // whose clips go onto an existing track (a redo), their automation merged into its curves
+    // over the stretch they cover; `label` names the undo step.
     bool write(EngineClient& engine, ProjectMirror& mirror, TimelineActions& actions, double startMs, int takeNumber,
-               const std::function<void()>& before = {}) const;
+               const std::function<void()>& before = {}, const std::map<int, juce::String>& onto = {},
+               const juce::String& label = "Live performance") const;
 
   private:
     double startAt = -1.0, lastAt = 0.0, rate = 44100.0;

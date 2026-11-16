@@ -98,6 +98,7 @@ class SmokeTest final : private juce::Timer
     juce::StringArray uvrLibraryBefore; // item ids before the best-of-both run
     juce::String lastTempoLine;
     juce::String renameKeyBefore, renameFileBefore;
+    juce::String busId; // the buses step's
     juce::String trackId;
     juce::String itemId;
     juce::String clipId;
@@ -181,6 +182,10 @@ class SmokeTest final : private juce::Timer
     int perfTracksBefore = 0;
     juce::String perfBoundTrack;
     double perfKillAtMs = 0.0, perfRegionCueMs = 0.0;
+    // The redo steps: the take's Deck 1 track, where the pass started, was touched and stopped.
+    juce::String redoTrack;
+    double redoFromMs = 0.0, redoTouchMs = 0.0, redoStopMs = 0.0;
+    int redoPhase = 0;
     bool perfSkip = false; // no audio device: the performance steps pass through
     juce::uint32 perfOpenedAt = 0;
     double perfTakeClock = -1.0, perfTakeMs = 0.0, perfCaptureClock = 0.0, perfCaptureRate = 48000.0, perfCaptureSec = 0.0;

@@ -92,6 +92,17 @@ PerformanceView::PerformanceView(Context context)
         ctx.prefs.set("performance", "platters", plattersButton.getToggleState());
         resized();
     };
+    setUpRedo();
+    addAndMakeVisible(stackButton);
+    stackButton.setClickingTogglesState(true);
+    stackButton.setToggleState(static_cast<bool>(ctx.prefs.get("performance", "stackedWaveforms", false)), juce::dontSendNotification);
+    stackButton.setTooltip("The decks' waveforms one above the other, on one time scale, so their beats line up");
+    stackButton.onClick = [this]
+    {
+        ctx.prefs.set("performance", "stackedWaveforms", stackButton.getToggleState());
+        ctx.prefs.save();
+        resized();
+    };
     addAndMakeVisible(autoGainButton);
     autoGainButton.setClickingTogglesState(true);
     autoGainButton.setToggleState(static_cast<bool>(ctx.prefs.get("performance", "autoGain", true)), juce::dontSendNotification);
@@ -111,6 +122,8 @@ PerformanceView::PerformanceView(Context context)
 
     subscriptions.on("PERF_STATE", [this](const juce::var& p) { onState(p); });
     subscriptions.on("PERF_LOADED", [this](const juce::var& p) { onLoaded(p); });
+    subscriptions.on("PERF_LOAD_COMPLETE", [this](const juce::var& p) { onLoadComplete(p); });
+    subscriptions.on("PERF_ITEM_ATTACHED", [this](const juce::var& p) { onItemAttached(p); });
     subscriptions.on("PERF_UI", [this](const juce::var& p) { onUi(p); });
     subscriptions.on("PERF_CUES", [this](const juce::var& p) { onCues(p); });
     subscriptions.on("PERF_REC", [this](const juce::var& p) { take.add(p); });
@@ -275,14 +288,12 @@ void PerformanceView::onState(const juce::var& p)
         meterAt = now;
         if (const auto* list = p.getProperty("decks", {}).getArray())
             for (int d = 0; d < std::min(kDecks, list->size()); ++d)
-                if (const auto* bands = (*list)[d].getProperty("bands", {}).getArray())
-                    for (int b = 0; b < std::min(3, bands->size()); ++b)
-                    {
-                        const auto peak = static_cast<double>((*bands)[b]);
-                        const double db = peak > 1.0e-5 ? 20.0 * std::log10(peak) : -100.0;
-                        auto& shown = meterDb[static_cast<size_t>(d)][static_cast<size_t>(b)];
-                        shown = std::max(db, std::max(-100.0, shown - fall));
-                    }
+            {
+                const auto peak = static_cast<double>((*list)[d].getProperty("peak", 0.0));
+                const double db = peak > 1.0e-5 ? 20.0 * std::log10(peak) : -100.0;
+                auto& shown = meterDb[static_cast<size_t>(d)];
+                shown = std::max(db, std::max(-100.0, shown - fall));
+            }
     }
     readState(p, state);
     driver.update(state);
@@ -418,10 +429,50 @@ void PerformanceView::onLoaded(const juce::var& p)
         info.audioPath = item->audioPath();
         info.anchorSec = item->beatAnchorSec;
         info.beats = item->beats;
-        // The DJ collection keeps the loudness, for the next export and load.
-        if (info.hasLoudness) dj::Collection::shared().setLoudness(item->filePath, info.lufs);
+    }
+    else
+    {
+        // Straight from its file, while it joins the library: the grid the load carried.
+        info.audioPath = p.getProperty("path", "").toString();
+        info.anchorSec = static_cast<double>(p.getProperty("anchorSec", 0.0));
+        info.beats.clear();
+        if (const auto* beats = p.getProperty("beats", {}).getArray())
+            for (const auto& b : *beats) info.beats.push_back(static_cast<double>(b));
     }
     applyAutoGain(deck);
+}
+
+void PerformanceView::onLoadComplete(const juce::var& p)
+{
+    // The whole track has been read: its length, and its loudness for auto gain.
+    const int deck = static_cast<int>(p.getProperty("deck", 0));
+    if (deck < 1 || deck > kDecks) return;
+    auto& info = infos[static_cast<size_t>(deck - 1)];
+    if (info.serial != static_cast<int>(p.getProperty("serial", -1))) return;
+    info.lengthSec = static_cast<double>(p.getProperty("lengthSec", info.lengthSec));
+    if (p.hasProperty("lufs"))
+    {
+        info.hasLoudness = true;
+        info.lufs = static_cast<double>(p["lufs"]);
+        // The DJ collection keeps the loudness, for the next export and load.
+        const auto path = p.getProperty("path", "").toString();
+        if (const auto* item = ctx.mirror.model().findLibraryItem(info.itemId))
+            dj::Collection::shared().setLoudness(item->filePath, info.lufs);
+        else if (info.audioPath.isNotEmpty())
+            dj::Collection::shared().setLoudness(info.audioPath, info.lufs);
+        juce::ignoreUnused(path);
+    }
+    applyAutoGain(deck);
+}
+
+void PerformanceView::onItemAttached(const juce::var& p)
+{
+    const int deck = static_cast<int>(p.getProperty("deck", 0));
+    if (deck < 1 || deck > kDecks) return;
+    auto& info = infos[static_cast<size_t>(deck - 1)];
+    if (info.serial != static_cast<int>(p.getProperty("serial", -1))) return;
+    info.itemId = p.getProperty("libraryItemId", "").toString();
+    if (const auto* item = ctx.mirror.model().findLibraryItem(info.itemId)) info.audioPath = item->audioPath();
 }
 
 void PerformanceView::applyAutoGain(int deck)
@@ -458,6 +509,8 @@ void PerformanceView::onUi(const juce::var& p)
     const auto control = p.getProperty("control", "").toString();
     const int deck = static_cast<int>(p.getProperty("deck", 0));
     const double value = static_cast<double>(p.getProperty("value", 0.0));
+    // Redo: a deck control on a channel playing the take takes the deck over.
+    if (redoTakesOver(control, deck)) return;
     // A channel driving a timeline track: its transport and jog work the timeline.
     if (deck >= 1 && deck <= kDecks && driver.boundTrack(deck).isNotEmpty() &&
         (control.startsWith("play") || control.startsWith("cue") || control.startsWith("jog")))
@@ -529,6 +582,10 @@ void PerformanceView::loadRow(const BrowserRow& row, int deck)
         request.hints.artist = track->artist;
         request.hints.key = track->key;
         request.hints.bpm = track->bpm;
+        juce::DynamicObject::Ptr hints = new juce::DynamicObject();
+        hints->setProperty("title", track->displayTitle());
+        hints->setProperty("artist", track->artist);
+        hints->setProperty("key", track->key);
         if (const auto beats = track->beatTimes(); track->bpm > 0.0 && !beats.empty())
         {
             double anchor = beats.front();
@@ -539,20 +596,23 @@ void PerformanceView::loadRow(const BrowserRow& row, int deck)
                     break;
                 }
             request.hints.beatAnchorSec = anchor;
+            hints->setProperty("bpm", track->bpm);
+            hints->setProperty("beatAnchorSec", anchor);
+            juce::Array<juce::var> list;
+            for (const double b : beats) list.add(b);
+            hints->setProperty("beats", list);
         }
+        if (track->hasLoudness) hints->setProperty("lufs", track->loudnessLufs);
         request.hints.perfCues = dj::toPerfCues(*track);
-        juce::Component::SafePointer<PerformanceView> safe(this);
-        if (ctx.toast) ctx.toast("Adding " + track->displayTitle() + " to the project...", true);
-        ctx.importer.import(std::vector<ImportRequest>{request},
-                            [safe, deck](const juce::StringArray& ids)
-                            {
-                                if (safe == nullptr || ids.isEmpty()) return;
-                                safe->ctx.mirror.refreshNow();
-                                safe->loadItem(ids[0], deck);
-                            });
+        if (request.hints.perfCues.isObject())
+        {
+            hints->setProperty("hotCues", request.hints.perfCues.getProperty("hot", {}));
+            hints->setProperty("memoryCues", request.hints.perfCues.getProperty("memory", {}));
+        }
+        loadFile(request.file, deck, hints, request);
         return;
     }
-    // A rekordbox track joins the library first (with rekordbox's grid and key).
+    // A rekordbox track: on the deck at once, and into the library (with rekordbox's grid and key).
     ImportRequest request;
     request.file = juce::File(row.path);
     request.hints.rekordboxId = row.rekordboxId;
@@ -560,15 +620,65 @@ void PerformanceView::loadRow(const BrowserRow& row, int deck)
     request.hints.artist = row.artist;
     request.hints.key = row.key;
     request.hints.bpm = row.bpm;
+    juce::DynamicObject::Ptr hints = new juce::DynamicObject();
+    hints->setProperty("title", row.title);
+    hints->setProperty("artist", row.artist);
+    hints->setProperty("key", row.key);
+    if (row.bpm > 0.0) hints->setProperty("bpm", row.bpm);
+    loadFile(request.file, deck, hints, request);
+}
+
+void PerformanceView::loadFile(const juce::File& file, int deck, const juce::DynamicObject::Ptr& hints, ImportRequest request)
+{
+    log::info("performance", "view: load " + file.getFullPathName() + " to deck " + juce::String(deck));
+    hints->setProperty("deck", deck);
+    hints->setProperty("path", file.getFullPathName());
+    ctx.engine.send("PERF_LOAD", juce::var(hints.get()));
+    // The take's clips need a library item: the import gives the deck one when it ends.
     juce::Component::SafePointer<PerformanceView> safe(this);
-    if (ctx.toast) ctx.toast("Importing " + row.title + "...", true);
-    ctx.importer.import(std::vector<ImportRequest>{request},
-                        [safe, deck](const juce::StringArray& ids)
+    const auto path = file.getFullPathName();
+    ctx.importer.import(std::vector<ImportRequest>{std::move(request)},
+                        [safe, path](const juce::StringArray& ids)
                         {
                             if (safe == nullptr || ids.isEmpty()) return;
                             safe->ctx.mirror.refreshNow();
-                            safe->loadItem(ids[0], deck);
+                            auto* o = new juce::DynamicObject();
+                            o->setProperty("path", path);
+                            o->setProperty("libraryItemId", ids[0]);
+                            safe->ctx.engine.send("PERF_ATTACH_ITEM", juce::var(o));
                         });
+}
+
+void PerformanceView::preloadSelected()
+{
+    // Once the cursor has rested on a track for a moment.
+    const auto* row = browser.selectedRow();
+    juce::String path;
+    if (row != nullptr && !row->isRegion)
+    {
+        if (row->itemId.isNotEmpty())
+        {
+            if (const auto* item = ctx.mirror.model().findLibraryItem(row->itemId)) path = item->filePath;
+        }
+        else if (row->collectionId != 0)
+        {
+            if (const auto* track = dj::Collection::shared().find(row->collectionId)) path = track->path;
+        }
+        else
+            path = row->path;
+    }
+    const double now = nowMs();
+    if (path != preloadCandidate)
+    {
+        preloadCandidate = path;
+        preloadSince = now;
+        return;
+    }
+    if (path.isEmpty() || path == preloaded || now - preloadSince < 250.0) return;
+    preloaded = path;
+    auto* o = new juce::DynamicObject();
+    o->setProperty("path", path);
+    ctx.engine.send("PERF_PRELOAD", juce::var(o));
 }
 
 void PerformanceView::loadItem(const juce::String& itemId, int deck)
@@ -700,6 +810,8 @@ void PerformanceView::refreshTargets()
 
 void PerformanceView::finishTake(std::function<void()> then)
 {
+    // Leaving in a redo: its pass is written first, the channels go back to their decks.
+    if (redo.active) stopRedo();
     auto* o = new juce::DynamicObject();
     o->setProperty("on", false);
     ctx.engine.send("PERF_RECORD", juce::var(o));
@@ -882,6 +994,9 @@ void PerformanceView::timerCallback()
         d.display->update(s, infos[static_cast<size_t>(i)], pos, state.masterDeck == i + 1);
         if (auto& platter = platters[static_cast<size_t>(i)]; platter->isVisible()) platter->update(s, pos);
     }
+    if (stacked != nullptr && stacked->isVisible()) stacked->repaint();
+    preloadSelected();
+    redoTick();
     repaint(mixerArea);
 }
 
@@ -929,33 +1044,37 @@ void PerformanceView::paint(juce::Graphics& g)
         for (auto* s : {d.trim.get(), d.eqHi.get(), d.eqMid.get(), d.eqLow.get(), d.filter.get()})
             g.drawText(s->caption().toUpperCase(), s->getBounds().translated(0, s->getHeight() - 4).withHeight(12),
                        juce::Justification::centred);
-    // Each channel's level in three bands (low, mid, high): three bars on the fader's inner
-    // side, and their readouts in dB under it.
-    static const char* bandNames[] = {"LOW", "MID", "HI"};
+    // Each channel's level: one bar on the fader's inner side, green to -9 dB, amber to -3 dB
+    // and red above (each colour fills its own stretch of the bar, as on a mixer), and its
+    // reading in dB under the fader.
     for (int i = 0; i < kDecks; ++i)
     {
         auto fader = decks[static_cast<size_t>(i)].fader->getBounds().toFloat();
-        const float x0 = i == 0 ? fader.getRight() + 3.0F : fader.getX() - 3.0F - 3.0F * 5.0F;
-        for (int b = 0; b < 3; ++b)
+        const double db = meterDb[static_cast<size_t>(i)];
+        auto meter = juce::Rectangle<float>(i == 0 ? fader.getRight() + 3.0F : fader.getX() - 3.0F - 7.0F, fader.getY(), 7.0F, fader.getHeight());
+        drawWell(g, meter);
+        constexpr double kFloorDb = -48.0;
+        const auto heightAt = [&](double atDb) { return meter.getHeight() * static_cast<float>(juce::jlimit(0.0, 1.0, (atDb - kFloorDb) / -kFloorDb)); };
+        const float level = heightAt(db);
+        const std::array<std::pair<double, juce::Colour>, 3> zones{{{-9.0, colours::emerald500}, {-3.0, colours::amber400}, {0.0, colours::red500}}};
+        float from = 0.0F;
+        for (const auto& [top, colour] : zones)
         {
-            const double db = meterDb[static_cast<size_t>(i)][static_cast<size_t>(b)];
-            auto meter = juce::Rectangle<float>(x0 + static_cast<float>(b) * 5.0F, fader.getY(), 4.0F, fader.getHeight());
-            drawWell(g, meter);
-            const float level = static_cast<float>(juce::jlimit(0.0, 1.0, (db + 48.0) / 48.0));
-            g.setColour(db > -1.0 ? colours::red500 : (db > -9.0 ? colours::amber400 : colours::emerald500));
-            g.fillRect(meter.withTop(meter.getBottom() - meter.getHeight() * level));
+            const float to = std::min(level, heightAt(top));
+            if (to > from)
+            {
+                g.setColour(colour);
+                g.fillRect(meter.getX() + 1.0F, meter.getBottom() - to, meter.getWidth() - 2.0F, to - from);
+            }
+            from = std::max(from, heightAt(top));
         }
-        auto readouts = juce::Rectangle<float>(fader.getX() - 22.0F, fader.getBottom() + 2.0F, fader.getWidth() + 44.0F, 36.0F);
-        g.setFont(uiFont(9.5F));
-        for (int b = 0; b < 3; ++b)
-        {
-            const double db = meterDb[static_cast<size_t>(i)][static_cast<size_t>(b)];
-            auto line = readouts.removeFromTop(12.0F);
-            g.setColour(colours::textFaint);
-            g.drawText(bandNames[b], line.removeFromLeft(26.0F), juce::Justification::centredLeft);
-            g.setColour(db > -1.0 ? colours::red500 : colours::textDim);
-            g.drawText(db <= -60.0 ? juce::String("-inf") : juce::String(db, 1), line, juce::Justification::centredRight);
-        }
+        // The -9 and -3 dB marks, so the zones read even when quiet.
+        g.setColour(colours::textFaint.withAlpha(0.5F));
+        for (const double mark : {-9.0, -3.0}) g.fillRect(meter.getX(), meter.getBottom() - heightAt(mark), meter.getWidth(), 1.0F);
+        auto readout = juce::Rectangle<float>(fader.getX() - 16.0F, fader.getBottom() + 2.0F, fader.getWidth() + 32.0F, 12.0F);
+        g.setFont(uiFont(10.0F, true));
+        g.setColour(db > -3.0 ? colours::red500 : (db > -9.0 ? colours::amber400 : colours::textDim));
+        g.drawText(db <= -60.0 ? juce::String("-inf") : juce::String(db, 1), readout, juce::Justification::centred);
     }
 }
 
@@ -968,7 +1087,9 @@ void PerformanceView::layoutDeck(int deck, juce::Rectangle<int> area)
     d.tempo->setBounds(tempoCol.reduced(4, 8));
     targetBoxes[static_cast<size_t>(deck - 1)]->setBounds(area.removeFromTop(24).withWidth(juce::jmin(320, area.getWidth())).reduced(0, 1));
     area.removeFromTop(2);
-    auto displayArea = area.removeFromTop(juce::jmax(150, area.getHeight() - 170));
+    const bool stackedShown = stackButton.getToggleState();
+    auto displayArea = area.removeFromTop(stackedShown ? DeckDisplay::compactHeight() : juce::jmax(150, area.getHeight() - 170));
+    d.display->setCloseUpShown(!stackedShown);
     platters[static_cast<size_t>(deck - 1)]->setVisible(plattersButton.getToggleState());
     d.display->setBounds(displayArea);
     d.display->resized(); // the platter in or out of its corner
@@ -1026,12 +1147,12 @@ void PerformanceView::layoutMixer(juce::Rectangle<int> area)
         auto col = i == 0 ? r.withWidth(half) : r.withTrimmedLeft(half);
         // The knobs give way before the fader does: it keeps 90 px, with the meter readouts
         // and the CUE button under and over it.
-        const int knob = juce::jmax(22, juce::jmin(44, juce::jmin(col.getWidth() - 10, (col.getHeight() - 26 - 4 - 38 - 90) / 5 - 4)));
+        const int knob = juce::jmax(22, juce::jmin(44, juce::jmin(col.getWidth() - 10, (col.getHeight() - 26 - 4 - 14 - 90) / 5 - 4)));
         for (auto* s : {d.trim.get(), d.eqHi.get(), d.eqMid.get(), d.eqLow.get(), d.filter.get()})
             s->setBounds(col.removeFromTop(knob + 4).withSizeKeepingCentre(knob, knob));
         d.hpCue->setBounds(col.removeFromTop(26).reduced(6, 2));
         col.removeFromTop(4);
-        col.removeFromBottom(38); // the meter readouts
+        col.removeFromBottom(14); // the meter's reading
         d.fader->setBounds(col.withSizeKeepingCentre(30, col.getHeight()));
     }
 }
@@ -1045,11 +1166,26 @@ void PerformanceView::resized()
     recButton.setBounds(bar.removeFromLeft(70).reduced(2));
     autoGainButton.setBounds(bar.removeFromLeft(96).reduced(2));
     plattersButton.setBounds(bar.removeFromLeft(70).reduced(2));
+    stackButton.setBounds(bar.removeFromLeft(80).reduced(2));
+    redoButton.setBounds(bar.removeFromLeft(64).reduced(2));
+    keepButton.setBounds(bar.removeFromLeft(56).reduced(2));
+    joinLight.setBounds(bar.removeFromLeft(44).reduced(2));
     status.setBounds(bar.removeFromLeft(bar.getWidth() / 2));
     midiLine.setBounds(bar);
     area.removeFromTop(4);
     timelineStrip->setBounds(area.removeFromTop(58));
     area.removeFromTop(4);
+    if (stacked == nullptr)
+    {
+        stacked = std::make_unique<StackedWaveforms>(*decks[0].display, *decks[1].display);
+        addChildComponent(*stacked);
+    }
+    stacked->setVisible(stackButton.getToggleState());
+    if (stacked->isVisible())
+    {
+        stacked->setBounds(area.removeFromTop(juce::jlimit(120, 260, area.getHeight() * 3 / 10)));
+        area.removeFromTop(4);
+    }
     auto browserArea = area.removeFromBottom(juce::jmax(150, area.getHeight() / 3));
     browser.setBounds(browserArea);
     area.removeFromBottom(6);

@@ -85,6 +85,35 @@ struct DeckRig
     }
 };
 
+// A track still loading plays what has arrived, is silent past it (without ending), and
+// plays on once more has come in.
+void testDeckPlaysATrackWhileItLoads()
+{
+    DeckRig rig;
+    auto ready = std::make_shared<std::atomic<int>>(static_cast<int>(kRate * 1.0));
+    auto total = std::make_shared<std::atomic<int>>(rig.track->audio->getNumSamples());
+    rig.track->readyFrames = ready;
+    rig.track->totalFrames = total;
+    rig.deck.load(rig.track.get(), nullptr);
+    rig.press(Control::play, 1.0F);
+    rig.press(Control::play, 0.0F);
+    rig.run(0.5);
+    float early = 0.0F;
+    for (const float x : rig.l) early = std::max(early, std::abs(x));
+    require(early > 0.1F, "a loading track should play what has arrived");
+    rig.run(1.0); // now past the first second, which is all that has arrived
+    float past = 0.0F;
+    for (const float x : rig.l) past = std::max(past, std::abs(x));
+    auto v = rig.view();
+    require(past == 0.0F, "past what has arrived the deck should be silent");
+    require(v.playing && v.posSec > 1.4, "the deck should play on past what has arrived, not stop at it");
+    ready->store(total->load()); // the rest arrives
+    rig.run(0.2);
+    float later = 0.0F;
+    for (const float x : rig.l) later = std::max(later, std::abs(x));
+    require(later > 0.1F, "once the rest has arrived the deck should be heard again");
+}
+
 void testCueButtonFollowsCdjRules()
 {
     DeckRig rig;
@@ -622,6 +651,7 @@ void addPerformanceTests(std::vector<TestCase>& tests)
     tests.push_back({"Performance Sound Color FX units", testColorFxUnits});
     tests.push_back({"Performance effects and sampler are recorded", testEffectsAndSamplerAreRecorded});
     tests.push_back({"Performance deck CUE follows CDJ rules", testCueButtonFollowsCdjRules});
+    tests.push_back({"Performance deck plays a track while it loads", testDeckPlaysATrackWhileItLoads});
     tests.push_back({"Performance CUE hold is recorded as an audible segment", testCueHoldIsRecordedAsAudibleSegment});
     tests.push_back({"Performance loops and beat jump", testLoopsAndBeatJump});
     tests.push_back({"Performance hot cues", testHotCues});

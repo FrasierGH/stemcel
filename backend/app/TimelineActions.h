@@ -105,6 +105,11 @@ class TimelineActions
 
     // ── tracks ─────────────────────────────────────────────────────────────
     juce::String addTrack();
+    // Buses: a new one (its id), a track's output (an empty bus id: the master), and a new
+    // bus with this track sent to it, as one undo step.
+    juce::String addBus();
+    void setTrackOutput(const juce::String& trackId, const juce::String& busId);
+    juce::String sendToNewBus(const juce::String& trackId);
     void removeTrack(const juce::String& trackId);
     void renameTrack(const juce::String& trackId, const juce::String& name);
     void setTrackGain(const juce::String& trackId, double gain);
@@ -146,6 +151,7 @@ class TimelineActions
     Align alignClipToBarGrid(const juce::String& clipId);
     // Every placed clip of an item that is not waiting to warp; the blocked count.
     int alignItemClipsToGrid(const juce::String& itemId);
+    const ProjectModel& projectModel() const { return mirror.model(); }
 
   private:
     const ProjectModel& model() const { return mirror.model(); }

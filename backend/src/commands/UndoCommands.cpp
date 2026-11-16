@@ -23,7 +23,7 @@ bool isUndoableEnvelopeType(const juce::String& type) noexcept
            type == "TRACK_ADD" || type == "TRACK_REMOVE" || type == "TRACK_RENAME" || type == "TRACK_SET_COLOR" ||
            type == "TRACK_GAIN" || type == "TRACK_MUTE" || type == "TRACK_SOLO" ||
            type == "TRACK_SET_HEIGHT" || type == "TRACK_SET_AUTOMATION_LANE_VIEW" ||
-           type == "TRACK_REORDER" ||
+           type == "TRACK_REORDER" || type == "TRACK_SET_BUS" || type == "TRACK_SET_OUTPUT" ||
            type == "TRACK_SET_SENDS" || type == "TRACK_SET_TONE" ||
            type == "TRACK_SET_PUNCH" ||
            type == "TRACK_SET_SATURATION" ||
@@ -32,7 +32,7 @@ bool isUndoableEnvelopeType(const juce::String& type) noexcept
            type == "TRACK_SET_AUTOMATION" ||
            type == "TRACK_BEAT_REPEAT_ADD" || type == "TRACK_BEAT_REPEAT_DELETE" ||
            type == "TRACK_ADD_PLUGIN" || type == "TRACK_REMOVE_PLUGIN" ||
-           type == "TRACK_REORDER_PLUGIN" || type == "TRACK_SET_PLUGIN_BYPASS" ||
+           type == "TRACK_REORDER_PLUGIN" || type == "TRACK_SET_PLUGIN_BYPASS" || type == "TRACK_SET_PLUGIN_MIX" ||
            type == "CLIP_SET_ENVELOPE" || type == "CLIP_SET_GAIN" || type == "CLIP_SET_FADES" ||
            type == "TRACK_DUPLICATE" || type == "CLIP_SET_SOURCE_TEMPO" ||
            type == "CLIP_SET_REVERSED" || type == "CLIP_SET_BRAKE" ||
@@ -84,6 +84,8 @@ juce::String prettyTransactionName(const juce::String& type)
     if (type == "TRACK_SET_HEIGHT") return "Resize track";
     if (type == "TRACK_SET_AUTOMATION_LANE_VIEW") return "Change automation lane view";
     if (type == "TRACK_REORDER") return "Reorder track";
+    if (type == "TRACK_SET_BUS") return "Make a bus";
+    if (type == "TRACK_SET_OUTPUT") return "Send track to bus";
     if (type == "TRACK_SET_SENDS") return "Change track reverb/delay";
     if (type == "TRACK_SET_TONE") return "Change track tone";
     if (type == "TRACK_SET_PUNCH") return "Change track punch";
@@ -97,6 +99,7 @@ juce::String prettyTransactionName(const juce::String& type)
     if (type == "TRACK_REMOVE_PLUGIN") return "Remove plugin";
     if (type == "TRACK_REORDER_PLUGIN") return "Reorder plugins";
     if (type == "TRACK_SET_PLUGIN_BYPASS") return "Bypass plugin";
+    if (type == "TRACK_SET_PLUGIN_MIX") return "Change effect mix";
     if (type == "CLIP_SET_ENVELOPE") return "Edit clip volume envelope";
     if (type == "CLIP_SET_GAIN") return "Change clip gain";
     if (type == "CLIP_SET_FADES") return "Change clip fades";

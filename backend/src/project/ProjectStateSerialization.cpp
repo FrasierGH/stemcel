@@ -91,6 +91,7 @@ juce::var ProjectState::pluginSlotsAsJson(const juce::String& trackId) const
         slotObj->setProperty("manufacturer", slot.manufacturer);
         slotObj->setProperty("format", slot.formatName);
         slotObj->setProperty("bypassed", slot.bypassed);
+        slotObj->setProperty("mix", slot.mix);
         if (pluginAvailabilityProbe && !pluginAvailabilityProbe(slot.identifier))
             slotObj->setProperty("unresolved", true);
         slotsArray.add(juce::var(slotObj));
@@ -123,6 +124,9 @@ juce::var ProjectState::tracksAsJson() const
         {
             trackObj->setProperty("soloed", true);
         }
+        if (static_cast<bool>(track.getProperty(kIsBus, false))) trackObj->setProperty("isBus", true);
+        if (const auto bus = getTrackOutputBus(track.getProperty(kId).toString()); bus.isNotEmpty())
+            trackObj->setProperty("outputBus", bus);
         // Omit unset heights so older projects need no backfill.
         if (track.hasProperty(kHeightPx))
         {

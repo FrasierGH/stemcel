@@ -547,6 +547,77 @@ void SmokeTest::addSteps()
                          return t != nullptr && std::abs(static_cast<double>(t->raw.getProperty("toneBassDb", 0.0)) - 4.5) < 0.01
                                 && std::abs(static_cast<double>(t->raw.getProperty("sendReverb", 0.0)) - 0.3) < 0.01;
                      }});
+    // One of performance mode's effects on the track (a built-in plugin) and its mix, live and
+    // saved; then taken off again. (Its module in Track FX is checked once the window is up.)
+    steps.push_back({"track effects",
+                     [this] { engine.send("TRACK_ADD_PLUGIN", object({{"trackId", trackId}, {"identifier", "djfx:beat:1"}})); },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         static juce::String slot;
+                         mirror.refreshNow();
+                         const auto* t = model().findTrack(trackId);
+                         if (t == nullptr) return false;
+                         juce::var entry;
+                         if (const auto* list = t->raw.getProperty("plugins", {}).getArray())
+                             for (const auto& s : *list)
+                                 if (s.getProperty("identifier", "").toString() == "djfx:beat:1") entry = s;
+                         if (!entry.isObject()) return false;
+                         if (slot.isEmpty())
+                         {
+                             slot = entry.getProperty("slotId", "").toString();
+                             engine.send("TRACK_SET_PLUGIN_MIX", object({{"trackId", trackId}, {"slotId", slot}, {"mix", 0.4}}));
+                             return false;
+                         }
+                         if (std::abs(static_cast<double>(entry.getProperty("mix", 1.0)) - 0.4) > 1.0e-3) return false;
+                         float liveMix = -1.0F;
+                         for (const auto& d : engine.host().engine().getTrackPluginSlots(trackId))
+                             if (d.slotId == slot) liveMix = d.mix;
+                         if (std::abs(liveMix - 0.4F) > 1.0e-3F) return false;
+                         const auto names = engine.host().engine().getTrackPluginParameterNames(trackId, slot);
+                         report.add("track effects: " + entry.getProperty("name", "").toString() + " added, mix 0.4 live and saved, parameters "
+                                    + names.joinIntoString(", "));
+                         engine.send("TRACK_REMOVE_PLUGIN", object({{"trackId", trackId}, {"slotId", slot}}));
+                         return true;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 10000.0;
+    // A bus: the track sent to it (one undo step), the bus taking no clips, and the track back
+    // on the master when the bus goes.
+    steps.push_back({"buses",
+                     [this] { busId = actions.sendToNewBus(trackId); },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         static int phase = 0;
+                         mirror.refreshNow();
+                         const auto* bus = model().findTrack(busId);
+                         const auto* t = model().findTrack(trackId);
+                         if (bus == nullptr || t == nullptr) return phase == 1 && t != nullptr && t->raw.getProperty("outputBus", "").toString().isEmpty();
+                         if (phase == 0)
+                         {
+                             if (!static_cast<bool>(bus->raw.getProperty("isBus", false)) || t->raw.getProperty("outputBus", "").toString() != busId) return false;
+                             // A clip offered to the bus is refused.
+                             // Copied: the refresh below rebuilds the model these point into.
+                             const auto before = bus->clips.size();
+                             const auto busName = bus->name, trackName = t->name;
+                             const auto item = t->clips.empty() ? juce::String() : t->clips.front().libraryItemId;
+                             if (item.isNotEmpty())
+                                 engine.send("CLIP_ADD", object({{"trackId", busId}, {"clipId", "smoke-bus-clip"}, {"libraryItemId", item},
+                                                                 {"positionMs", 0.0}, {"inMs", 0.0}, {"durationMs", 500.0}}));
+                             mirror.refreshNow();
+                             const auto* again = model().findTrack(busId);
+                             report.add("buses: " + busName + " made and " + trackName + " sent to it; the bus took "
+                                        + juce::String(static_cast<int>(again != nullptr ? again->clips.size() - before : 0)) + " clip(s)");
+                             if (again == nullptr || again->clips.size() != before) return false;
+                             actions.removeTrack(busId);
+                             phase = 1;
+                             return false;
+                         }
+                         return false;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 10000.0;
     steps.push_back({"automation",
                      [this]
                      {
@@ -2601,6 +2672,60 @@ void SmokeTest::addTempoJourney()
     // Every parameter there is to tweak can be automated: each knob of Track FX and Project FX
     // has a lane, every track and master lane is stored and understood by the audio engine, and
     // every parameter a transition writes is one of them.
+    // An effect in Track FX: its module (Mix, Strength, Beats, On) and its (A) showing its lanes.
+    steps.push_back({"track effects in Track FX",
+                     [this]
+                     {
+                         mirror.refreshNow();
+                         if (!model().tracks.empty())
+                             engine.send("TRACK_ADD_PLUGIN", object({{"trackId", model().tracks.front().id}, {"identifier", "djfx:beat:1"}}));
+                     },
+                     {},
+                     [this](const juce::var&)
+                     {
+                         static int phase = 0;
+                         static juce::String slot;
+                         mirror.refreshNow();
+                         if (model().tracks.empty()) return false;
+                         const auto& t = model().tracks.front();
+                         juce::var entry;
+                         if (const auto* list = t.raw.getProperty("plugins", {}).getArray())
+                             for (const auto& s : *list)
+                                 if (s.getProperty("identifier", "").toString() == "djfx:beat:1") entry = s;
+                         auto* window = juce::TopLevelWindow::getTopLevelWindow(0);
+                         auto* workspace = window != nullptr ? findDescendant<Workspace>(window) : nullptr;
+                         auto* library = window != nullptr ? findDescendant<LibraryPanel>(window) : nullptr;
+                         auto* fx = library != nullptr ? dynamic_cast<TrackFxView*>(library->trackFxPanel()) : nullptr;
+                         if (!entry.isObject() || workspace == nullptr || fx == nullptr) return false;
+                         slot = entry.getProperty("slotId", "").toString();
+                         if (phase == 0)
+                         {
+                             workspace->viewState().selectedTrackId = t.id;
+                             workspace->viewState().changed();
+                             phase = 1;
+                             return false;
+                         }
+                         auto* module = fx->effectModuleForTest(slot);
+                         if (module == nullptr) return false;
+                         if (phase == 1)
+                         {
+                             fx->toggleLanesForTest(*module);
+                             phase = 2;
+                             return false;
+                         }
+                         const auto lanes = automation::lanesOf(t);
+                         const auto has = [&](const juce::String& id)
+                         { return std::any_of(lanes.begin(), lanes.end(), [&](const automation::Lane& l) { return l.paramId == id; }); };
+                         if (!has("plugin:" + slot + ":0") || !has("plugin:" + slot + ":mix") || !has("plugin:" + slot + ":2")) return false;
+                         report.add("track effects in Track FX: " + juce::String(module->automationLanes().size()) + " lanes from its (A): "
+                                    + module->automationLanes().joinIntoString(", "));
+                         const auto trackOfSlot = t.id; // copied: the sends below can refresh the model
+                         actions.setAutomationLanes(trackOfSlot, {});
+                         engine.send("TRACK_REMOVE_PLUGIN", object({{"trackId", trackOfSlot}, {"slotId", slot}}));
+                         return true;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 10000.0;
     steps.push_back({"every parameter automatable",
                      [this]
                      {
@@ -4145,7 +4270,7 @@ void SmokeTest::addTempoJourney()
     steps.back().poll = true;
     steps.back().timeoutMs = 10000.0;
     // The timeline strip across the top (a drag selects a range), the platters, and the
-    // three-band meters while deck 1 plays.
+    // channel meter while deck 1 plays.
     steps.push_back({"performance timeline strip, platters and meters",
                      [this, perfWorkspace]
                      {
@@ -4162,15 +4287,12 @@ void SmokeTest::addTempoJourney()
                          if (view == nullptr || !model().timelineSelection.has_value()) return false;
                          const auto& sel = *model().timelineSelection;
                          const auto& d = view->stateForTest().decks[0];
-                         const bool bands = d.bands[0] > 0.0F || d.bands[1] > 0.0F || d.bands[2] > 0.0F;
+                         const bool metering = d.peak > 0.0F;
                          auto* platter = view->platterForTest(1);
-                         // A narrow window (a CI runner's) leaves the waveform the room: no platters then.
-                         const bool narrow = view->getWidth() < 1400;
                          const bool platterShown = platter != nullptr && platter->isVisible() && platter->getWidth() > 40;
                          report.add("performance strip: selected " + juce::String(sel.first / 1000.0, 1) + "-" + juce::String(sel.second / 1000.0, 1)
-                                    + " s; platter " + (platterShown ? "shown" : narrow ? "hidden (narrow window)" : "hidden") + "; bands " + juce::String(d.bands[0], 3) + " "
-                                    + juce::String(d.bands[1], 3) + " " + juce::String(d.bands[2], 3));
-                         if (!(bands && (platterShown || narrow) && sel.second > sel.first)) return false;
+                                    + " s; platter " + (platterShown ? "shown" : "hidden") + "; meter peak " + juce::String(d.peak, 3));
+                         if (!(metering && platterShown && sel.second > sel.first)) return false;
                          actions.setTimelineSelection(std::nullopt, false);
                          return true;
                      }});
@@ -4482,6 +4604,156 @@ void SmokeTest::addTempoJourney()
                      }});
     steps.back().poll = true;
     steps.back().timeoutMs = 10000.0;
+    // Redo from here, rehearsed (REC off): the take's Deck 1 track plays as it was; EQ LOW
+    // brought through the take's value takes over, then killed; KEEP writes the pass, which
+    // ramps back to the take over a beat after the stop.
+    steps.push_back({"performance redo rehearses and keeps",
+                     [this, perfWorkspace]
+                     {
+                         auto* view = perfWorkspace() != nullptr ? perfWorkspace()->performanceView() : nullptr;
+                         if (view == nullptr) return;
+                         view->bindForTest(1, {});
+                         view->recForTest(false);
+                         mirror.refreshNow();
+                         redoTrack.clear();
+                         redoFromMs = 0.0;
+                         redoPhase = 0;
+                         for (const auto& t : model().tracks)
+                             if (t.name.startsWith("Deck 1"))
+                                 for (const auto& c : t.clips)
+                                     if (c.endMs() - c.offsetMs > 2500.0 && redoTrack.isEmpty())
+                                     {
+                                         redoTrack = t.id;
+                                         redoFromMs = c.offsetMs + 100.0;
+                                     }
+                         actions.seek(redoFromMs);
+                     },
+                     {},
+                     [this, perfWorkspace, inject](const juce::var&)
+                     {
+                         auto* w = perfWorkspace();
+                         auto* view = w != nullptr ? w->performanceView() : nullptr;
+                         if (view == nullptr || redoTrack.isEmpty()) return false;
+                         const auto& live = w->liveState();
+                         if (redoPhase == 0)
+                         {
+                             if (std::abs(live.positionMs - redoFromMs) > 30.0) return false;
+                             view->redoForTest(true);
+                             redoPhase = 1;
+                             return false;
+                         }
+                         if (redoPhase == 1)
+                         {
+                             if (!live.playing || live.positionMs < redoFromMs + 300.0) return false;
+                             inject({0xB0, 0x0F, 0x40, 0xB0, 0x2F, 0x00}); // EQ LOW through the take's value (centre)
+                             redoPhase = 2;
+                             return false;
+                         }
+                         if (redoPhase == 2)
+                         {
+                             if (live.positionMs < redoFromMs + 450.0) return false;
+                             redoTouchMs = live.positionMs;
+                             inject({0xB0, 0x0F, 0x00, 0xB0, 0x2F, 0x00}); // killed
+                             redoPhase = 3;
+                             return false;
+                         }
+                         if (redoPhase == 3)
+                         {
+                             if (live.positionMs < redoTouchMs + 500.0) return false;
+                             redoStopMs = live.positionMs;
+                             actions.pause();
+                             redoPhase = 4;
+                             return false;
+                         }
+                         if (redoPhase == 4)
+                         {
+                             if (live.playing || !view->heldPassForTest()) return false;
+                             if (!view->keepForTest()) return false;
+                             redoPhase = 5;
+                             return false;
+                         }
+                         mirror.refreshNow();
+                         const auto* track = model().findTrack(redoTrack);
+                         if (track == nullptr) return false;
+                         const auto bass = automation::pointsOf(*track, "toneBass");
+                         const double before = automation::valueAt(bass, redoFromMs + 100.0, 0.0);
+                         const double held = automation::valueAt(bass, redoTouchMs + 250.0, 0.0);
+                         report.add("performance redo (rehearsed, kept): toneBass " + juce::String(before, 1) + " dB before the touch, "
+                                    + juce::String(held, 1) + " dB after it, stopped at " + juce::String(redoStopMs, 0) + " ms");
+                         view->redoForTest(false);
+                         return std::abs(before) < 0.5 && held < -39.0;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 15000.0;
+    // Redo with REC on, a deck taken over: deck 1 loads what the take played, from where it had
+    // got, at its tempo; at the stop its playing replaces that stretch of the take's track and
+    // the rest of the take joins on where it plays the same moment.
+    steps.push_back({"performance redo takes a deck over and joins",
+                     [this, perfWorkspace]
+                     {
+                         auto* view = perfWorkspace() != nullptr ? perfWorkspace()->performanceView() : nullptr;
+                         if (view == nullptr) return;
+                         view->recForTest(true);
+                         redoPhase = 0;
+                         actions.seek(redoFromMs);
+                     },
+                     {},
+                     [this, perfWorkspace](const juce::var&)
+                     {
+                         auto* w = perfWorkspace();
+                         auto* view = w != nullptr ? w->performanceView() : nullptr;
+                         if (view == nullptr || redoTrack.isEmpty()) return false;
+                         const auto& live = w->liveState();
+                         if (redoPhase == 0)
+                         {
+                             if (std::abs(live.positionMs - redoFromMs) > 30.0) return false;
+                             view->redoForTest(true);
+                             redoPhase = 1;
+                             return false;
+                         }
+                         if (redoPhase == 1)
+                         {
+                             if (!live.playing || live.positionMs < redoFromMs + 300.0) return false;
+                             redoTouchMs = live.positionMs;
+                             if (!view->takeOverForTest(1)) return false;
+                             redoPhase = 2;
+                             return false;
+                         }
+                         if (redoPhase == 2)
+                         {
+                             const auto& d = view->stateForTest().decks[0];
+                             if (!d.playing || live.positionMs < redoTouchMs + 1200.0) return false;
+                             redoStopMs = live.positionMs;
+                             actions.pause();
+                             redoPhase = 3;
+                             return false;
+                         }
+                         mirror.refreshNow();
+                         const auto* track = model().findTrack(redoTrack);
+                         if (track == nullptr || live.playing) return false;
+                         const ClipModel* fromTouch = nullptr;
+                         const ClipModel* afterStop = nullptr;
+                         for (const auto& c : track->clips)
+                         {
+                             if (c.offsetMs >= redoTouchMs - 50.0 && c.offsetMs < redoTouchMs + 600.0 && c.offsetMs < redoStopMs - 200.0) fromTouch = &c;
+                             if (c.offsetMs >= redoStopMs - 200.0 && c.offsetMs < redoStopMs + 400.0) afterStop = &c;
+                         }
+                         if (fromTouch == nullptr || afterStop == nullptr)
+                         {
+                             juce::String clips;
+                             for (const auto& c : track->clips) clips << juce::String(c.offsetMs, 0) << "+" << juce::String(c.endMs() - c.offsetMs, 0) << " ";
+                             log::info("smoke", "redo takeover: touched " + juce::String(redoTouchMs, 0) + " stopped " + juce::String(redoStopMs, 0) + " clips " + clips);
+                             return false;
+                         }
+                         report.add("performance redo (deck taken over): its clip from " + juce::String(fromTouch->offsetMs, 0) + " ms (touched at "
+                                    + juce::String(redoTouchMs, 0) + "), the take on from " + juce::String(afterStop->offsetMs, 0) + " ms (stopped at "
+                                    + juce::String(redoStopMs, 0) + ")");
+                         view->redoForTest(false);
+                         view->recForTest(true); // REC on again, as the steps after expect
+                         return true;
+                     }});
+    steps.back().poll = true;
+    steps.back().timeoutMs = 15000.0;
     // A stretch of the timeline onto a deck: the selected range's mix rendered onto deck 2, played
     // with REC on, and the take replaces that stretch.
     steps.push_back({"performance loads a timeline region",

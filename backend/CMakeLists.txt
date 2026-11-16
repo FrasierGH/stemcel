@@ -532,6 +532,7 @@ add_library(stemcel_backend_core STATIC
     src/project/ValueTreeJson.cpp
     # plugins (VST3 hosting — ADR 0025)
     src/plugins/PluginCatalogue.cpp
+    src/plugins/BuiltInFx.cpp
     src/plugins/PluginChain.cpp
     src/plugins/PluginEditorWindow.cpp
     src/plugins/PluginScanCoordinator.cpp
@@ -833,6 +834,7 @@ if(STEMCEL_BUILD_NATIVE_APP)
         app/performance/PerfBrowser.cpp
         app/performance/PerformanceTake.cpp
         app/performance/PerformanceView.cpp
+        app/performance/PerformanceRedo.cpp
         app/performance/TrackDriver.cpp
         app/Toasts.cpp
         app/TransitionEditor.cpp

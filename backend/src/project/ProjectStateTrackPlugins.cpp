@@ -16,6 +16,7 @@ const juce::Identifier kPluginFormat{"format"};
 const juce::Identifier kPluginName{"name"};
 const juce::Identifier kPluginManufacturer{"manufacturer"};
 const juce::Identifier kPluginBypassed{"bypassed"};
+const juce::Identifier kPluginMix{"mix"};
 const juce::Identifier kPluginState{"state"};
 const juce::Identifier kMasterPlugins{"MASTER_PLUGINS"};
 const juce::String kMasterId{"__master__"}; // plugins::kMasterChainId
@@ -75,6 +76,7 @@ bool ProjectState::addTrackPlugin(const juce::String& trackId, const TrackPlugin
     node.setProperty(kPluginName, slot.name, &undoManager);
     node.setProperty(kPluginManufacturer, slot.manufacturer, &undoManager);
     node.setProperty(kPluginBypassed, slot.bypassed, &undoManager);
+    if (slot.mix < 0.9999F) node.setProperty(kPluginMix, slot.mix, &undoManager);
     if (slot.state.isNotEmpty()) node.setProperty(kPluginState, slot.state, &undoManager);
     track.appendChild(node, &undoManager);
     return true;
@@ -126,6 +128,16 @@ bool ProjectState::setTrackPluginBypassed(const juce::String& trackId, const juc
     return true;
 }
 
+bool ProjectState::setTrackPluginMix(const juce::String& trackId, const juce::String& slotId, float mix)
+{
+    auto track = pluginOwner(trackId);
+    if (!track.isValid() || slotId.isEmpty()) return false;
+    auto slot = findPluginSlot(track, kId, slotId);
+    if (!slot.isValid()) return false;
+    slot.setProperty(kPluginMix, juce::jlimit(0.0F, 1.0F, mix), &undoManager);
+    return true;
+}
+
 bool ProjectState::setTrackPluginState(const juce::String& trackId, const juce::String& slotId,
                                        const juce::String& base64State)
 {
@@ -158,6 +170,7 @@ std::vector<TrackPluginSlot> ProjectState::getTrackPlugins(const juce::String& t
         slot.name = child.getProperty(kPluginName).toString();
         slot.manufacturer = child.getProperty(kPluginManufacturer).toString();
         slot.bypassed = static_cast<bool>(child.getProperty(kPluginBypassed, false));
+        slot.mix = static_cast<float>(static_cast<double>(child.getProperty(kPluginMix, 1.0)));
         slot.state = child.getProperty(kPluginState, {}).toString();
         if (slot.slotId.isNotEmpty() && slot.identifier.isNotEmpty()) slots.push_back(std::move(slot));
     }

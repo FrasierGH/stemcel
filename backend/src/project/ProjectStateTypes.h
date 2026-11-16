@@ -31,6 +31,7 @@ struct TrackPluginSlot
     juce::String name;
     juce::String manufacturer;
     bool bypassed{false};
+    float mix{1.0F};
     juce::String state;
 };
 

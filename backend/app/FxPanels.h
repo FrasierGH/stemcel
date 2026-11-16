@@ -31,13 +31,20 @@ class FxKnob final : public juce::Component
     juce::String gestureId;
 };
 
-// A titled group of knobs (one FX module).
+// A titled group of knobs (one FX module). Its (A) button, when it has automation lanes,
+// shows or hides them on the timeline; title buttons sit beside it (bypass, remove).
 class FxModule final : public juce::Component
 {
   public:
     explicit FxModule(const juce::String& title);
     FxKnob& add(std::unique_ptr<FxKnob> knob);
     void addExtra(juce::Component& extra, int width);
+    void addTitleButton(juce::Component& button, int width);
+    // The lanes (A) shows; `toggle` is called on a click.
+    void setAutomation(juce::StringArray laneIds, std::function<void()> toggle);
+    const juce::StringArray& automationLanes() const { return lanes; }
+    void setAutomationShown(bool shown) { automate.setToggleState(shown, juce::dontSendNotification); }
+    void setTitle(const juce::String& newTitle);
     void paint(juce::Graphics&) override;
     void resized() override;
     int preferredWidth() const;
@@ -45,7 +52,9 @@ class FxModule final : public juce::Component
   private:
     juce::String title;
     std::vector<std::unique_ptr<FxKnob>> knobs;
-    std::vector<std::pair<juce::Component*, int>> extras;
+    std::vector<std::pair<juce::Component*, int>> extras, titleButtons;
+    juce::TextButton automate{"A"};
+    juce::StringArray lanes;
 };
 
 // Track FX for the selected track: Tone (bass/mid/treble), Filter, Sends (room/echo),
@@ -61,18 +70,39 @@ class TrackFxView final : public juce::Component, private juce::ChangeListener
     // when none does).
     std::vector<std::pair<juce::String, juce::String>> knobAutomation() const;
 
+    // For the smoke test: the effects module of a slot, and its (A).
+    FxModule* effectModuleForTest(const juce::String& slotId);
+    void toggleLanesForTest(FxModule& module) { toggleLanes(module); }
+
   private:
     void changeListenerCallback(juce::ChangeBroadcaster*) override;
     void sync();
     void sendTrack(const juce::String& type, std::initializer_list<std::pair<const char*, juce::var>> props,
                    const juce::String& gestureId, bool gestureEnd);
+    // The track's effects (Stemcel's DJ effects and plugins), one module each, after the
+    // built-in modules; rebuilt when the chain changes.
+    void syncEffects(const juce::var& slots);
+    void showAddMenu();
+    void toggleLanes(FxModule& module);
+    void relayout();
 
     LibraryContext& ctx;
     juce::Label heading;
+    juce::TextButton addEffect{"Add effect..."};
     juce::Viewport viewport;
     juce::Component content;
     std::vector<std::unique_ptr<FxModule>> modules;
     std::map<juce::String, FxKnob*> knobs; // by project-state key
+    struct Effect
+    {
+        juce::String slotId, identifier;
+        bool builtIn = false, beat = false;
+        std::unique_ptr<FxModule> module;
+        FxKnob *mix = nullptr, *strength = nullptr, *beats = nullptr;
+        std::unique_ptr<juce::TextButton> on, edit, bypass, remove;
+    };
+    std::vector<Effect> effects;
+    juce::String effectsKey; // the chain they were built for
 };
 
 // Project FX: Room (reverb), Echo (delay, with note value), Glue compressor, the safety

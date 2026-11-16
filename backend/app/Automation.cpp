@@ -78,9 +78,12 @@ bool parsePluginParamId(const juce::String& paramId, juce::String& slotId, int& 
     if (!paramId.startsWith("plugin:")) return false;
     const auto rest = paramId.substring(7);
     const int colon = rest.lastIndexOfChar(':');
-    if (colon <= 0 || rest.substring(colon + 1).isEmpty() || !rest.substring(colon + 1).containsOnly("0123456789")) return false;
+    if (colon <= 0) return false;
+    const auto tail = rest.substring(colon + 1);
+    if (tail == "mix") index = -1; // the slot's mix
+    else if (tail.isNotEmpty() && tail.containsOnly("0123456789")) index = tail.getIntValue();
+    else return false;
     slotId = rest.substring(0, colon);
-    index = rest.substring(colon + 1).getIntValue();
     return true;
 }
 
@@ -108,8 +111,8 @@ PluginParam& pluginParam(const juce::String& paramId)
         juce::String slot;
         int index = 0;
         parsePluginParamId(paramId, slot, index);
-        entry->label = ("Plugin parameter " + juce::String(index + 1)).toStdString();
-        entry->param = {entry->id.c_str(), entry->label.c_str(), 0.0, 1.0, 0.5};
+        entry->label = (index < 0 ? juce::String("Plugin mix") : "Plugin parameter " + juce::String(index + 1)).toStdString();
+        entry->param = {entry->id.c_str(), entry->label.c_str(), 0.0, 1.0, index < 0 ? 1.0 : 0.5};
     }
     return *entry;
 }

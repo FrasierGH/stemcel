@@ -138,6 +138,7 @@ Workspace::Workspace(EngineClient& engineClient, AppController& appController, A
     hooks.showTrackFx = [this] { showLibraryTab(4); };
     hooks.blocked = [] { return juce::ModalComponentManager::getInstance()->getNumModalComponents() > 0; };
     hooks.cueScratch = [] { return ScratchEditor::cueBuildBacking(); };
+    hooks.performanceOpen = [this] { return isPerformanceShown(); };
     midi = std::make_unique<MidiControllerActions>(engine, mirror, actions, view, live, prefs, std::move(hooks));
 
     toast = notify;

@@ -629,8 +629,13 @@ void TrackEditor::paintGrid(juce::Graphics& g, juce::Rectangle<float> area, doub
         if (numbers && it + 1 != beats.end())
         {
             const float hx = area.getX() + static_cast<float>((0.5 * (*it + *(it + 1)) - startSec) / lengthSec) * area.getWidth();
-            g.setColour(juce::Colours::white.withAlpha(0.13F));
-            g.drawVerticalLine(juce::roundToInt(hx), area.getY() + area.getHeight() * 0.3F, area.getBottom() - area.getHeight() * 0.3F);
+            // Over the waveform: ticks at the edges and a fine line through.
+            const float tick = area.getHeight() * 0.16F;
+            g.setColour(juce::Colours::white.withAlpha(0.6F));
+            g.drawVerticalLine(juce::roundToInt(hx), area.getY(), area.getY() + tick);
+            g.drawVerticalLine(juce::roundToInt(hx), area.getBottom() - tick, area.getBottom());
+            g.setColour(juce::Colours::white.withAlpha(0.22F));
+            g.drawVerticalLine(juce::roundToInt(hx), area.getY() + tick, area.getBottom() - tick);
         }
     }
 }

@@ -63,16 +63,21 @@ private:
     static constexpr float kHighCutOffHz = 24000.0F;
     static constexpr float kHighCutIdentityHz = 20000.0F;
 
-    // Bipolar DJ-style Filter sweep endpoints. A single control engages one
-    // corner at a time and parks the other at its off sentinel:
+    // Bipolar DJ-style Filter sweep, voiced after Pioneer DJM mixers. A single control
+    // engages one corner at a time and parks the other at its off sentinel:
     //   filter > 0 → high-pass (Low Cut)  corner glides kHpfMinHz → kHpfMaxHz
     //   filter < 0 → low-pass  (High Cut) corner glides kLpfMaxHz → kLpfMinHz
-    // The exponential map keeps perceptually even steps across the throw.
-    static constexpr float kHpfMinHz = 20.0F;
-    static constexpr float kHpfMaxHz = 2000.0F;
-    static constexpr float kLpfMinHz = 250.0F;
-    static constexpr float kLpfMaxHz = 20000.0F;
-    static constexpr float kFilterEpsilon = 1.0e-3F;
+    // As on a DJM, a small turn off the centre detent is already clearly heard: the throw is
+    // bent (kFilterShape < 1) so the first quarter covers about a third of the octaves, and a
+    // full turn leaves only the hats (high-pass) or the sub (low-pass). The resonance rises as
+    // the filter closes, for the DJM's peak at the corner.
+    static constexpr float kHpfMinHz = 30.0F;
+    static constexpr float kHpfMaxHz = 7000.0F;
+    static constexpr float kLpfMinHz = 80.0F;
+    static constexpr float kLpfMaxHz = 18000.0F;
+    static constexpr float kFilterDeadZone = 0.02F; // the centre detent
+    static constexpr float kFilterShape = 0.7F;
+    static constexpr double kResonanceQ = 2.0;      // the second section's Q fully closed
 
     static constexpr float kDbEpsilon = 1.0e-3F;
     static constexpr double kSmoothTauSeconds = 0.02; // 20 ms glide

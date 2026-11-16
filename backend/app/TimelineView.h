@@ -7,6 +7,7 @@
 #include "Theme.h"
 #include "TimelineActions.h"
 #include "WaveformStore.h"
+#include "ZoomScrollBar.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -165,6 +166,7 @@ class TimelineView final : public juce::Component,
         automationBend,
         envelopePoint,
         marker,
+        playhead, // the playhead's head in the ruler, dragged
         pan, // middle button held: the view follows the mouse
         transitionMove,  // a transition's label, dragged: the window moves
         transitionStart, // a transition's left edge
@@ -231,7 +233,8 @@ class TimelineView final : public juce::Component,
     double contentLengthMs() const;
     void paintOverChildren(juce::Graphics&) override;
     void paintRuler(juce::Graphics&, juce::Rectangle<int> area);
-    void paintGrid(juce::Graphics&, juce::Rectangle<int> area);
+    // overClips: the lines again over the clips (faint), so a waveform can't hide the grid.
+    void paintGrid(juce::Graphics&, juce::Rectangle<int> area, bool overClips = false);
     void paintClip(juce::Graphics&, const ClipModel& clip, juce::Rectangle<float> r, bool silenced, int trackColor,
                    float alpha);
     void persistView();
@@ -377,7 +380,7 @@ class TimelineView final : public juce::Component,
     juce::String renamingClipId;
 
     // Over the canvas's bottom and right edges, hidden while everything fits.
-    juce::ScrollBar hScroll{false};
+    ZoomScrollBar hScroll; // scrolls, and zooms from its ends
     juce::ScrollBar vScroll{true};
 };
 

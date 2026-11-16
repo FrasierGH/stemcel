@@ -16,10 +16,12 @@
 #include <samplerate.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <limits>
 #include <map>
 #include <memory>
+#include <optional>
 
 namespace stemcel
 {
@@ -127,12 +129,139 @@ std::shared_ptr<juce::AudioBuffer<float>> readWhole(const juce::File& file, juce
     return out;
 }
 
+// A track's audio read in pieces at the output's rate, so a deck can start on the first
+// seconds while the rest arrives (and a track can be read ahead while the browser rests on
+// it). The worker fills `buffer` and moves `ready` on; the message thread watches the flags.
+struct StreamedAudio
+{
+    juce::String sourcePath;
+    double rate = 44100.0;
+    std::shared_ptr<juce::AudioBuffer<float>> buffer; // set before `allocated`
+    std::shared_ptr<std::atomic<int>> ready = std::make_shared<std::atomic<int>>(0);
+    std::shared_ptr<std::atomic<int>> total = std::make_shared<std::atomic<int>>(0);
+    std::atomic<bool> allocated{false}, complete{false}, failed{false}, cancelled{false};
+    double lufs = std::numeric_limits<double>::quiet_NaN(); // set before `complete`
+    juce::String error;                                      // set before `failed`
+};
+
+// Reads `file` into `s` (worker thread).
+void streamAudio(StreamedAudio& s, const juce::File& file, juce::AudioFormatManager& formats)
+{
+    std::unique_ptr<juce::AudioFormatReader> reader(formats.createReaderFor(file));
+    if (reader == nullptr)
+    {
+        s.error = "can't read " + file.getFileName();
+        s.failed.store(true, std::memory_order_release);
+        return;
+    }
+    const auto length = static_cast<int>(std::min<juce::int64>(reader->lengthInSamples, 60LL * 60 * 192000));
+    const double fileRate = reader->sampleRate > 0.0 ? reader->sampleRate : s.rate;
+    const bool convert = std::abs(fileRate - s.rate) >= 0.5;
+    const double ratio = s.rate / fileRate;
+    const int capacity = std::max(1, convert ? static_cast<int>(std::ceil(length * ratio)) + 64 : length);
+    auto buffer = std::make_shared<juce::AudioBuffer<float>>(2, capacity);
+    s.buffer = buffer;
+    s.total->store(convert ? static_cast<int>(std::round(length * ratio)) : length, std::memory_order_release);
+    s.allocated.store(true, std::memory_order_release);
+
+    constexpr int kChunk = 1 << 16; // about 1.4 s
+    juce::AudioBuffer<float> in(2, kChunk);
+    int error = 0;
+    // The fastest sinc: about four times the medium one's speed, still 97 dB clean, and the
+    // deck interpolates again as it plays anyway.
+    SRC_STATE* src = convert ? src_new(SRC_SINC_FASTEST, 2, &error) : nullptr;
+    std::vector<float> interIn(static_cast<size_t>(kChunk) * 2);
+    const int outCap = static_cast<int>(std::ceil(kChunk * ratio)) + 256;
+    std::vector<float> interOut(static_cast<size_t>(outCap) * 2);
+    int written = 0;
+    const auto put = [&](const float* inter, int frames)
+    {
+        frames = std::min(frames, capacity - written);
+        auto* l = buffer->getWritePointer(0, written);
+        auto* r = buffer->getWritePointer(1, written);
+        for (int i = 0; i < frames; ++i)
+        {
+            l[i] = inter[static_cast<size_t>(i) * 2];
+            r[i] = inter[static_cast<size_t>(i) * 2 + 1];
+        }
+        written += frames;
+    };
+    const auto resample = [&](int frames, bool last)
+    {
+        int used = 0;
+        for (;;)
+        {
+            SRC_DATA d{};
+            d.data_in = interIn.data() + static_cast<size_t>(used) * 2;
+            d.input_frames = frames - used;
+            d.data_out = interOut.data();
+            d.output_frames = outCap;
+            d.src_ratio = ratio;
+            d.end_of_input = last ? 1 : 0;
+            if (src_process(src, &d) != 0) return;
+            put(interOut.data(), static_cast<int>(d.output_frames_gen));
+            used += static_cast<int>(d.input_frames_used);
+            if (d.output_frames_gen == 0 && (used >= frames || d.input_frames_used == 0)) return;
+        }
+    };
+    for (int at = 0; at < length && !s.cancelled.load(std::memory_order_relaxed); at += kChunk)
+    {
+        const int n = std::min(kChunk, length - at);
+        reader->read(&in, 0, n, at, true, reader->numChannels > 1);
+        if (reader->numChannels == 1) in.copyFrom(1, 0, in, 0, 0, n);
+        if (convert && src != nullptr)
+        {
+            for (int i = 0; i < n; ++i)
+            {
+                interIn[static_cast<size_t>(i) * 2] = in.getSample(0, i);
+                interIn[static_cast<size_t>(i) * 2 + 1] = in.getSample(1, i);
+            }
+            resample(n, at + n >= length);
+        }
+        else
+        {
+            const int frames = std::min(n, capacity - written);
+            buffer->copyFrom(0, written, in, 0, 0, frames);
+            buffer->copyFrom(1, written, in, 1, 0, frames);
+            written += frames;
+        }
+        s.ready->store(written, std::memory_order_release);
+    }
+    if (src != nullptr) src_delete(src);
+    if (s.cancelled.load())
+    {
+        s.error = "cancelled";
+        s.failed.store(true, std::memory_order_release);
+        return;
+    }
+    for (int ch = 0; ch < 2; ++ch) buffer->clear(ch, written, capacity - written);
+    s.total->store(written, std::memory_order_release);
+    s.ready->store(written, std::memory_order_release);
+    // Its loudness, for auto gain (the analyser takes the two usual rates).
+    if (std::abs(s.rate - 44100.0) < 1.0 || std::abs(s.rate - 48000.0) < 1.0)
+    {
+        LoudnessAnalyzer loudness(s.rate);
+        constexpr int block = 1 << 15;
+        for (int at = 0; at < written; at += block)
+        {
+            const int n = std::min(block, written - at);
+            const float* channels[2] = {buffer->getReadPointer(0, at), buffer->getReadPointer(1, at)};
+            loudness.process(channels, 2, n);
+        }
+        const auto result = loudness.finalize();
+        if (!result.silent) s.lufs = result.integratedLufs;
+    }
+    s.complete.store(true, std::memory_order_release);
+}
+
 class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
 {
   public:
     PerformanceHost(AudioEngine& e, BridgeServer& b) : engine(e), bridge(b) {}
     ~PerformanceHost() override
     {
+        for (auto& [key, stream] : streams) stream->cancelled.store(true);
+        loadPool.removeAllJobs(true, 4000);
         stopTimer();
         setMidiPerformanceSink(nullptr);
     }
@@ -259,15 +388,22 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
                 }
                 case perf::Control::sync:
                 case perf::Control::syncLong:
-                case perf::Control::syncShift:
                 case perf::Control::tempo:
                 case perf::Control::loopIn:
                 case perf::Control::loopInLong:
                 case perf::Control::loopOut:
                 case perf::Control::reloopExit:
-                case perf::Control::reloopShift:
                 case perf::Control::callPrev:
                 case perf::Control::callNext:
+                {
+                    // Not the deck's while it drives a track, but the app hears them: in a redo,
+                    // touching one takes the deck over from the take.
+                    const juce::SpinLock::ScopedLockType lock(appLock);
+                    appEvents.push_back(e);
+                    return;
+                }
+                case perf::Control::syncShift:
+                case perf::Control::reloopShift:
                 case perf::Control::callPrevShift:
                 case perf::Control::callNextShift:
                 case perf::Control::jogTouch:
@@ -277,7 +413,11 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
                 case perf::Control::pad:
                 case perf::Control::padShift:
                     if (e.mode != perf::PadMode::padFx1 && e.mode != perf::PadMode::padFx2 && e.mode != perf::PadMode::sampler)
+                    {
+                        const juce::SpinLock::ScopedLockType lock(appLock);
+                        appEvents.push_back(e);
                         return;
+                    }
                     break;
                 default:
                     break;
@@ -389,64 +529,172 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
             for (const auto& b : *beats) track->beats.push_back(static_cast<double>(b));
         cuesFromVar(payload.getProperty("hotCues", {}), track->hotCues, false);
         cuesFromVar(payload.getProperty("memoryCues", {}), track->memoryCues, true);
-        stemcel::log::info("performance", "load deck " + juce::String(deck) + ": " + itemId);
-        const auto playbackPath = resolveEnginePlaybackPath(sourcePath, project, decoded);
-        const double rate = engine.getOutputSampleRate() > 0.0 ? engine.getOutputSampleRate() : 44100.0;
-        const int request = ++loadRequests[deck];
-        auto* self = this;
-        pool.addJob(
-            [self, deck, request, track, rate, playbackPath, sourcePath, &decoded]
+        stemcel::log::info("performance", "load deck " + juce::String(deck) + ": " + (itemId.isNotEmpty() ? itemId : sourcePath));
+        track->sourcePath = sourcePath;
+        // The collection may know its loudness already.
+        if (payload.hasProperty("lufs"))
+        {
+            track->hasLoudness = true;
+            track->loudnessLufs = static_cast<double>(payload["lufs"]);
+        }
+        auto stream = startStream(sourcePath, project, decoded);
+        pendingLoads[static_cast<size_t>(deck - 1)] = PendingLoad{stream, track, ++loadRequests[deck], false};
+        pollLoads();
+    }
+
+    // Reads a track ahead (the browser rests on it), so a LOAD of it is instant.
+    void preload(const juce::var& payload, ProjectState& project, const DecodedCache& decoded)
+    {
+        auto sourcePath = payload.getProperty("path", "").toString();
+        if (sourcePath.isEmpty()) sourcePath = project.getLibraryItemFilePath(payload.getProperty("libraryItemId", "").toString());
+        if (sourcePath.isNotEmpty() && juce::File(sourcePath).existsAsFile()) startStream(sourcePath, project, decoded);
+    }
+
+    // A deck loaded straight from a file has its library item once the import ends.
+    void attachItem(const juce::var& payload)
+    {
+        const auto path = payload.getProperty("path", "").toString();
+        const auto itemId = payload.getProperty("libraryItemId", "").toString();
+        if (path.isEmpty() || itemId.isEmpty()) return;
+        for (auto& [deck, track] : loadedTracks)
+            if (track != nullptr && track->itemId.isEmpty() && track->sourcePath == path)
             {
-                auto& formats = self->engine.getFormatManager();
+                // The item id is the message thread's alone (the audio thread never reads it).
+                const_cast<perf::DeckTrack&>(*track).itemId = itemId; // NOLINT(cppcoreguidelines-pro-type-const-cast)
+                itemBySerial[track->serial] = itemId;
+                auto* o = new juce::DynamicObject();
+                o->setProperty("deck", deck);
+                o->setProperty("serial", track->serial);
+                o->setProperty("libraryItemId", itemId);
+                bridge.broadcast("PERF_ITEM_ATTACHED", juce::var(o));
+            }
+        for (auto& pending : pendingLoads)
+            if (pending.has_value() && pending->track->itemId.isEmpty() && pending->track->sourcePath == path)
+            {
+                pending->track->itemId = itemId;
+                itemBySerial[pending->track->serial] = itemId;
+            }
+    }
+
+    static std::unique_ptr<PerformanceHost> g_host;
+
+  private:
+    struct PendingLoad
+    {
+        std::shared_ptr<StreamedAudio> stream;
+        std::shared_ptr<perf::DeckTrack> track;
+        int request = 0;
+        bool published = false; // on the deck (playable as far as it has read)
+    };
+
+    // The stream for a file at the output's rate: one already reading (a preload, the other
+    // deck's), or a new one.
+    std::shared_ptr<StreamedAudio> startStream(const juce::String& sourcePath, ProjectState& project, const DecodedCache& decoded)
+    {
+        const double rate = engine.getOutputSampleRate() > 0.0 ? engine.getOutputSampleRate() : 44100.0;
+        const auto key = sourcePath + "@" + juce::String(rate);
+        if (const auto it = streams.find(key); it != streams.end() && !it->second->failed.load())
+        {
+            streamOrder.removeString(key);
+            streamOrder.add(key);
+            return it->second;
+        }
+        auto stream = std::make_shared<StreamedAudio>();
+        stream->sourcePath = sourcePath;
+        stream->rate = rate;
+        streams[key] = stream;
+        streamOrder.removeString(key);
+        streamOrder.add(key);
+        // Keep the decks' and the last few read ahead; stop reading the rest.
+        while (streamOrder.size() > 4)
+        {
+            const auto oldest = streamOrder[0];
+            streamOrder.remove(0);
+            if (const auto it = streams.find(oldest); it != streams.end())
+            {
+                const bool onDeck = std::any_of(pendingLoads.begin(), pendingLoads.end(),
+                                                [&](const auto& p) { return p.has_value() && p->stream == it->second; });
+                if (!onDeck && !it->second->complete.load()) it->second->cancelled.store(true);
+                streams.erase(it);
+            }
+        }
+        const auto playbackPath = resolveEnginePlaybackPath(sourcePath, project, decoded);
+        auto& formats = engine.getFormatManager();
+        loadPool.addJob(
+            [stream, playbackPath, sourcePath, &decoded, &formats]
+            {
+                if (stream->cancelled.load()) return;
                 auto file = juce::File(playbackPath);
                 if (!file.existsAsFile() || file.hasFileExtension("mp3"))
                 {
                     const auto built = decoded.ensureDecoded(juce::File(sourcePath), formats);
                     if (built.existsAsFile()) file = built;
                 }
-                juce::String error;
-                stemcel::log::info("performance", "reading " + file.getFileName());
-                auto audio = readWhole(file, formats, rate, error);
-                stemcel::log::info("performance", "read " + juce::String(audio != nullptr ? audio->getNumSamples() : 0) + " samples");
-                // Its loudness, for auto gain (the analyser takes the two usual rates).
-                double lufs = std::numeric_limits<double>::quiet_NaN();
-                if (audio != nullptr && (std::abs(rate - 44100.0) < 1.0 || std::abs(rate - 48000.0) < 1.0))
-                {
-                    LoudnessAnalyzer loudness(rate);
-                    constexpr int block = 1 << 15;
-                    for (int at = 0; at < audio->getNumSamples(); at += block)
-                    {
-                        const int n = std::min(block, audio->getNumSamples() - at);
-                        const float* channels[2] = {audio->getReadPointer(0, at), audio->getReadPointer(std::min(1, audio->getNumChannels() - 1), at)};
-                        loudness.process(channels, 2, n);
-                    }
-                    const auto result = loudness.finalize();
-                    if (!result.silent) lufs = result.integratedLufs;
-                }
-                juce::MessageManager::callAsync(
-                    [self, deck, request, track, audio, rate, error, lufs]
-                    {
-                        if (g_host.get() != self || self->loadRequests[deck] != request) return; // superseded
-                        if (audio == nullptr)
-                        {
-                            self->broadcastFailed(deck, track->itemId, error);
-                            return;
-                        }
-                        stemcel::log::info("performance", "loading deck " + juce::String(deck));
-                        track->audio = audio;
-                        track->sampleRate = rate;
-                        track->hasLoudness = std::isfinite(lufs);
-                        track->loudnessLufs = std::isfinite(lufs) ? lufs : 0.0;
-                        self->loadedTracks[deck] = track;
-                        self->perfEngine().load(deck, track, 0);
-                        self->broadcastLoaded(deck, track);
-                    });
+                const auto started = juce::Time::getMillisecondCounterHiRes();
+                streamAudio(*stream, file, formats);
+                stemcel::log::info("performance", "read " + file.getFileName() + " in "
+                                                      + juce::String(juce::Time::getMillisecondCounterHiRes() - started, 0) + " ms");
             });
+        return stream;
     }
 
-    static std::unique_ptr<PerformanceHost> g_host;
+    // On the message thread (the state timer, and a load): a deck takes its track once the
+    // first seconds are in, and hears its loudness when the read ends.
+    void pollLoads()
+    {
+        for (int d = 1; d <= perf::kDecks; ++d)
+        {
+            auto& pending = pendingLoads[static_cast<size_t>(d - 1)];
+            if (!pending.has_value()) continue;
+            auto& s = *pending->stream;
+            auto& track = pending->track;
+            if (s.failed.load(std::memory_order_acquire))
+            {
+                broadcastFailed(d, track->itemId, s.error);
+                pending.reset();
+                continue;
+            }
+            const bool complete = s.complete.load(std::memory_order_acquire);
+            if (!pending->published && s.allocated.load(std::memory_order_acquire))
+            {
+                const int enough = std::min(s.total->load(), static_cast<int>(s.rate * 4.0));
+                if (complete || s.ready->load(std::memory_order_acquire) >= enough)
+                {
+                    track->audio = s.buffer;
+                    track->sampleRate = s.rate;
+                    if (!complete)
+                    {
+                        track->readyFrames = s.ready;
+                        track->totalFrames = s.total;
+                    }
+                    loadedTracks[d] = track;
+                    perfEngine().load(d, track, 0);
+                    broadcastLoaded(d, track);
+                    pending->published = true;
+                }
+            }
+            if (pending->published && complete)
+            {
+                if (!track->hasLoudness && std::isfinite(s.lufs))
+                {
+                    track->hasLoudness = true;
+                    track->loudnessLufs = s.lufs;
+                }
+                auto* o = new juce::DynamicObject();
+                o->setProperty("deck", d);
+                o->setProperty("serial", track->serial);
+                o->setProperty("lengthSec", s.total->load() / s.rate);
+                if (track->hasLoudness) o->setProperty("lufs", track->loudnessLufs);
+                bridge.broadcast("PERF_LOAD_COMPLETE", juce::var(o));
+                pending.reset();
+            }
+        }
+    }
 
-  private:
+    std::array<std::optional<PendingLoad>, perf::kDecks> pendingLoads;
+    std::map<juce::String, std::shared_ptr<StreamedAudio>> streams; // by path and rate
+    juce::StringArray streamOrder;                                   // oldest first
+    juce::ThreadPool loadPool{2};                                    // not behind peak jobs
     struct Device
     {
         std::shared_ptr<const perf::Mapping> mapping;
@@ -466,7 +714,14 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
         o->setProperty("artist", track->artist);
         o->setProperty("key", track->key);
         o->setProperty("bpm", track->bpm);
-        o->setProperty("lengthSec", track->audio != nullptr ? track->audio->getNumSamples() / track->sampleRate : 0.0);
+        const double frames = track->totalFrames != nullptr ? track->totalFrames->load()
+                              : track->audio != nullptr ? track->audio->getNumSamples() : 0;
+        o->setProperty("lengthSec", frames / track->sampleRate);
+        o->setProperty("path", track->sourcePath);
+        o->setProperty("anchorSec", track->anchorSec);
+        juce::Array<juce::var> beats;
+        for (const double b : track->beats) beats.add(b);
+        o->setProperty("beats", beats);
         if (track->hasLoudness) o->setProperty("lufs", track->loudnessLufs);
         bridge.broadcast("PERF_LOADED", juce::var(o));
         const juce::SpinLock::ScopedLockType lock(devicesLock);
@@ -509,6 +764,7 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
     {
         auto& perfE = perfEngine();
         const auto& v = perfE.view();
+        pollLoads();
         broadcastState(v);
         // Controls the app answers.
         std::vector<perf::Event> app;
@@ -620,8 +876,6 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
         o->setProperty("recording", v.recording);
         std::array<float, perf::kDecks> peaks{};
         perfEngine().consumePeaks(peaks);
-        std::array<std::array<float, 3>, perf::kDecks> bandPeaks{};
-        perfEngine().consumeBandPeaks(bandPeaks);
         juce::Array<juce::var> decks;
         for (int d = 0; d < perf::kDecks; ++d)
         {
@@ -671,9 +925,6 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
             x->setProperty("padFxHeld", cv.padFxHeld);
             x->setProperty("bound", cv.bound);
             x->setProperty("peak", peaks[static_cast<size_t>(d)]);
-            juce::Array<juce::var> bands;
-            for (const float b : bandPeaks[static_cast<size_t>(d)]) bands.add(b);
-            x->setProperty("bands", bands);
             decks.add(juce::var(x));
         }
         o->setProperty("decks", decks);
@@ -845,6 +1096,8 @@ bool dispatchPerformanceCommand(const juce::String& type, const juce::var& paylo
     if (type == "PERF_OPEN") h.open();
     else if (type == "PERF_CLOSE") h.close();
     else if (type == "PERF_LOAD") h.load(payload, project, decodedCache, pool);
+    else if (type == "PERF_PRELOAD") h.preload(payload, project, decodedCache);
+    else if (type == "PERF_ATTACH_ITEM") h.attachItem(payload);
     else if (type == "PERF_SAMPLER_LOAD") h.loadSample(payload, project, decodedCache, pool);
     else if (type == "PERF_TRACK_LIVE")
     {

@@ -64,7 +64,15 @@ void DeckPlayer::prepare(double outputSampleRate, int block)
 double DeckPlayer::sr() const noexcept { return loaded != nullptr ? loaded->sampleRate : outRate; }
 double DeckPlayer::length() const noexcept
 {
-    return loaded != nullptr && loaded->audio != nullptr ? static_cast<double>(loaded->audio->getNumSamples()) : 0.0;
+    if (loaded == nullptr || loaded->audio == nullptr) return 0.0;
+    if (loaded->totalFrames != nullptr) return static_cast<double>(loaded->totalFrames->load(std::memory_order_acquire));
+    return static_cast<double>(loaded->audio->getNumSamples());
+}
+
+int DeckPlayer::readyLength() const noexcept
+{
+    const int whole = loaded->audio->getNumSamples();
+    return loaded->readyFrames != nullptr ? std::min(whole, loaded->readyFrames->load(std::memory_order_acquire)) : whole;
 }
 double DeckPlayer::beatLen() const noexcept
 {
@@ -408,6 +416,10 @@ void DeckPlayer::handle(const Event& e) noexcept
         case Control::seek:
             if (loaded != nullptr) jumpTo(std::clamp(static_cast<double>(e.value) * sr(), 0.0, length()));
             break;
+        case Control::tempoHold:
+            // An exact tempo (a redo taking over from a take); the slider takes over at it.
+            if (e.value > 0.05F) holdTempo(static_cast<double>(e.value));
+            break;
         default:
             break;
     }
@@ -678,7 +690,7 @@ void DeckPlayer::jog(Control control, double ticks) noexcept
 float DeckPlayer::sampleAt(int channel, double p) const noexcept
 {
     const auto& audio = *loaded->audio;
-    const int len = audio.getNumSamples();
+    const int len = readyLength(); // past what has loaded, silence
     const float* x = audio.getReadPointer(std::min(channel, audio.getNumChannels() - 1));
     const int i = static_cast<int>(std::floor(p));
     const auto f = static_cast<float>(p - i);
@@ -718,7 +730,7 @@ void DeckPlayer::advance(double& p, double delta, bool record, juce::int64 at) n
 void DeckPlayer::readWrapped(float* const* dest, double& cursor, int n) const noexcept
 {
     const auto& audio = *loaded->audio;
-    const int len = audio.getNumSamples();
+    const int len = readyLength();
     const int chans = audio.getNumChannels();
     int written = 0;
     while (written < n)
