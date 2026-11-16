@@ -34,6 +34,7 @@ class MidiControllerActions final : private juce::Timer
         std::function<void()> showTrackFx;
         std::function<bool()> blocked;     // a modal dialog or editor owns input
         std::function<bool()> cueScratch;  // Cue during a scratch session; true when it was handled
+        std::function<bool()> performanceOpen; // performance mode holds the controllers
     };
 
     MidiControllerActions(EngineClient& engine, ProjectMirror& mirror, TimelineActions& actions, TimelineViewState& view,
@@ -122,6 +123,12 @@ class MidiControllerActions final : private juce::Timer
     bool wasBlocked = false;
     bool deckSelectionSynced = false;
     std::set<juce::String> enabledInputs;
+
+    // A supported controller works on the timeline as soon as it is plugged in, unless it was
+    // switched off in Preferences > MIDI (saved as false). The scan notices it being plugged in.
+    void autoEnable(const juce::var& devices);
+    std::set<juce::String> autoEnableTried; // once per launch, so a busy port isn't retried forever
+    juce::TimedCallback deviceScan;
 };
 
 } // namespace stemcel::native

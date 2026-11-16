@@ -87,30 +87,36 @@ double toneGainRatio(float bassDb, float midDb, float trebleDb, float filter,
 void testToneEqLowCutDirectionAndShelfRange()
 {
     // The bipolar Filter sweeps one corner at a time. Positive (+1) is a
-    // 4th-order (24 dB/oct) high-pass (Low Cut) reaching ~2 kHz: highs above
+    // 4th-order (24 dB/oct) high-pass (Low Cut) reaching ~7 kHz: highs above
     // the corner pass while lows are strongly removed. The inverted (low-pass)
     // regression fails the direction guard; a too-gentle 2nd-order voicing
     // fails the octave-slope guard below.
-    const double passHigh = toneGainRatio(0.0F, 0.0F, 0.0F, 1.0F, 8000.0);
-    const double cutLow = toneGainRatio(0.0F, 0.0F, 0.0F, 1.0F, 200.0);
-    const double cutOctave = toneGainRatio(0.0F, 0.0F, 0.0F, 1.0F, 1000.0);
-    require(passHigh > 0.9, "Low Cut (filter +1) must pass 8 kHz roughly unchanged");
-    require(cutLow < 0.05, "Low Cut (filter +1) must strongly attenuate 200 Hz");
-    // One octave below the ~2 kHz corner sits well under a 2nd-order voicing,
+    const double passHigh = toneGainRatio(0.0F, 0.0F, 0.0F, 1.0F, 16000.0);
+    const double cutLow = toneGainRatio(0.0F, 0.0F, 0.0F, 1.0F, 700.0);
+    const double cutOctave = toneGainRatio(0.0F, 0.0F, 0.0F, 1.0F, 3500.0);
+    require(passHigh > 0.9, "Low Cut (filter +1) must pass 16 kHz roughly unchanged");
+    require(cutLow < 0.05, "Low Cut (filter +1) must strongly attenuate 700 Hz");
+    // One octave below the ~7 kHz corner sits well under a 2nd-order voicing,
     // locking in the 24 dB/oct slope.
-    require(cutOctave < 0.15, "Low Cut must have a 24 dB/oct slope (1 kHz well below 2nd-order)");
+    require(cutOctave < 0.15, "Low Cut must have a 24 dB/oct slope (3.5 kHz well below 2nd-order)");
     require(passHigh > cutLow + 0.3, "Low Cut must pass highs more than lows (not inverted)");
 
     // Negative (-1) is a 4th-order (24 dB/oct) low-pass (High Cut) reaching
-    // ~250 Hz: lows pass while highs are strongly removed (mirror of Low Cut).
-    const double passLow = toneGainRatio(0.0F, 0.0F, 0.0F, -1.0F, 80.0);
-    const double cutHigh = toneGainRatio(0.0F, 0.0F, 0.0F, -1.0F, 2000.0);
-    const double cutOctaveHi = toneGainRatio(0.0F, 0.0F, 0.0F, -1.0F, 500.0);
-    require(passLow > 0.9, "High Cut (filter -1) must pass 80 Hz roughly unchanged");
-    require(cutHigh < 0.05, "High Cut (filter -1) must strongly attenuate 2 kHz");
-    // One octave above the ~250 Hz corner sits well below a 2nd-order voicing.
-    require(cutOctaveHi < 0.15, "High Cut must have a 24 dB/oct slope (500 Hz well below 2nd-order)");
+    // ~80 Hz: lows pass while highs are strongly removed (mirror of Low Cut).
+    const double passLow = toneGainRatio(0.0F, 0.0F, 0.0F, -1.0F, 30.0);
+    const double cutHigh = toneGainRatio(0.0F, 0.0F, 0.0F, -1.0F, 800.0);
+    const double cutOctaveHi = toneGainRatio(0.0F, 0.0F, 0.0F, -1.0F, 160.0);
+    require(passLow > 0.9, "High Cut (filter -1) must pass 30 Hz roughly unchanged");
+    require(cutHigh < 0.05, "High Cut (filter -1) must strongly attenuate 800 Hz");
+    // One octave above the ~80 Hz corner sits well below a 2nd-order voicing.
+    require(cutOctaveHi < 0.15, "High Cut must have a 24 dB/oct slope (160 Hz well below 2nd-order)");
     require(passLow > cutHigh + 0.3, "High Cut must pass lows more than highs (not inverted)");
+
+    // As on a DJM, a quarter turn is already clearly heard: the low-pass has darkened the
+    // top (8 kHz) and the high-pass has thinned the kick (90 Hz). The centre detent is off.
+    require(toneGainRatio(0.0F, 0.0F, 0.0F, -0.25F, 8000.0) < 0.3, "A quarter-turn low-pass must clearly cut 8 kHz");
+    require(toneGainRatio(0.0F, 0.0F, 0.0F, 0.25F, 90.0) < 0.3, "A quarter-turn high-pass must clearly cut 90 Hz");
+    require(std::abs(toneGainRatio(0.0F, 0.0F, 0.0F, 0.015F, 1000.0) - 1.0) < 0.02, "Inside the centre detent the filter is off");
 
     // The sweep is monotonic: a half-throw Low Cut cuts a low tone less than
     // the full throw (corner glides up with the control).

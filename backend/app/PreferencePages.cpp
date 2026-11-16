@@ -456,8 +456,7 @@ void MidiPreferencesPage::listBoxItemClicked(int row, const juce::MouseEvent& e)
     }
     // Click toggles the input (the saved set holds only enabled ones).
     const bool now = !static_cast<bool>(d.getProperty("enabled", false));
-    if (now) prefs.set("enabledMidiInputs", id, true);
-    else if (auto* enabled = prefs.getSection("enabledMidiInputs").getDynamicObject()) enabled->removeProperty(id);
+    prefs.set("enabledMidiInputs", id, now); // false is kept: a supported controller isn't switched back on
     prefs.save();
     pushEnginePreferences(engine, prefs);
 }

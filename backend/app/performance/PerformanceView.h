@@ -146,7 +146,7 @@ class PerformanceView final : public juce::Component, private juce::Timer, priva
     void trackTake();
     void applyAutoGain(int deck);
     // The meters' shown levels (dB) per deck and band, falling back slowly.
-    std::array<std::array<double, 3>, 2> meterDb{{{-100.0, -100.0, -100.0}, {-100.0, -100.0, -100.0}}};
+    std::array<double, 2> meterDb{-100.0, -100.0}; // each channel's level as shown, in dBFS
     double meterAt = 0.0;
     juce::Label status, midiLine;
     juce::Rectangle<int> mixerArea, topBar;

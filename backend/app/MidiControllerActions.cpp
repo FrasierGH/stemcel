@@ -60,17 +60,53 @@ MidiControllerActions::MidiControllerActions(EngineClient& client, ProjectMirror
                                              TimelineViewState& viewState, LiveState& liveState, AppPreferences& preferences,
                                              Hooks h)
     : engine(client), mirror(projectMirror), actions(timelineActions), view(viewState), live(liveState), prefs(preferences),
-      hooks(std::move(h)), subscriptions(client)
+      hooks(std::move(h)), subscriptions(client), deviceScan([this] { engine.send("MIDI_DEVICES_REQUEST"); })
 {
     subscriptions.on("MIDI_CONTROL", [this](const juce::var& p) { handleControl(p); });
     subscriptions.on("MIDI_DEVICES_LIST", [this](const juce::var& p) { devicesList(p); });
     subscriptions.on("MIDI_DECK_SELECTION", [this](const juce::var& p) { deckSelection(p); });
     if (const auto last = engine.latest("MIDI_DEVICES_LIST"); !last.isVoid()) devicesList(last);
+    engine.send("MIDI_DEVICES_REQUEST");
+    deviceScan.startTimer(3000);
 }
 
 MidiControllerActions::~MidiControllerActions()
 {
+    deviceScan.stopTimer();
     stopTimer();
+}
+
+void MidiControllerActions::autoEnable(const juce::var& devices)
+{
+    const auto* inputs = devices.getProperty("inputs", {}).getArray();
+    if (inputs == nullptr) return;
+    // The smoke test drives MIDI by injection; a controller on the desk stays out of it.
+    if (juce::JUCEApplicationBase::getCommandLineParameters().contains("--smoke-test")) return;
+    const auto saved = prefs.getSection("enabledMidiInputs");
+    bool changed = false;
+    for (const auto& input : *inputs)
+    {
+        const auto id = input.getProperty("identifier", {}).toString();
+        if (id.isEmpty() || static_cast<bool>(input.getProperty("enabled", false))) continue;
+        const bool supported = !input.getProperty("controllerProfile", {}).isVoid()
+                               || input.getProperty("performanceMapping", "").toString().isNotEmpty();
+        if (!supported || autoEnableTried.count(id) != 0) continue;
+        const auto choice = saved.getProperty(id, {});
+        if (!choice.isVoid() && !static_cast<bool>(choice)) continue; // switched off by the user
+        autoEnableTried.insert(id);
+        if (choice.isVoid()) prefs.set("enabledMidiInputs", id, true);
+        changed = true;
+        stemcel::log::info("midi", "enabling " + input.getProperty("name", "").toString() + " for the timeline");
+    }
+    if (!changed) return;
+    prefs.save();
+    juce::Array<juce::var> ids;
+    if (const auto* o = prefs.getSection("enabledMidiInputs").getDynamicObject())
+        for (const auto& p : o->getProperties())
+            if (static_cast<bool>(p.value)) ids.add(p.name.toString());
+    // Performance mode opens its controllers itself, and gives them back when it closes.
+    if (hooks.performanceOpen && hooks.performanceOpen()) return;
+    engine.send("MIDI_INPUTS_SET", object({{"identifiers", ids}}));
 }
 
 void MidiControllerActions::handleControl(const juce::var& p)
@@ -554,6 +590,7 @@ void MidiControllerActions::devicesList(const juce::var& p)
     for (const auto& id : enabledInputs)
         if (enabledNow.count(id) == 0) resumeAfterFinalRelease(endHoldsForDevice(id));
     enabledInputs = enabledNow;
+    autoEnable(p);
 
     // Once per launch: each enabled input gets its saved deck selection, or its Default deck
     // preference applied live (never saved, so it re-applies until the cue button saves one).

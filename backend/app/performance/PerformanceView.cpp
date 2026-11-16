@@ -275,14 +275,12 @@ void PerformanceView::onState(const juce::var& p)
         meterAt = now;
         if (const auto* list = p.getProperty("decks", {}).getArray())
             for (int d = 0; d < std::min(kDecks, list->size()); ++d)
-                if (const auto* bands = (*list)[d].getProperty("bands", {}).getArray())
-                    for (int b = 0; b < std::min(3, bands->size()); ++b)
-                    {
-                        const auto peak = static_cast<double>((*bands)[b]);
-                        const double db = peak > 1.0e-5 ? 20.0 * std::log10(peak) : -100.0;
-                        auto& shown = meterDb[static_cast<size_t>(d)][static_cast<size_t>(b)];
-                        shown = std::max(db, std::max(-100.0, shown - fall));
-                    }
+            {
+                const auto peak = static_cast<double>((*list)[d].getProperty("peak", 0.0));
+                const double db = peak > 1.0e-5 ? 20.0 * std::log10(peak) : -100.0;
+                auto& shown = meterDb[static_cast<size_t>(d)];
+                shown = std::max(db, std::max(-100.0, shown - fall));
+            }
     }
     readState(p, state);
     driver.update(state);
@@ -929,33 +927,37 @@ void PerformanceView::paint(juce::Graphics& g)
         for (auto* s : {d.trim.get(), d.eqHi.get(), d.eqMid.get(), d.eqLow.get(), d.filter.get()})
             g.drawText(s->caption().toUpperCase(), s->getBounds().translated(0, s->getHeight() - 4).withHeight(12),
                        juce::Justification::centred);
-    // Each channel's level in three bands (low, mid, high): three bars on the fader's inner
-    // side, and their readouts in dB under it.
-    static const char* bandNames[] = {"LOW", "MID", "HI"};
+    // Each channel's level: one bar on the fader's inner side, green to -9 dB, amber to -3 dB
+    // and red above (each colour fills its own stretch of the bar, as on a mixer), and its
+    // reading in dB under the fader.
     for (int i = 0; i < kDecks; ++i)
     {
         auto fader = decks[static_cast<size_t>(i)].fader->getBounds().toFloat();
-        const float x0 = i == 0 ? fader.getRight() + 3.0F : fader.getX() - 3.0F - 3.0F * 5.0F;
-        for (int b = 0; b < 3; ++b)
+        const double db = meterDb[static_cast<size_t>(i)];
+        auto meter = juce::Rectangle<float>(i == 0 ? fader.getRight() + 3.0F : fader.getX() - 3.0F - 7.0F, fader.getY(), 7.0F, fader.getHeight());
+        drawWell(g, meter);
+        constexpr double kFloorDb = -48.0;
+        const auto heightAt = [&](double atDb) { return meter.getHeight() * static_cast<float>(juce::jlimit(0.0, 1.0, (atDb - kFloorDb) / -kFloorDb)); };
+        const float level = heightAt(db);
+        const std::array<std::pair<double, juce::Colour>, 3> zones{{{-9.0, colours::emerald500}, {-3.0, colours::amber400}, {0.0, colours::red500}}};
+        float from = 0.0F;
+        for (const auto& [top, colour] : zones)
         {
-            const double db = meterDb[static_cast<size_t>(i)][static_cast<size_t>(b)];
-            auto meter = juce::Rectangle<float>(x0 + static_cast<float>(b) * 5.0F, fader.getY(), 4.0F, fader.getHeight());
-            drawWell(g, meter);
-            const float level = static_cast<float>(juce::jlimit(0.0, 1.0, (db + 48.0) / 48.0));
-            g.setColour(db > -1.0 ? colours::red500 : (db > -9.0 ? colours::amber400 : colours::emerald500));
-            g.fillRect(meter.withTop(meter.getBottom() - meter.getHeight() * level));
+            const float to = std::min(level, heightAt(top));
+            if (to > from)
+            {
+                g.setColour(colour);
+                g.fillRect(meter.getX() + 1.0F, meter.getBottom() - to, meter.getWidth() - 2.0F, to - from);
+            }
+            from = std::max(from, heightAt(top));
         }
-        auto readouts = juce::Rectangle<float>(fader.getX() - 22.0F, fader.getBottom() + 2.0F, fader.getWidth() + 44.0F, 36.0F);
-        g.setFont(uiFont(9.5F));
-        for (int b = 0; b < 3; ++b)
-        {
-            const double db = meterDb[static_cast<size_t>(i)][static_cast<size_t>(b)];
-            auto line = readouts.removeFromTop(12.0F);
-            g.setColour(colours::textFaint);
-            g.drawText(bandNames[b], line.removeFromLeft(26.0F), juce::Justification::centredLeft);
-            g.setColour(db > -1.0 ? colours::red500 : colours::textDim);
-            g.drawText(db <= -60.0 ? juce::String("-inf") : juce::String(db, 1), line, juce::Justification::centredRight);
-        }
+        // The -9 and -3 dB marks, so the zones read even when quiet.
+        g.setColour(colours::textFaint.withAlpha(0.5F));
+        for (const double mark : {-9.0, -3.0}) g.fillRect(meter.getX(), meter.getBottom() - heightAt(mark), meter.getWidth(), 1.0F);
+        auto readout = juce::Rectangle<float>(fader.getX() - 16.0F, fader.getBottom() + 2.0F, fader.getWidth() + 32.0F, 12.0F);
+        g.setFont(uiFont(10.0F, true));
+        g.setColour(db > -3.0 ? colours::red500 : (db > -9.0 ? colours::amber400 : colours::textDim));
+        g.drawText(db <= -60.0 ? juce::String("-inf") : juce::String(db, 1), readout, juce::Justification::centred);
     }
 }
 
@@ -1026,12 +1028,12 @@ void PerformanceView::layoutMixer(juce::Rectangle<int> area)
         auto col = i == 0 ? r.withWidth(half) : r.withTrimmedLeft(half);
         // The knobs give way before the fader does: it keeps 90 px, with the meter readouts
         // and the CUE button under and over it.
-        const int knob = juce::jmax(22, juce::jmin(44, juce::jmin(col.getWidth() - 10, (col.getHeight() - 26 - 4 - 38 - 90) / 5 - 4)));
+        const int knob = juce::jmax(22, juce::jmin(44, juce::jmin(col.getWidth() - 10, (col.getHeight() - 26 - 4 - 14 - 90) / 5 - 4)));
         for (auto* s : {d.trim.get(), d.eqHi.get(), d.eqMid.get(), d.eqLow.get(), d.filter.get()})
             s->setBounds(col.removeFromTop(knob + 4).withSizeKeepingCentre(knob, knob));
         d.hpCue->setBounds(col.removeFromTop(26).reduced(6, 2));
         col.removeFromTop(4);
-        col.removeFromBottom(38); // the meter readouts
+        col.removeFromBottom(14); // the meter's reading
         d.fader->setBounds(col.withSizeKeepingCentre(30, col.getHeight()));
     }
 }

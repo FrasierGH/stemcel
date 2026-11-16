@@ -797,7 +797,7 @@ void handleMidiDevicesRequest(stemcel::BridgeServer& bridge)
 {
     midiInputMonitor().setBridge(bridge);
     const auto envelope = buildMidiDevicesListEnvelope();
-    stemcel::log::info("midi",
+    stemcel::log::debug("midi",
                          "enumerated " +
                              juce::String(envelope["inputs"].getArray()->size()) +
                              " MIDI input device(s)");
