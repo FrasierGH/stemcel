@@ -21,8 +21,21 @@ Open it with the **Perform** button in the transport bar, or **View ▸ Performa
     cue point on it.
   - The record glows while its jog is touched.
   - **DISCS** in the top bar turns them off.
-- **Meters:** one bar per channel beside its fader, green to -9 dB, amber to -3 dB and red
-  above, with its level in dB under the fader.
+- **Meters:** each channel's L and R beside its fader, drawn as the timeline's master meter
+  is: segments green to -12 dB, amber to -3 dB and red above, a peak hold over each, the
+  scale's marks on the outside, and the level in dB under the fader.
+- **The Beat FX display** opens a list of every effect when clicked, as rekordbox's FX panel
+  does; FX SELECT on the controller still steps through them.
+- **Stem Mix:** see [below](#stem-mix).
+- **4 DECKS** in the top bar: decks 3 and 4 below 1 and 2, the mixer with four channels (3 1 2
+  4, as rekordbox's), CH SELECT with 3 and 4, and the four close-ups stacked across the top.
+  Decks 1 and 3 are on the crossfader's left, 2 and 4 on its right; 3 and 4 share the sampler's
+  pads with 1 and 2. **CTRL 3** and **CTRL 4** put a two-deck controller's left or right side on
+  deck 3 or 4 (its lights follow); a controller with deck buttons of its own (the Mixtrack
+  Platinum FX / Pro FX, the MC7000) reaches them directly.
+- **The timeline strip** names each track beside its lane (hover a thin lane for its name).
+- **Debug > Rescan Controllers** looks for controllers again, for one plugged in after the
+  mode opened or freed by another program.
 - **STACKED** in the top bar puts both decks' close-up waveforms one above the other across
   the width, on one time scale around one centre line, so two decks in sync line up beat for
   beat. The deck screens keep the title, the time and the overview.
@@ -35,6 +48,33 @@ Open it with the **Perform** button in the transport bar, or **View ▸ Performa
   already clearly heard, a full turn leaves only the hats (high-pass) or the sub (low-pass),
   and the resonance rises as it closes. The timeline's filter is the same, so takes play back
   as they sounded.
+
+## Stem Mix
+
+A deck's track in its stems: the vocals, the instrumental (everything but the vocals, drums
+and bass), the bass and the drums, each taken in and out of the deck's mix on the pads.
+
+- **Double-press SAMPLER** on the controller (or on screen), or press the deck's **STEMS**
+  button: the deck's pads become the stems. SAMPLER once more goes back to the sampler.
+- **STEMS** on a track without stems asks how to split it: **vocals and instrumental** (two
+  stems from one model, a good deal faster; BASS and DRUMS stay dark) or the **ensemble** (all
+  four). The controller's double-press uses the split chosen last.
+- Pads **1–4** are VOCAL, INST, BASS and DRUMS: lit while the stem plays, a press takes it out
+  or back in (in a few milliseconds, without a click). Pads **5–8** play that stem alone; the
+  same pad again brings them all back. **SHIFT + a pad** brings them all back too.
+- A key over the pads shows which pad is which stem, in its colour, dimmed when out; the deck
+  screen shows the stems (V I B D) whatever the pads are doing.
+- With every stem in, the deck plays the track itself, untouched.
+
+**Where the stems come from.** A track whose stems are in the library (separated before) has
+them on the deck as it loads. Otherwise STEMS (or Stem Mix chosen on the controller) separates
+them: the vocals with Mel-Band RoFormer, the drums and bass with BS-Roformer SW, as the
+library's Separate Stems does (the button shows the progress), and the deck takes them when
+it ends. The instrumental is written once as a library stem of its own ("Melody — title").
+
+**Recording.** A stretch played with stems out goes into the take as the stems that were in:
+each on the deck's track for that stem ("Deck 1 Vocal", "Deck 1 Drums", ...) with the deck's
+automation, so it plays back as it sounded.
 
 ## Recording into the timeline
 
@@ -177,6 +217,9 @@ cues set on a deck, and its **Export to USB** puts them on the stick.
 
 ## Pioneer DJ DDJ-400
 
+Other controllers have profiles too: see
+[the controller guide](midi-controllers.md#performance-mode-controllers).
+
 Connect the controller before opening the mode. It is enabled for you while the mode is
 open. While the mode is open the controller drives the decks, not the timeline. The MIDI
 line at the top right shows the last message and what it was mapped to.
@@ -203,7 +246,7 @@ line at the top right shows the last message and what it was mapped to.
 | HOT CUE | An empty pad stores a hot cue (a loop hot cue in a loop); a set pad jumps to it, keeping the beat with quantize. Paused, it plays while held | Deletes the hot cue |
 | BEAT LOOP | 1/4, 1/2, 1, 2 / 4, 8, 16, 32-beat loops; the same pad again ends it | |
 | BEAT JUMP | Odd pads back, even pads forward: FINE (5 ms) … 128 beats on three pages | Pads 7 / 8: previous / next page |
-| SAMPLER | Pads 1–8 play slots 1–8 (deck 1) or 9–16 (deck 2) of the bank, from the start | Stops a playing slot; on an idle slot, loads the browser's track into it |
+| SAMPLER | Pads 1–8 play slots 1–8 (deck 1) or 9–16 (deck 2) of the bank, from the start. Pressed twice quickly: [Stem Mix](#stem-mix) | Stops a playing slot; on an idle slot, loads the browser's track into it |
 | KEYBOARD | The first pad picks (or sets) a hot cue; then the pads play it at pitches | Pads 7 / 8: page; 1–6: pick another hot cue |
 | KEY SHIFT | Shifts the key: +4…+7 / ±0…+3, and two more pages | Pads 7 / 8: page; pad 1: key reset |
 | PAD FX1 / PAD FX2 | Hold for an effect: two banks of 16, the second 8 with SHIFT. PAD FX2 pad 8 is the Release FX | The other 8 |

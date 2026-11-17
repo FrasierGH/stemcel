@@ -1,6 +1,7 @@
 #include "TransportBar.h"
 
 #include "Db.h"
+#include "LevelMeter.h"
 #include "Theme.h"
 #include "TimelineView.h"
 
@@ -14,7 +15,6 @@ const juce::StringArray kGrids{"bar", "beat", "half", "quarter", "free"};
 const juce::StringArray kGridLabels{"Bar", "Beat", "Half beat", "Quarter beat", "Free"};
 constexpr double kMinBpm = 20.0;
 constexpr double kMaxBpm = 300.0;
-constexpr float kFloorDb = -60.0f; // the bottom of the master meter
 } // namespace
 
 BpmField::BpmField()
@@ -346,35 +346,15 @@ void TransportBar::paint(juce::Graphics& g)
     area.removeFromRight(3);
     auto labels = area.removeFromLeft(10);
     auto scale = area.removeFromBottom(10);
-    drawWell(g, area.toFloat().expanded(1.0f));
-    auto toX = [&area](float dbValue) { return area.getX() + (juce::jlimit(kFloorDb, 0.0f, dbValue) - kFloorDb) / -kFloorDb * area.getWidth(); };
+    auto toX = [&area](float dbValue) { return area.getX() + meter::proportion(dbValue) * area.getWidth(); };
+    meter::drawSegments(g, area.toFloat(), {live.masterPeakL, live.masterPeakR}, {holdL, holdR}, false);
     g.setFont(uiFont(9.5f, true));
-    for (int ch = 0; ch < 2; ++ch)
-    {
-        const float peak = ch == 0 ? live.masterPeakL : live.masterPeakR;
-        const float held = ch == 0 ? holdL : holdR;
-        const auto lane = area.withHeight(area.getHeight() / 2).withY(area.getY() + ch * area.getHeight() / 2).reduced(0, 1).toFloat();
-        g.setColour(colours::textFaint);
-        g.drawText(ch == 0 ? "L" : "R", labels.withHeight(lane.toNearestInt().getHeight()).withY(lane.toNearestInt().getY()), juce::Justification::centred);
-        const float level = toX(static_cast<float>(db::linearToDb(peak)));
-        // Segments two pixels wide with a gap, coloured by where they sit; the unlit ones
-        // faintly, like LEDs that are off.
-        for (float x = lane.getX(); x < lane.getRight(); x += 3.0f)
-        {
-            const float at = kFloorDb + (x - area.getX()) / area.getWidth() * -kFloorDb;
-            const auto colour = at > -3.0f ? colours::red500 : at > -12.0f ? colours::amber400 : colours::emerald500;
-            g.setColour(x < level ? colour : colour.withAlpha(0.12f));
-            g.fillRect(x, lane.getY(), 2.0f, lane.getHeight());
-        }
-        if (held > 0.0f)
-        {
-            g.setColour(colours::zinc100);
-            g.fillRect(toX(static_cast<float>(db::linearToDb(held))) - 1.0f, lane.getY(), 2.0f, lane.getHeight());
-        }
-    }
     g.setColour(colours::textFaint);
+    for (int ch = 0; ch < 2; ++ch)
+        g.drawText(ch == 0 ? "L" : "R", labels.withHeight(area.getHeight() / 2).withY(area.getY() + ch * area.getHeight() / 2),
+                   juce::Justification::centred);
     g.setFont(uiFont(9.0f));
-    for (const int mark : {-48, -24, -12, -6, 0})
+    for (const int mark : meter::kMarks)
     {
         const float x = toX(static_cast<float>(mark));
         g.drawVerticalLine(juce::roundToInt(x), static_cast<float>(scale.getY()), static_cast<float>(scale.getY() + 2));

@@ -20,6 +20,8 @@
 #include "ProjectModel.h"
 #include "TimelineActions.h"
 #include "WaveformStore.h"
+#include "Stems.h"
+#include "LevelMeter.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -47,6 +49,7 @@ class PerformanceView final : public juce::Component, private juce::Timer, priva
         std::function<void(const juce::String&, bool)> toast;
         std::function<void()> exit;
         LiveState& live;
+        StemService& stems; // separations for Stem Mix
     };
 
     explicit PerformanceView(Context context);
@@ -55,9 +58,18 @@ class PerformanceView final : public juce::Component, private juce::Timer, priva
     void paint(juce::Graphics&) override;
     void resized() override;
     bool keyPressed(const juce::KeyPress&) override;
+    void mouseDown(const juce::MouseEvent&) override;
+    void mouseMove(const juce::MouseEvent&) override;
 
     // Ends the take (if any) and writes it into the timeline; the view closes after.
     void finishTake(std::function<void()> then = {});
+    // Debug > Rescan Controllers: finds and opens the controllers afresh.
+    void rescanControllers();
+    // For the dancer: the beats of the deck leading the mix (the master, else one playing),
+    // while one plays.
+    std::optional<double> danceBeats() const;
+    // A separation's progress (StemService's), for the STEMS buttons: percent < 0 when idle.
+    void stemProgress(double percent, const juce::String& stage);
     // Redo from here (PerformanceRedo.cpp): on, and off (the pass written).
     void startRedo();
     void stopRedo();
@@ -77,6 +89,7 @@ class PerformanceView final : public juce::Component, private juce::Timer, priva
     JogPlatter* platterForTest(int deck) { return platters[static_cast<size_t>(deck - 1)].get(); }
     StackedWaveforms* stackedForTest() { return stacked.get(); }
     void setStackedForTest(bool on) { stackButton.setToggleState(on, juce::sendNotification); }
+    void setFourDecksForTest(bool on) { fourButton.setToggleState(on, juce::sendNotification); }
     void loadForTest(const juce::String& itemId, int deck) { loadItem(itemId, deck); }
     const PerformanceTake& takeForTest() const { return take; }
     void bindForTest(int deck, const juce::String& trackId)
@@ -106,9 +119,13 @@ class PerformanceView final : public juce::Component, private juce::Timer, priva
         std::unique_ptr<ControlSlider> tempo, trim, eqHi, eqMid, eqLow, filter, fader;
         std::unique_ptr<HoldButton> hpCue;
         std::array<std::unique_ptr<HoldButton>, 8> pads, modes;
-        std::unique_ptr<HoldButton> loadButton;
+        std::unique_ptr<HoldButton> loadButton, stemsButton;
         double posAt = 0.0;   // the state's position, and when it came
         double receivedAt = 0.0;
+        // The position the screens show: it runs on at the deck's rate every frame and is eased
+        // toward the engine's, so the waveforms scroll steadily rather than stepping with each
+        // state message.
+        double shownPos = 0.0, shownAt = 0.0;
         double lastLoadPress = 0.0;
     };
 
@@ -136,11 +153,36 @@ class PerformanceView final : public juce::Component, private juce::Timer, priva
     void refreshTargets();
     void clearRegion(const juce::String& trackId, double fromMs, double toMs);
     void buildFx();
+    // The Beat FX display, clicked: every effect in a menu, as rekordbox's FX panel lists them.
+    juce::Rectangle<int> fxDisplayArea() const;
+    void showFxMenu();
     void enableControllers(const juce::var& devices);
     void restoreControllers();
     void openControllers();
     juce::String padLabel(int deck, int pad) const;
-    void layoutDeck(int deck, juce::Rectangle<int> area);
+    void layoutDeck(int deck, juce::Rectangle<int> area, bool compact = false);
+
+    // Stem Mix (PerformanceStems.cpp).
+    struct DeckStems
+    {
+        int serial = 0;          // the deck's track these are for
+        bool loading = false;    // PERF_STEMS sent, not answered
+        bool separating = false; // a separation for it is running
+        bool failed = false, asked = false;
+        bool twoStems = false; // vocals and instrumental only (no bass or drums)
+    };
+    std::array<DeckStems, kDecks> deckStems;
+    std::array<juce::Rectangle<int>, kDecks> legendAreas;
+    double stemPercent = -1.0;
+    juce::String stemStage;
+    std::array<juce::String, kStems> stemItemsFor(const juce::String& itemId) const;
+    void stemsButtonPressed(int deck);
+    void prepareStems(int deck, bool separateIfMissing);
+    void prepareStems(int deck, bool separateIfMissing, bool twoStems);
+    void onStemsReady(const juce::var&);
+    void stemTick();
+    juce::String stemsButtonText(int deck) const;
+    void paintStemLegend(juce::Graphics& g, int deck) const;
     void layoutMixer(juce::Rectangle<int> area);
 
     // Redo from here (PerformanceRedo.cpp).
@@ -186,7 +228,7 @@ class PerformanceView final : public juce::Component, private juce::Timer, priva
     std::unique_ptr<ControlSlider> crossfader;
     // The Beat FX section, Sound Color FX and Release FX, and the sampler.
     std::unique_ptr<HoldButton> fxPrev, fxNext, beatPrev, beatNext, fxOnButton, releaseButton;
-    std::array<std::unique_ptr<HoldButton>, 3> fxChannelButtons;
+    std::array<std::unique_ptr<HoldButton>, 5> fxChannelButtons; // CH SELECT codes 0..4 (1, 2, M, 3, 4)
     std::unique_ptr<ControlSlider> fxLevelKnob, samplerVolumeKnob;
     juce::ComboBox colorFxBox, releaseFxBox, samplerBankBox;
     juce::Rectangle<int> fxArea;
@@ -194,19 +236,29 @@ class PerformanceView final : public juce::Component, private juce::Timer, priva
     PerfBrowser browser;
     juce::TextButton exitButton{"Exit"}, recButton{"REC"}, autoGainButton{"AUTO GAIN"}, plattersButton{"DISCS"},
         stackButton{"STACKED"};
+    // Four decks: 4 DECKS shows decks 3 and 4 (and their channels), and CTRL 3 / CTRL 4 put a
+    // two-deck controller's left or right side on them.
+    juce::TextButton fourButton{"4 DECKS"};
+    std::array<juce::TextButton, 2> layerButtons;
+    bool fourDecks() const { return fourButton.getToggleState(); }
+    void setDeckShown(int deck, bool shown);
+    std::array<bool, kDecks> meterOnRight{true, false, true, false};
     std::unique_ptr<StackedWaveforms> stacked; // the close-ups one above the other (STACKED)
     std::unique_ptr<TimelineStrip> timelineStrip;
-    std::array<std::unique_ptr<JogPlatter>, 2> platters;
+    std::array<std::unique_ptr<JogPlatter>, kDecks> platters;
     // The take being recorded, as the timeline strip shows it: each deck's audible stretches.
     std::vector<TimelineStrip::Pending> pendingTake;
-    std::array<int, 2> openStretch{-1, -1};
+    std::array<int, kDecks> openStretch{-1, -1, -1, -1};
     bool trackingTake = false;
     double takeStartMs = 0.0, takeStartClock = 0.0;
     void trackTake();
     void applyAutoGain(int deck);
-    // The meters' shown levels (dB) per deck and band, falling back slowly.
-    std::array<double, 2> meterDb{-100.0, -100.0}; // each channel's level as shown, in dBFS
+    // Each channel's meter: its L and R levels as shown (linear, falling back slowly), and their
+    // peak holds.
+    std::array<std::array<float, 2>, kDecks> meterLevels{};
+    std::array<std::array<meter::PeakHold, 2>, kDecks> meterHolds{};
     double meterAt = 0.0;
+    juce::Rectangle<float> meterArea(int deck) const;
     juce::Label status, midiLine;
     juce::Rectangle<int> mixerArea, topBar;
     PerformanceTake take;

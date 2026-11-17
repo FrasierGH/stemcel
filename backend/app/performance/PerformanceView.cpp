@@ -93,6 +93,39 @@ PerformanceView::PerformanceView(Context context)
         resized();
     };
     setUpRedo();
+    addAndMakeVisible(fourButton);
+    fourButton.setClickingTogglesState(true);
+    fourButton.setToggleState(static_cast<bool>(ctx.prefs.get("performance", "fourDecks", false)), juce::dontSendNotification);
+    fourButton.setTooltip("Four decks: 1 and 2 above, 3 and 4 below, with four channels on the mixer");
+    fourButton.onClick = [this]
+    {
+        ctx.prefs.set("performance", "fourDecks", fourButton.getToggleState());
+        ctx.prefs.save();
+        // Back to two: the controller's sides back on decks 1 and 2.
+        if (!fourDecks())
+            for (int side = 1; side <= 2; ++side)
+            {
+                auto* o = new juce::DynamicObject();
+                o->setProperty("side", side);
+                o->setProperty("on", false);
+                ctx.engine.send("PERF_DECK_LAYER", juce::var(o));
+            }
+        resized();
+    };
+    for (int side = 1; side <= 2; ++side)
+    {
+        auto& b = layerButtons[static_cast<size_t>(side - 1)];
+        b.setButtonText(side == 1 ? "CTRL 1" : "CTRL 2");
+        b.setTooltip(side == 1 ? "The controller's left deck: deck 1 or deck 3" : "The controller's right deck: deck 2 or deck 4");
+        b.onClick = [this, side]
+        {
+            auto* o = new juce::DynamicObject();
+            o->setProperty("side", side);
+            o->setProperty("on", !state.layers[static_cast<size_t>(side - 1)]);
+            ctx.engine.send("PERF_DECK_LAYER", juce::var(o));
+        };
+        addChildComponent(b);
+    }
     addAndMakeVisible(stackButton);
     stackButton.setClickingTogglesState(true);
     stackButton.setToggleState(static_cast<bool>(ctx.prefs.get("performance", "stackedWaveforms", false)), juce::dontSendNotification);
@@ -124,6 +157,8 @@ PerformanceView::PerformanceView(Context context)
     subscriptions.on("PERF_LOADED", [this](const juce::var& p) { onLoaded(p); });
     subscriptions.on("PERF_LOAD_COMPLETE", [this](const juce::var& p) { onLoadComplete(p); });
     subscriptions.on("PERF_ITEM_ATTACHED", [this](const juce::var& p) { onItemAttached(p); });
+    subscriptions.on("PERF_STEMS_READY", [this](const juce::var& p) { onStemsReady(p); });
+    take.stemsOf = [this](const juce::String& itemId) { return stemItemsFor(itemId); };
     subscriptions.on("PERF_UI", [this](const juce::var& p) { onUi(p); });
     subscriptions.on("PERF_CUES", [this](const juce::var& p) { onCues(p); });
     subscriptions.on("PERF_REC", [this](const juce::var& p) { take.add(p); });
@@ -169,6 +204,8 @@ void PerformanceView::build(int deck)
     };
     hold(d.play, "PLAY", "play", colours::emerald500);
     hold(d.cue, "CUE", "cue", colours::amber500);
+    d.play->setRound(true);
+    d.cue->setRound(true);
     hold(d.sync, "SYNC", "sync", colours::accent);
     hold(d.loopIn, "IN", "loopIn", colours::amber400);
     hold(d.loopOut, "OUT", "loopOut", colours::amber400);
@@ -187,6 +224,10 @@ void PerformanceView::build(int deck)
     d.loadButton = std::make_unique<HoldButton>("LOAD " + juce::String(deck));
     d.loadButton->onPress = [this, deck](bool down) { if (down) loadButton(deck); };
     addAndMakeVisible(*d.loadButton);
+    // Stem Mix: the stem pads (separating the track first when the library has no stems of it).
+    d.stemsButton = std::make_unique<HoldButton>("STEMS", stemColour(1));
+    d.stemsButton->onPress = [this, deck](bool down) { if (down) stemsButtonPressed(deck); };
+    addAndMakeVisible(*d.stemsButton);
 
     auto slider = [&](std::unique_ptr<ControlSlider>& s, const juce::String& control, juce::Slider::SliderStyle style,
                       const juce::String& caption)
@@ -237,12 +278,13 @@ void PerformanceView::buildFx()
     press(beatNext, ">", "fxBeatNext");
     press(fxOnButton, "ON", "fxOn", colours::red500);
     press(releaseButton, "RELEASE", "fxRelease", colours::amber500);
-    const char* channelNames[3] = {"1", "2", "M"};
-    for (int i = 0; i < 3; ++i)
+    // Indexed by CH SELECT code: 1, 2, M, 3, 4.
+    const char* channelNames[5] = {"1", "2", "M", "3", "4"};
+    for (int code = 0; code < 5; ++code)
     {
-        auto& b = fxChannelButtons[static_cast<size_t>(i)];
-        b = std::make_unique<HoldButton>(channelNames[i], colours::accent);
-        b->onPress = [&engine, i](bool down) { if (down) sendControl(engine, "fxChannel", 0, 1.0, i); };
+        auto& b = fxChannelButtons[static_cast<size_t>(code)];
+        b = std::make_unique<HoldButton>(channelNames[code], colours::accent);
+        b->onPress = [&engine, code](bool down) { if (down) sendControl(engine, "fxChannel", 0, 1.0, code); };
         addAndMakeVisible(*b);
     }
     fxLevelKnob = std::make_unique<ControlSlider>(engine, "fxLevel", 0, juce::Slider::RotaryHorizontalVerticalDrag, "Level/Depth");
@@ -283,17 +325,23 @@ void PerformanceView::onState(const juce::var& p)
 {
     {
         // The meters: a new peak shows at once; otherwise the reading falls 20 dB a second.
-        const double now = juce::Time::getMillisecondCounterHiRes() / 1000.0;
-        const double fall = meterAt > 0.0 ? std::min(1.0, now - meterAt) * 20.0 : 100.0;
+        const double now = juce::Time::getMillisecondCounterHiRes();
+        const double fallDb = meterAt > 0.0 ? std::min(1.0, (now - meterAt) / 1000.0) * 20.0 : 100.0;
+        const auto fall = static_cast<float>(std::pow(10.0, -fallDb / 20.0));
         meterAt = now;
         if (const auto* list = p.getProperty("decks", {}).getArray())
             for (int d = 0; d < std::min(kDecks, list->size()); ++d)
-            {
-                const auto peak = static_cast<double>((*list)[d].getProperty("peak", 0.0));
-                const double db = peak > 1.0e-5 ? 20.0 * std::log10(peak) : -100.0;
-                auto& shown = meterDb[static_cast<size_t>(d)];
-                shown = std::max(db, std::max(-100.0, shown - fall));
-            }
+                for (size_t side = 0; side < 2; ++side)
+                {
+                    const auto& entry = (*list)[d];
+                    const auto peak = static_cast<float>(static_cast<double>(entry.getProperty(side == 0 ? "peakL" : "peakR", entry.getProperty("peak", 0.0))));
+                    auto& shown = meterLevels[static_cast<size_t>(d)][side];
+                    shown = std::max(peak, shown * fall);
+                    meterHolds[static_cast<size_t>(d)][side].update(peak, now);
+                }
+        // Only the meters and their readings change: the fader's column, with the meter beside it.
+        for (int d = 0; d < kDecks; ++d)
+            repaint(decks[static_cast<size_t>(d)].fader->getBounds().expanded(20, 16).getUnion(meterArea(d + 1).expanded(8.0F, 2.0F).toNearestInt()));
     }
     readState(p, state);
     driver.update(state);
@@ -320,10 +368,26 @@ void PerformanceView::onState(const juce::var& p)
         d.eqLow->follow(s.eqLow);
         d.filter->follow(s.filter);
         d.fader->follow(s.fader);
-        for (int m = 0; m < 8; ++m) d.modes[static_cast<size_t>(m)]->setLit(s.padMode == kModes[m]);
+        const bool stemMix = s.padMode == "stems";
+        for (int m = 0; m < 8; ++m)
+            d.modes[static_cast<size_t>(m)]->setLit(s.padMode == kModes[m] || (stemMix && m == 3),
+                                                    stemMix && m == 3 ? stemColour(1) : colours::accent);
+        d.stemsButton->setLit(stemMix || s.hasStems, stemMix ? stemColour(1) : stemColour(1).withAlpha(0.45F));
+        d.stemsButton->setText(stemsButtonText(i + 1));
+        if (stemMix != !legendAreas[static_cast<size_t>(i)].isEmpty()) resized(); // the key comes and goes
+        if (stemMix) repaint(legendAreas[static_cast<size_t>(i)]);
         for (int pad = 0; pad < 8; ++pad)
         {
             bool lit = false;
+            if (stemMix)
+            {
+                const int bit = 1 << (pad % kStems);
+                const bool there = !s.hasStems || (s.stemsPresent & bit) != 0;
+                lit = s.hasStems && there && (pad < kStems ? (s.stemsOff & bit) == 0 : s.stemsOff == (s.stemsPresent & ~bit));
+                d.pads[static_cast<size_t>(pad)]->setLit(lit, stemColour(pad % kStems));
+                d.pads[static_cast<size_t>(pad)]->setText(padLabel(i + 1, pad));
+                continue;
+            }
             if (s.padMode == "hotCue") lit = s.hotCues[static_cast<size_t>(pad)].set();
             else if (s.padMode == "beatLoop")
             {
@@ -335,11 +399,11 @@ void PerformanceView::onState(const juce::var& p)
             else if (s.padMode == "keyboard") lit = s.keyboardCue < 0 ? s.hotCues[static_cast<size_t>(pad)].set() : true;
             else if (s.padMode == "sampler")
             {
-                const int slot = state.sampler.bank * 16 + i * 8 + pad;
+                const int slot = state.sampler.bank * 16 + (i % 2) * 8 + pad;
                 lit = state.sampler.isLoaded(slot);
             }
             else if (s.padMode == "padFx1" || s.padMode == "padFx2") lit = s.padFxHeld == pad || s.padFxHeld == pad + 8;
-            d.pads[static_cast<size_t>(pad)]->setLit(lit);
+            d.pads[static_cast<size_t>(pad)]->setLit(lit, colours::accent);
             d.pads[static_cast<size_t>(pad)]->setText(padLabel(i + 1, pad));
         }
     }
@@ -347,7 +411,13 @@ void PerformanceView::onState(const juce::var& p)
     fxLevelKnob->follow(state.fx.level);
     samplerVolumeKnob->follow(state.sampler.volume);
     fxOnButton->setLit(state.fx.on);
-    for (int i = 0; i < 3; ++i) fxChannelButtons[static_cast<size_t>(i)]->setLit(state.fx.channel == i);
+    for (int code = 0; code < 5; ++code) fxChannelButtons[static_cast<size_t>(code)]->setLit(state.fx.channel == code);
+    for (size_t side = 0; side < 2; ++side)
+        if (layerButtons[side].getToggleState() != state.layers[side])
+        {
+            layerButtons[side].setToggleState(state.layers[side], juce::dontSendNotification);
+            layerButtons[side].setButtonText(side == 0 ? (state.layers[0] ? "CTRL 3" : "CTRL 1") : (state.layers[1] ? "CTRL 4" : "CTRL 2"));
+        }
     if (colorFxBox.getSelectedId() != state.fx.colorType + 1) colorFxBox.setSelectedId(state.fx.colorType + 1, juce::dontSendNotification);
     if (releaseFxBox.getSelectedId() != state.fx.releaseType + 1) releaseFxBox.setSelectedId(state.fx.releaseType + 1, juce::dontSendNotification);
     if (samplerBankBox.getSelectedId() != state.sampler.bank + 1) samplerBankBox.setSelectedId(state.sampler.bank + 1, juce::dontSendNotification);
@@ -372,7 +442,7 @@ void PerformanceView::trackTake()
     {
         trackingTake = false;
         if (!pendingTake.empty()) pendingTake.clear();
-        openStretch = {-1, -1};
+        openStretch.fill(-1);
         return;
     }
     if (!trackingTake)
@@ -381,7 +451,7 @@ void PerformanceView::trackTake()
         takeStartMs = ctx.playheadMs ? ctx.playheadMs() : ctx.live.positionMs;
         takeStartClock = state.clock;
         pendingTake.clear();
-        openStretch = {-1, -1};
+        openStretch.fill(-1);
     }
     const double rate = state.sampleRate > 0.0 ? state.sampleRate : 44100.0;
     const double at = takeStartMs + (state.clock - takeStartClock) / rate * 1000.0;
@@ -528,7 +598,7 @@ void PerformanceView::onUi(const juce::var& p)
     else if (control == "browsePressShift" && value > 0.5) browser.press(true);
     else if (control == "load" && value > 0.5) loadButton(deck);
     else if (control == "samplerLoad")
-        loadSampleSlot(state.sampler.bank * 16 + (deck - 1) * 8 + static_cast<int>(p.getProperty("index", 0)));
+        loadSampleSlot(state.sampler.bank * 16 + ((deck - 1) % 2) * 8 + static_cast<int>(p.getProperty("index", 0)));
 }
 
 void PerformanceView::loadButton(int deck)
@@ -541,7 +611,7 @@ void PerformanceView::loadButton(int deck)
     {
         auto* o = new juce::DynamicObject();
         o->setProperty("deck", deck);
-        o->setProperty("fromDeck", deck == 1 ? 2 : 1);
+        o->setProperty("fromDeck", deck % 2 == 1 ? deck + 1 : deck - 1); // the deck beside it
         ctx.engine.send("PERF_LOAD", juce::var(o));
         d.lastLoadPress = 0.0;
         return;
@@ -911,6 +981,16 @@ void PerformanceView::enableControllers(const juce::var& envelope)
     openControllers();
 }
 
+void PerformanceView::rescanControllers()
+{
+    controllersEnabled = false;
+    controllerOpened = false;
+    openAttempts = 0;
+    controllerIds.clear();
+    controllerInputs.clear();
+    ctx.engine.send("MIDI_DEVICES_REQUEST"); // answered in enableControllers
+}
+
 void PerformanceView::openControllers()
 {
     // Answered by a MIDI_DEVICES_LIST saying which inputs opened (enableControllers above).
@@ -937,6 +1017,12 @@ void PerformanceView::restoreControllers()
 juce::String PerformanceView::padLabel(int deck, int pad) const
 {
     const auto& s = state.decks[static_cast<size_t>(deck - 1)];
+    if (s.padMode == "stems")
+    {
+        // A two-stem split has no BASS or DRUMS: those pads are blank.
+        if (s.hasStems && (s.stemsPresent & (1 << (pad % kStems))) == 0) return {};
+        return (pad < kStems ? juce::String() : juce::String("SOLO ")) + kStemNames[pad % kStems];
+    }
     if (s.padMode == "hotCue") return juce::String::charToString(static_cast<juce::juce_wchar>('A' + pad));
     if (s.padMode == "beatLoop") return kBeatLoopLabels[pad];
     if (s.padMode == "beatJump")
@@ -952,7 +1038,7 @@ juce::String PerformanceView::padLabel(int deck, int pad) const
     }
     if (s.padMode == "sampler")
     {
-        const int slot = state.sampler.bank * 16 + (deck - 1) * 8 + pad;
+        const int slot = state.sampler.bank * 16 + ((deck - 1) % 2) * 8 + pad;
         const auto& name = sampleNames[static_cast<size_t>(slot)];
         return name.isNotEmpty() ? name : "S" + juce::String(slot % 16 + 1);
     }
@@ -990,20 +1076,28 @@ void PerformanceView::timerCallback()
             continue;
         }
         const bool moving = s.playing || s.previewing || s.touched;
-        const double pos = d.posAt + (moving ? (now - d.receivedAt) / 1000.0 * s.rate : 0.0);
+        const double target = d.posAt + (moving ? (now - d.receivedAt) / 1000.0 * s.rate : 0.0);
+        const double predicted = d.shownPos + (moving ? (now - d.shownAt) / 1000.0 * s.rate : 0.0);
+        const double error = target - predicted;
+        // A jump (a cue, a loop, a seek) or a stop shows at once; otherwise the drift is eased out.
+        d.shownPos = !moving || std::abs(error) > 0.05 ? target : predicted + error * 0.12;
+        d.shownAt = now;
+        const double pos = d.shownPos;
         d.display->update(s, infos[static_cast<size_t>(i)], pos, state.masterDeck == i + 1);
         if (auto& platter = platters[static_cast<size_t>(i)]; platter->isVisible()) platter->update(s, pos);
     }
     if (stacked != nullptr && stacked->isVisible()) stacked->repaint();
+    stemTick();
     preloadSelected();
     redoTick();
-    repaint(mixerArea);
 }
 
 void PerformanceView::changeListenerCallback(juce::ChangeBroadcaster*)
 {
     browser.refresh();
     refreshTargets();
+    // A track added or removed: the strip's lanes take their height.
+    if (timelineStrip != nullptr && timelineStrip->getHeight() != timelineStrip->preferredHeight()) resized();
 }
 
 bool PerformanceView::keyPressed(const juce::KeyPress& key)
@@ -1032,62 +1126,104 @@ void PerformanceView::paint(juce::Graphics& g)
         g.setColour(state.fx.on ? colours::red500 : colours::text);
         g.setFont(uiFont(13.0F, true));
         g.drawText(state.fx.typeName, display.reduced(6, 2).removeFromTop(18), juce::Justification::centredLeft);
+        // It opens the list of effects when clicked.
+        juce::Path arrow;
+        const auto tip = display.reduced(8.0F, 0.0F).removeFromRight(9.0F).withSizeKeepingCentre(9.0F, 5.0F);
+        arrow.addTriangle(tip.getX(), tip.getY(), tip.getRight(), tip.getY(), tip.getCentreX(), tip.getBottom());
         g.setColour(colours::textDim);
+        g.fillPath(arrow);
         g.setFont(uiFont(11.0F));
-        const juce::String ch = state.fx.channel == 2 ? "MASTER" : "CH" + juce::String(state.fx.channel + 1);
+        const juce::String ch = state.fx.channel == kFxMaster ? "MASTER" : "CH" + juce::String(fxChannelUnit(state.fx.channel));
         g.drawText(state.fx.stepLabel + " beat   " + ch + "   " + juce::String(state.fx.bpm, 1) + (state.fx.tap ? " TAP" : " BPM"),
                    display.reduced(6, 2).removeFromBottom(16), juce::Justification::centredLeft);
     }
+    for (int deck = 1; deck <= kDecks; ++deck) paintStemLegend(g, deck);
     g.setFont(uiFont(10.0F, true));
     g.setColour(colours::textFaint);
     for (auto& d : decks)
         for (auto* s : {d.trim.get(), d.eqHi.get(), d.eqMid.get(), d.eqLow.get(), d.filter.get()})
-            g.drawText(s->caption().toUpperCase(), s->getBounds().translated(0, s->getHeight() - 4).withHeight(12),
-                       juce::Justification::centred);
-    // Each channel's level: one bar on the fader's inner side, green to -9 dB, amber to -3 dB
-    // and red above (each colour fills its own stretch of the bar, as on a mixer), and its
-    // reading in dB under the fader.
+            if (s->isVisible())
+                g.drawText(s->caption().toUpperCase(), s->getBounds().translated(0, s->getHeight() - 4).withHeight(12),
+                           juce::Justification::centred);
+    // Each channel's level beside its fader, drawn as the transport bar's master meter is: L and
+    // R in segments (green, amber above -12 dB, red above -3 dB) with their peak holds, the
+    // scale's marks on the outside, and the louder side's reading in dB under the fader.
     for (int i = 0; i < kDecks; ++i)
     {
-        auto fader = decks[static_cast<size_t>(i)].fader->getBounds().toFloat();
-        const double db = meterDb[static_cast<size_t>(i)];
-        auto meter = juce::Rectangle<float>(i == 0 ? fader.getRight() + 3.0F : fader.getX() - 3.0F - 7.0F, fader.getY(), 7.0F, fader.getHeight());
-        drawWell(g, meter);
-        constexpr double kFloorDb = -48.0;
-        const auto heightAt = [&](double atDb) { return meter.getHeight() * static_cast<float>(juce::jlimit(0.0, 1.0, (atDb - kFloorDb) / -kFloorDb)); };
-        const float level = heightAt(db);
-        const std::array<std::pair<double, juce::Colour>, 3> zones{{{-9.0, colours::emerald500}, {-3.0, colours::amber400}, {0.0, colours::red500}}};
-        float from = 0.0F;
-        for (const auto& [top, colour] : zones)
+        const auto& levels = meterLevels[static_cast<size_t>(i)];
+        const auto& holds = meterHolds[static_cast<size_t>(i)];
+        if (!decks[static_cast<size_t>(i)].fader->isVisible()) continue;
+        const auto area = meterArea(i + 1);
+        if (area.getHeight() < 8.0F) continue;
+        meter::drawSegments(g, area, levels, {holds[0].held, holds[1].held}, true);
+        g.setColour(colours::textFaint);
+        for (const int mark : meter::kMarks)
         {
-            const float to = std::min(level, heightAt(top));
-            if (to > from)
-            {
-                g.setColour(colour);
-                g.fillRect(meter.getX() + 1.0F, meter.getBottom() - to, meter.getWidth() - 2.0F, to - from);
-            }
-            from = std::max(from, heightAt(top));
+            const float y = area.getBottom() - meter::proportion(static_cast<float>(mark)) * area.getHeight();
+            g.fillRect(meterOnRight[static_cast<size_t>(i)] ? area.getRight() + 2.0F : area.getX() - 5.0F, y - 0.5F, 3.0F, 1.0F);
         }
-        // The -9 and -3 dB marks, so the zones read even when quiet.
-        g.setColour(colours::textFaint.withAlpha(0.5F));
-        for (const double mark : {-9.0, -3.0}) g.fillRect(meter.getX(), meter.getBottom() - heightAt(mark), meter.getWidth(), 1.0F);
+        const auto fader = decks[static_cast<size_t>(i)].fader->getBounds().toFloat();
+        const double db = db::linearToDb(std::max(levels[0], levels[1]));
         auto readout = juce::Rectangle<float>(fader.getX() - 16.0F, fader.getBottom() + 2.0F, fader.getWidth() + 32.0F, 12.0F);
         g.setFont(uiFont(10.0F, true));
-        g.setColour(db > -3.0 ? colours::red500 : (db > -9.0 ? colours::amber400 : colours::textDim));
+        g.setColour(db > -12.0 ? meter::zoneColour(static_cast<float>(db)) : colours::textDim);
         g.drawText(db <= -60.0 ? juce::String("-inf") : juce::String(db, 1), readout, juce::Justification::centred);
     }
 }
 
-void PerformanceView::layoutDeck(int deck, juce::Rectangle<int> area)
+juce::Rectangle<float> PerformanceView::meterArea(int deck) const
+{
+    const auto fader = decks[static_cast<size_t>(deck - 1)].fader->getBounds().toFloat();
+    constexpr float kWidth = 11.0F;
+    return {meterOnRight[static_cast<size_t>(deck - 1)] ? fader.getRight() + 3.0F : fader.getX() - 3.0F - kWidth, fader.getY() + 4.0F, kWidth,
+            std::max(0.0F, fader.getHeight() - 8.0F)};
+}
+
+juce::Rectangle<int> PerformanceView::fxDisplayArea() const
+{
+    return fxArea.isEmpty() ? juce::Rectangle<int>() : fxArea.reduced(4).removeFromTop(38);
+}
+
+void PerformanceView::mouseMove(const juce::MouseEvent& e)
+{
+    setMouseCursor(fxDisplayArea().contains(e.getPosition()) ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
+}
+
+void PerformanceView::mouseDown(const juce::MouseEvent& e)
+{
+    if (fxDisplayArea().contains(e.getPosition())) showFxMenu();
+}
+
+void PerformanceView::showFxMenu()
+{
+    // In FX SELECT's order (rekordbox's), the one on now ticked.
+    juce::PopupMenu menu;
+    menu.addSectionHeader("Beat FX");
+    for (const auto type : djfx::kBeatFxOrder)
+    {
+        const int id = static_cast<int>(type);
+        menu.addItem(id + 1, djfx::beatFxName(id), true, state.fx.type == id);
+    }
+    const auto target = fxDisplayArea();
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetScreenArea(localAreaToGlobal(target)).withMinimumWidth(target.getWidth()),
+                       [safe = juce::Component::SafePointer<PerformanceView>(this)](int chosen)
+                       {
+                           if (safe != nullptr && chosen > 0) sendControl(safe->ctx.engine, "fxTypeSelect", 0, chosen - 1);
+                       });
+}
+
+void PerformanceView::layoutDeck(int deck, juce::Rectangle<int> area, bool compact)
 {
     auto& d = decks[static_cast<size_t>(deck - 1)];
-    const bool left = deck == 1;
+    const bool left = deck % 2 == 1; // decks 1 and 3 on the left
     // The tempo slider on the outer edge, as on the unit.
     auto tempoCol = left ? area.removeFromLeft(34) : area.removeFromRight(34);
     d.tempo->setBounds(tempoCol.reduced(4, 8));
     targetBoxes[static_cast<size_t>(deck - 1)]->setBounds(area.removeFromTop(24).withWidth(juce::jmin(320, area.getWidth())).reduced(0, 1));
     area.removeFromTop(2);
-    const bool stackedShown = stackButton.getToggleState();
+    // With four decks (or STACKED) the close-ups are in the stacked lanes; the deck screens keep
+    // the title, the time and the overview.
+    const bool stackedShown = stackButton.getToggleState() || compact;
     auto displayArea = area.removeFromTop(stackedShown ? DeckDisplay::compactHeight() : juce::jmax(150, area.getHeight() - 170));
     d.display->setCloseUpShown(!stackedShown);
     platters[static_cast<size_t>(deck - 1)]->setVisible(plattersButton.getToggleState());
@@ -1096,22 +1232,47 @@ void PerformanceView::layoutDeck(int deck, juce::Rectangle<int> area)
     d.display->repaint();
     area.removeFromTop(6);
     auto row1 = area.removeFromTop(30);
-    const int w = row1.getWidth() / 9;
+    const int w = row1.getWidth() / 10;
     for (auto* b : {d.loopIn.get(), d.loopOut.get(), d.reloop.get(), d.halve.get(), d.dbl.get(), d.keyLock.get(),
-                    d.quantize.get(), d.sync.get(), d.loadButton.get()})
+                    d.quantize.get(), d.sync.get(), d.stemsButton.get(), d.loadButton.get()})
         b->setBounds(row1.removeFromLeft(w).reduced(2));
     area.removeFromTop(4);
     auto modes = area.removeFromTop(22);
     const int mw = modes.getWidth() / 8;
     for (auto& m : d.modes) m->setBounds(modes.removeFromLeft(mw).reduced(1));
     area.removeFromTop(4);
+    auto& legend = legendAreas[static_cast<size_t>(deck - 1)];
+    legend = {};
+    if (state.decks[static_cast<size_t>(deck - 1)].padMode == "stems")
+    {
+        legend = (left ? area.withTrimmedLeft(90) : area.withTrimmedRight(90)).removeFromTop(16);
+        area.removeFromTop(18);
+    }
+    // CUE over PLAY at the bottom of the deck, round, as on the controller (they sat level with
+    // the top pads before, which looked too high).
     auto transport = left ? area.removeFromLeft(90) : area.removeFromRight(90);
-    d.cue->setBounds(transport.removeFromTop(transport.getHeight() / 2).reduced(3));
-    d.play->setBounds(transport.reduced(3));
+    const int button = juce::jlimit(36, 72, juce::jmin(transport.getWidth() - 12, (transport.getHeight() - 10) / 2));
+    d.play->setBounds(transport.removeFromBottom(button + 4).withSizeKeepingCentre(button, button));
+    transport.removeFromBottom(6);
+    d.cue->setBounds(transport.removeFromBottom(button + 4).withSizeKeepingCentre(button, button));
     const int pw = area.getWidth() / 4, ph = area.getHeight() / 2;
     for (int i = 0; i < 8; ++i)
         d.pads[static_cast<size_t>(i)]->setBounds(area.getX() + (i % 4) * pw, area.getY() + (i / 4) * ph, pw, ph);
     for (auto& p : d.pads) p->setBounds(p->getBounds().reduced(3));
+}
+
+void PerformanceView::setDeckShown(int deck, bool shown)
+{
+    auto& d = decks[static_cast<size_t>(deck - 1)];
+    for (juce::Component* c : std::initializer_list<juce::Component*>{
+             d.display.get(), d.play.get(), d.cue.get(), d.sync.get(), d.keyLock.get(), d.quantize.get(), d.loopIn.get(),
+             d.loopOut.get(), d.reloop.get(), d.halve.get(), d.dbl.get(), d.tempo.get(), d.trim.get(), d.eqHi.get(),
+             d.eqMid.get(), d.eqLow.get(), d.filter.get(), d.fader.get(), d.hpCue.get(), d.loadButton.get(),
+             d.stemsButton.get(), targetBoxes[static_cast<size_t>(deck - 1)].get()})
+        if (c != nullptr) c->setVisible(shown);
+    for (auto& p : d.pads) p->setVisible(shown);
+    for (auto& m : d.modes) m->setVisible(shown);
+    if (!shown) legendAreas[static_cast<size_t>(deck - 1)] = {};
 }
 
 void PerformanceView::layoutMixer(juce::Rectangle<int> area)
@@ -1119,8 +1280,8 @@ void PerformanceView::layoutMixer(juce::Rectangle<int> area)
     mixerArea = area;
     auto r = area.reduced(8);
     crossfader->setBounds(r.removeFromBottom(30).reduced(30, 4));
-    // The Beat FX section and the sampler under the channels.
-    fxArea = r.removeFromBottom(200);
+    // The Beat FX section and the sampler under the channels: rows sized to fit its height.
+    fxArea = r.removeFromBottom(212);
     auto fx = fxArea.reduced(4);
     fx.removeFromTop(42);
     auto row = fx.removeFromTop(26);
@@ -1130,21 +1291,34 @@ void PerformanceView::layoutMixer(juce::Rectangle<int> area)
     beatPrev->setBounds(row.removeFromLeft(w).reduced(2));
     beatNext->setBounds(row.removeFromLeft(w).reduced(2));
     row = fx.removeFromTop(26);
-    for (auto& b : fxChannelButtons) b->setBounds(row.removeFromLeft(w).reduced(2));
+    // CH SELECT: 1 2 M, or 1 2 3 4 M with four decks; ON takes the rest.
+    const std::vector<int> codes = fourDecks() ? std::vector<int>{0, 1, 3, 4, 2} : std::vector<int>{0, 1, 2};
+    const int cw = row.getWidth() / (static_cast<int>(codes.size()) + 1);
+    for (int code = 0; code < 5; ++code)
+        fxChannelButtons[static_cast<size_t>(code)]->setVisible(std::find(codes.begin(), codes.end(), code) != codes.end());
+    for (const int code : codes) fxChannelButtons[static_cast<size_t>(code)]->setBounds(row.removeFromLeft(cw).reduced(2));
     fxOnButton->setBounds(row.reduced(2));
-    row = fx.removeFromTop(44);
-    fxLevelKnob->setBounds(row.removeFromLeft(row.getWidth() / 2).withSizeKeepingCentre(40, 40));
-    releaseButton->setBounds(row.reduced(2, 8));
+    row = fx.removeFromTop(40);
+    fxLevelKnob->setBounds(row.removeFromLeft(row.getWidth() / 2).withSizeKeepingCentre(36, 36));
+    releaseButton->setBounds(row.reduced(2, 7));
     colorFxBox.setBounds(fx.removeFromTop(24).reduced(2));
     releaseFxBox.setBounds(fx.removeFromTop(24).reduced(2));
-    row = fx.removeFromTop(30);
-    samplerBankBox.setBounds(row.removeFromLeft(row.getWidth() - 34).reduced(2));
-    samplerVolumeKnob->setBounds(row.withSizeKeepingCentre(28, 28));
-    const int half = r.getWidth() / 2;
-    for (int i = 0; i < kDecks; ++i)
+    // The sampler: its bank, and its volume as a knob at the row's end (whatever is left of the
+    // section's height, at least a combo box's).
+    row = fx.withHeight(juce::jmax(26, fx.getHeight()));
+    const int volume = juce::jlimit(22, 30, row.getHeight() - 2);
+    samplerVolumeKnob->setBounds(row.removeFromRight(volume + 6).withSizeKeepingCentre(volume, volume));
+    samplerBankBox.setBounds(row.withSizeKeepingCentre(row.getWidth(), 24).reduced(2, 0));
+    // The channels left to right as the decks sit: 3 1 2 4 with four (as rekordbox's), else 1 2.
+    // The meters sit on each strip's inner side.
+    const std::vector<int> order = fourDecks() ? std::vector<int>{3, 1, 2, 4} : std::vector<int>{1, 2};
+    const int columnWidth = r.getWidth() / static_cast<int>(order.size());
+    for (size_t column = 0; column < order.size(); ++column)
     {
+        const int i = order[column] - 1;
         auto& d = decks[static_cast<size_t>(i)];
-        auto col = i == 0 ? r.withWidth(half) : r.withTrimmedLeft(half);
+        meterOnRight[static_cast<size_t>(i)] = column < order.size() / 2;
+        auto col = r.withX(r.getX() + static_cast<int>(column) * columnWidth).withWidth(columnWidth);
         // The knobs give way before the fader does: it keeps 90 px, with the meter readouts
         // and the CUE button under and over it.
         const int knob = juce::jmax(22, juce::jmin(44, juce::jmin(col.getWidth() - 10, (col.getHeight() - 26 - 4 - 14 - 90) / 5 - 4)));
@@ -1167,34 +1341,73 @@ void PerformanceView::resized()
     autoGainButton.setBounds(bar.removeFromLeft(96).reduced(2));
     plattersButton.setBounds(bar.removeFromLeft(70).reduced(2));
     stackButton.setBounds(bar.removeFromLeft(80).reduced(2));
+    fourButton.setBounds(bar.removeFromLeft(76).reduced(2));
+    for (auto& b : layerButtons)
+    {
+        b.setVisible(fourDecks());
+        if (fourDecks()) b.setBounds(bar.removeFromLeft(66).reduced(2));
+    }
     redoButton.setBounds(bar.removeFromLeft(64).reduced(2));
     keepButton.setBounds(bar.removeFromLeft(56).reduced(2));
     joinLight.setBounds(bar.removeFromLeft(44).reduced(2));
     status.setBounds(bar.removeFromLeft(bar.getWidth() / 2));
     midiLine.setBounds(bar);
     area.removeFromTop(4);
-    timelineStrip->setBounds(area.removeFromTop(58));
+    timelineStrip->setBounds(area.removeFromTop(timelineStrip->preferredHeight()));
     area.removeFromTop(4);
     if (stacked == nullptr)
     {
-        stacked = std::make_unique<StackedWaveforms>(*decks[0].display, *decks[1].display);
+        stacked = std::make_unique<StackedWaveforms>();
         addChildComponent(*stacked);
     }
-    stacked->setVisible(stackButton.getToggleState());
-    if (stacked->isVisible())
+    // Four decks always show their close-ups stacked (1 2 3 4); two, when STACKED is on.
+    for (int deck = 3; deck <= kDecks; ++deck) setDeckShown(deck, fourDecks());
+    std::vector<std::pair<int, DeckDisplay*>> lanes;
+    for (int deck = 1; deck <= (fourDecks() ? 4 : 2); ++deck) lanes.emplace_back(deck, decks[static_cast<size_t>(deck - 1)].display.get());
+    stacked->setDecks(std::move(lanes));
+    stacked->setVisible(stackButton.getToggleState() || fourDecks());
+    // The mixer column needs its height (the knobs, a fader long enough to meter, the FX section
+    // and the crossfader). The stacked waveforms and the browser give way for it: the browser
+    // first, down to a few rows, then the waveforms, down to two short lanes.
+    constexpr int kMixerNeeds = 532, kBrowserLeast = 110, kStackedLeast = 100;
+    int stackedHeight = stacked->isVisible() ? (fourDecks() ? juce::jlimit(180, 340, area.getHeight() * 7 / 20)
+                                                             : juce::jlimit(120, 260, area.getHeight() * 3 / 10))
+                                             : 0;
+    int browserHeight = juce::jmax(150, (area.getHeight() - stackedHeight) / 3);
+    const auto mixerRoom = [&] { return area.getHeight() - stackedHeight - (stackedHeight > 0 ? 4 : 0) - browserHeight - 6; };
+    if (mixerRoom() < kMixerNeeds) browserHeight = juce::jmax(kBrowserLeast, browserHeight - (kMixerNeeds - mixerRoom()));
+    if (stackedHeight > 0 && mixerRoom() < kMixerNeeds) stackedHeight = juce::jmax(kStackedLeast, stackedHeight - (kMixerNeeds - mixerRoom()));
+    if (stackedHeight > 0)
     {
-        stacked->setBounds(area.removeFromTop(juce::jlimit(120, 260, area.getHeight() * 3 / 10)));
+        stacked->setBounds(area.removeFromTop(stackedHeight));
         area.removeFromTop(4);
     }
-    auto browserArea = area.removeFromBottom(juce::jmax(150, area.getHeight() / 3));
+    auto browserArea = area.removeFromBottom(browserHeight);
     browser.setBounds(browserArea);
     area.removeFromBottom(6);
-    const int mixerW = juce::jlimit(170, 240, area.getWidth() / 6);
+    const int mixerW = fourDecks() ? juce::jlimit(300, 440, area.getWidth() * 2 / 9) : juce::jlimit(170, 240, area.getWidth() / 6);
     const int deckW = (area.getWidth() - mixerW - 12) / 2;
-    layoutDeck(1, area.removeFromLeft(deckW));
+    auto leftSide = area.removeFromLeft(deckW);
     area.removeFromLeft(6);
-    layoutDeck(2, area.removeFromRight(deckW));
+    auto rightSide = area.removeFromRight(deckW);
     area.removeFromRight(6);
+    if (fourDecks())
+    {
+        // Decks 1 and 2 above, 3 and 4 below, as rekordbox lays four out.
+        auto upperLeft = leftSide.removeFromTop(leftSide.getHeight() / 2);
+        auto upperRight = rightSide.removeFromTop(rightSide.getHeight() / 2);
+        leftSide.removeFromTop(4);
+        rightSide.removeFromTop(4);
+        layoutDeck(1, upperLeft, true);
+        layoutDeck(2, upperRight, true);
+        layoutDeck(3, leftSide, true);
+        layoutDeck(4, rightSide, true);
+    }
+    else
+    {
+        layoutDeck(1, leftSide);
+        layoutDeck(2, rightSide);
+    }
     layoutMixer(area);
 }
 

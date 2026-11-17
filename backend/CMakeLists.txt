@@ -779,6 +779,7 @@ if(STEMCEL_BUILD_NATIVE_APP)
         app/AppController.cpp
         app/AppPreferences.cpp
         app/ClipEditor.cpp
+        app/Dancer.cpp
         app/DebugAssertHook.cpp
         app/AudioImport.cpp
         app/Automation.cpp
@@ -835,6 +836,7 @@ if(STEMCEL_BUILD_NATIVE_APP)
         app/performance/PerformanceTake.cpp
         app/performance/PerformanceView.cpp
         app/performance/PerformanceRedo.cpp
+        app/performance/PerformanceStems.cpp
         app/performance/TrackDriver.cpp
         app/Toasts.cpp
         app/TransitionEditor.cpp

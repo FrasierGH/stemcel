@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Dancer.h"
 #include "AppController.h"
 #include "AppPreferences.h"
 #include "AudioImport.h"
@@ -72,6 +73,11 @@ class Workspace final : public juce::Component, public juce::DragAndDropContaine
     void showLibraryTab(int index);
     // The mixer in place of the bottom panel, or the bottom panel back.
     void toggleMixer();
+    // Sprig, the dancer in the corner (View > Dancer).
+    void toggleDancer();
+    // Debug > Rescan Controllers: the timeline's, or performance mode's while it is open.
+    void rescanControllers();
+    bool isDancerShown() const { return dancer != nullptr && dancerWanted; }
     // Shortcuts' operations (also in the menus).
     void selectAllClips();
     void joinSelection();
@@ -120,6 +126,9 @@ class Workspace final : public juce::Component, public juce::DragAndDropContaine
     void setBottomPanel(std::unique_ptr<juce::Component> panel, int height);
 
   private:
+    std::unique_ptr<Dancer> dancer;
+    bool dancerWanted = false;
+    void placeDancer();
     void placeImported(std::vector<ImportRequest> requests, const juce::String& trackId, double positionMs);
     void mixWhenAnalysed(std::vector<juce::String> itemIds, bool harmonic, juce::uint32 deadlineMs);
     EngineClient& engine;

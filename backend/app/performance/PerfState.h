@@ -4,6 +4,7 @@
 // into plain structs for the view.
 
 #include <juce_core/juce_core.h>
+#include <juce_graphics/juce_graphics.h>
 
 #include <array>
 #include <vector>
@@ -11,7 +12,22 @@
 namespace stemcel::native::perf
 {
 
-constexpr int kDecks = 2;
+// Four decks (the engine's); the view shows two unless 4 DECKS is on.
+constexpr int kDecks = 4;
+// Beat FX CH SELECT codes, as the engine's: 0 CH1, 1 CH2, 2 the master, 3 CH3, 4 CH4.
+constexpr int kFxMaster = 2;
+constexpr int fxChannelUnit(int code) noexcept { return code == kFxMaster ? 0 : code < kFxMaster ? code + 1 : code; }
+constexpr int crossfaderSide(int deck) noexcept { return deck % 2 == 1 ? 0 : 1; }
+// Stem Mix's stems, in pad order (as the engine's kStemNames).
+constexpr int kStems = 4;
+inline constexpr const char* kStemNames[kStems] = {"VOCAL", "INST", "BASS", "DRUMS"};
+// A stem's colour on the pads, the key and the deck screen.
+inline juce::Colour stemColour(int stem)
+{
+    static const juce::Colour colours[kStems] = {juce::Colour(0xfffbbf24), juce::Colour(0xffa78bfa), juce::Colour(0xff38bdf8),
+                                                 juce::Colour(0xfff87171)};
+    return colours[juce::jlimit(0, kStems - 1, stem)];
+}
 
 struct CuePoint
 {
@@ -39,6 +55,9 @@ struct DeckState
     int beatJumpPage = 1, keyPage = 0, keyboardCue = -1, padFxHeld = -1;
     bool bound = false; // the channel drives a timeline track
     float peak = 0.0F;
+    bool hasStems = false; // Stem Mix: the track's stems are on the deck
+    int stemsOff = 0;      // the stems out of the mix (bit per stem)
+    int stemsPresent = 0;  // the stems there are (a two-stem split has no BASS or DRUMS)
 };
 
 struct FxState
@@ -81,6 +100,7 @@ struct State
     SamplerState sampler;
     juce::StringArray midi; // the controller monitor's last lines
     juce::String cueDevice; // where the headphone cue goes
+    std::array<bool, 2> layers{}; // a two-deck controller's sides on decks 3 and 4
 };
 
 inline CuePoint cueFromVar(const juce::var& v)
@@ -99,6 +119,8 @@ inline void readState(const juce::var& p, State& s)
     s.sampleRate = static_cast<double>(p.getProperty("sampleRate", 44100.0));
     s.crossfader = static_cast<float>(static_cast<double>(p.getProperty("crossfader", 0.5)));
     s.masterDeck = static_cast<int>(p.getProperty("masterDeck", 0));
+    if (const auto* layers = p.getProperty("layers", {}).getArray(); layers != nullptr && layers->size() == 2)
+        s.layers = {static_cast<bool>((*layers)[0]), static_cast<bool>((*layers)[1])};
     if (const auto* m = p.getProperty("midi", {}).getArray())
     {
         s.midi.clear();
@@ -135,6 +157,9 @@ inline void readState(const juce::var& p, State& s)
         auto num = [&](const char* k, double def) { return static_cast<double>(d.getProperty(k, def)); };
         auto flag = [&](const char* k) { return static_cast<bool>(d.getProperty(k, false)); };
         x.serial = static_cast<int>(d.getProperty("serial", 0));
+        x.hasStems = flag("hasStems");
+        x.stemsOff = static_cast<int>(d.getProperty("stemsOff", 0));
+        x.stemsPresent = static_cast<int>(d.getProperty("stemsPresent", 0));
         x.loaded = flag("loaded");
         x.playing = flag("playing");
         x.previewing = flag("previewing");

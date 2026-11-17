@@ -84,6 +84,7 @@ class SmokeTest final : private juce::Timer
 
     juce::StringArray tempoItemIds;
     TimelineViewState midiView;
+    float midiMasterBefore = 1.0F;
     std::unique_ptr<LiveState> midiLive;
     std::unique_ptr<MidiControllerActions> midiActions;
     std::unique_ptr<RecordDialog> reviewDialog;
@@ -186,6 +187,7 @@ class SmokeTest final : private juce::Timer
     juce::String redoTrack;
     double redoFromMs = 0.0, redoTouchMs = 0.0, redoStopMs = 0.0;
     int redoPhase = 0;
+    int perfPicturePhase = 0;
     bool perfSkip = false; // no audio device: the performance steps pass through
     juce::uint32 perfOpenedAt = 0;
     double perfTakeClock = -1.0, perfTakeMs = 0.0, perfCaptureClock = 0.0, perfCaptureRate = 48000.0, perfCaptureSec = 0.0;

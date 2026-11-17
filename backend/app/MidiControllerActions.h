@@ -31,7 +31,6 @@ class MidiControllerActions final : private juce::Timer
         std::function<void(double)> reveal;                  // scroll the timeline to a position
         std::function<void(const juce::String&)> revealTrack; // scroll a track into view
         std::function<void(double)> zoom;                    // zoom factor
-        std::function<void()> showTrackFx;
         std::function<bool()> blocked;     // a modal dialog or editor owns input
         std::function<bool()> cueScratch;  // Cue during a scratch session; true when it was handled
         std::function<bool()> performanceOpen; // performance mode holds the controllers
@@ -42,14 +41,10 @@ class MidiControllerActions final : private juce::Timer
     ~MidiControllerActions() override;
 
     void handleControl(const juce::var& payload);
+    // Looks for controllers again, enabling supported ones even if they were tried before.
+    void rescan();
 
   private:
-    struct DialCatchUp
-    {
-        double from = 0.0, target = 0.0, startedAt = 0.0, lastOutput = 0.0;
-        std::function<std::optional<double>()> read;
-        std::function<void(double)> apply;
-    };
     struct ClipBrowse
     {
         juce::String trackId, cursorClipId;
@@ -61,14 +56,6 @@ class MidiControllerActions final : private juce::Timer
     // Jog
     void queueJog(const juce::String& control, double delta, bool snapToGrid, const juce::String& device);
     void flushJog(double now);
-    // Dials
-    void handleDial(const juce::String& key, double hardware, std::function<std::optional<double>()> read,
-                    std::function<void(double)> apply);
-    void flushDials(double now);
-    void applyAbsolute(const juce::var& payload);
-    std::optional<double> readTrackControl(const juce::String& trackId, const juce::String& control) const;
-    void applyTrackControl(const juce::String& trackId, const juce::String& control, double value);
-    juce::String gestureFor(const juce::String& key);
     // Browse
     bool browseRotation(const juce::String& device, double delta, bool extendSelection);
     void browsePress(const juce::String& device);
@@ -111,10 +98,6 @@ class MidiControllerActions final : private juce::Timer
     juce::String pendingJogMode; // "", "snapped", "free"
     juce::String pendingJogDevice;
     bool jogPending = false;
-
-    std::map<juce::String, double> lastDialValues;
-    std::map<juce::String, DialCatchUp> dialCatchUps;
-    std::map<juce::String, std::pair<juce::String, double>> dialGestures; // key -> (gesture id, last ms)
 
     std::map<juce::String, ClipBrowse> clipBrowse;
     std::set<juce::String> holds; // device:deck keys holding playback

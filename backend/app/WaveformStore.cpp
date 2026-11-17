@@ -4,6 +4,8 @@
 
 #include <juce_graphics/juce_graphics.h>
 
+#include <cmath>
+
 namespace stemcel::native
 {
 
@@ -66,17 +68,26 @@ void drawPeaks(juce::Graphics& g, const waveform::PeaksResult& peaks, juce::Rect
     const double bucketsPerMs = peaks.bucketsPerSecond() / 1000.0;
     const float midY = area.getCentreY();
     const float halfH = area.getHeight() * 0.5f;
-    const int width = static_cast<int>(area.getWidth());
-    const double msPerPixel = sourceLengthMs / static_cast<double>(width);
+    const double msPerPixel = sourceLengthMs / static_cast<double>(area.getWidth());
+
+    // The columns sit on fixed stretches of the source (multiples of a pixel's length from its
+    // start), shifted by the fraction of a pixel the view starts into one. A view that scrolls
+    // (a deck's close-up, the timeline following the playhead) then moves the same shape along
+    // rather than sampling the peaks afresh at every frame, which made the outline shimmer.
+    const double firstColumn = reversed ? 0.0 : std::floor(sourceStartMs / msPerPixel);
+    const float shift = reversed ? 0.0f : static_cast<float>((firstColumn * msPerPixel - sourceStartMs) / msPerPixel);
+    const int width = static_cast<int>(area.getWidth()) + (reversed ? 0 : 2);
 
     juce::Path path;
     std::vector<float> tops(static_cast<size_t>(width));
     std::vector<float> bottoms(static_cast<size_t>(width));
+    std::vector<float> xs(static_cast<size_t>(width));
     for (int x = 0; x < width; ++x)
     {
         const int px = reversed ? (width - 1 - x) : x;
-        const double fromMs = sourceStartMs + msPerPixel * px;
+        const double fromMs = reversed ? sourceStartMs + msPerPixel * px : (firstColumn + px) * msPerPixel;
         const double toMs = fromMs + msPerPixel;
+        xs[static_cast<size_t>(x)] = juce::jlimit(area.getX(), area.getRight(), area.getX() + shift + static_cast<float>(x));
         int b0 = juce::jlimit(0, buckets - 1, static_cast<int>(fromMs * bucketsPerMs));
         int b1 = juce::jlimit(0, buckets - 1, static_cast<int>(toMs * bucketsPerMs));
         if (b1 < b0) std::swap(b0, b1);
@@ -91,10 +102,10 @@ void drawPeaks(juce::Graphics& g, const waveform::PeaksResult& peaks, juce::Rect
         bottoms[static_cast<size_t>(x)] = midY - juce::jlimit(-1.0f, 0.0f, lo) * halfH;
     }
 
-    path.startNewSubPath(area.getX(), tops[0]);
-    for (int x = 1; x < width; ++x) path.lineTo(area.getX() + static_cast<float>(x), tops[static_cast<size_t>(x)]);
-    for (int x = width - 1; x >= 0; --x)
-        path.lineTo(area.getX() + static_cast<float>(x), bottoms[static_cast<size_t>(x)]);
+    if (width <= 0) return;
+    path.startNewSubPath(xs[0], tops[0]);
+    for (int x = 1; x < width; ++x) path.lineTo(xs[static_cast<size_t>(x)], tops[static_cast<size_t>(x)]);
+    for (int x = width - 1; x >= 0; --x) path.lineTo(xs[static_cast<size_t>(x)], bottoms[static_cast<size_t>(x)]);
     path.closeSubPath();
     g.setColour(colour);
     g.fillPath(path);

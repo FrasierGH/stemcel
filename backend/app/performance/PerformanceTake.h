@@ -13,6 +13,8 @@
 
 #include <juce_core/juce_core.h>
 
+#include <array>
+#include <functional>
 #include <map>
 #include <optional>
 #include <vector>
@@ -29,6 +31,7 @@ struct TakeSegment
     double tempo = 1.0;
     int semitones = 0;
     bool moving = false, audible = false, keyLock = false, scratch = false;
+    int stemsOff = 0; // Stem Mix: the stems out of the mix (bit per stem)
 };
 
 struct TakePoint
@@ -48,6 +51,7 @@ struct TakeEdits
         double tempoRatio = 1.0; // source ms per timeline ms
         int semitones = 0;
         bool keyLock = false, reversed = false;
+        int stemsOff = 0; // stems out: the clip goes on as the stems that were in
         double timelineMs() const { return tempoRatio > 0.0 ? durationMs / tempoRatio : durationMs; }
     };
     std::vector<Clip> clips;
@@ -75,6 +79,10 @@ std::vector<std::pair<double, double>> shapeCurve(const std::vector<std::pair<do
 class PerformanceTake
 {
   public:
+    // A track's stems in the library (VOCAL, INST, BASS, DRUMS), for stretches played with
+    // stems out; empty entries when it has none.
+    std::function<std::array<juce::String, kStems>(const juce::String& itemId)> stemsOf;
+
     void clear();
     void add(const juce::var& events); // a PERF_REC batch
     bool hasAudio() const;

@@ -48,6 +48,53 @@ Workspace::Workspace(EngineClient& engineClient, AppController& appController, A
     actions.onNotify = notify;
     importer.onNotify = notify;
     stems.onNotify = notify;
+
+    // Sprig dances to the timeline's beat, or the leading deck's in performance mode, as loud
+    // as the master is.
+    dancer = std::make_unique<Dancer>();
+    dancer->setStyle(static_cast<int>(prefs.get("view", "dancerStyle", 0)));
+    dancer->beatSource = [this]
+    {
+        Dancer::Beat beat;
+        beat.level = juce::jmax(live.masterPeakL, live.masterPeakR);
+        if (performance != nullptr)
+        {
+            if (const auto beats = performance->danceBeats())
+            {
+                beat.playing = true;
+                beat.beats = *beats;
+            }
+            return beat;
+        }
+        beat.playing = live.playing;
+        beat.beats = mirror.model().tempoCurve().beatAt(live.positionMs);
+        return beat;
+    };
+    dancer->onHide = [this] { toggleDancer(); };
+    // Its own window on the desktop: it can be dragged anywhere, out of Stemcel's too. Where it
+    // was left is kept (screen coordinates), as is its dance and whether it stays on top.
+    dancer->onMoved = [this](juce::Point<int> topLeft)
+    {
+        prefs.set("view", "dancerX", topLeft.x);
+        prefs.set("view", "dancerY", topLeft.y);
+        prefs.set("view", "dancerStyle", dancer->style());
+        prefs.save();
+    };
+    dancer->onStayOnTop = [this](bool onTop)
+    {
+        prefs.set("view", "dancerOnTop", onTop);
+        prefs.save();
+    };
+    dancer->ownerMinimised = [this]
+    {
+        const auto* peer = getPeer();
+        return peer == nullptr || peer->isMinimised();
+    };
+    dancer->setStayOnTop(static_cast<bool>(prefs.get("view", "dancerOnTop", true)));
+    dancerWanted = static_cast<bool>(prefs.get("view", "dancer", true)) &&
+                   !juce::JUCEApplicationBase::getCommandLineParameters().contains("--smoke-test");
+    // Onto the desktop once the window has shown (resized() tries too, if it was sooner).
+    juce::Timer::callAfterDelay(600, [safe = juce::Component::SafePointer<Workspace>(this)] { if (safe != nullptr) safe->placeDancer(); });
     sectionAnalyser.onNotify = notify;
     timeline.onAnalyseSections = [this](const juce::String& itemId) { sectionAnalyser.analyse(itemId, true); };
     tempoAnalyser.onNotify = notify;
@@ -55,6 +102,7 @@ Workspace::Workspace(EngineClient& engineClient, AppController& appController, A
     { TempoReport::show(mirror, actions, tempoAnalyser, itemId, clipId); };
     stems.onProgress = [this](double percent, const juce::String& stage)
     {
+        if (performance != nullptr) performance->stemProgress(percent, stage);
         if (libraryPanel == nullptr) return;
         libraryPanel->setActivity(percent < 0.0 ? juce::String()
                                                 : "Separating stems: " + juce::String(juce::roundToInt(percent)) + "% (" + stage + ")");
@@ -135,7 +183,6 @@ Workspace::Workspace(EngineClient& engineClient, AppController& appController, A
         }
     };
     hooks.zoom = [this](double factor) { zoom(factor); };
-    hooks.showTrackFx = [this] { showLibraryTab(4); };
     hooks.blocked = [] { return juce::ModalComponentManager::getInstance()->getNumModalComponents() > 0; };
     hooks.cueScratch = [] { return ScratchEditor::cueBuildBacking(); };
     hooks.performanceOpen = [this] { return isPerformanceShown(); };
@@ -421,7 +468,8 @@ void Workspace::togglePerformance()
                                                [this](double ms) { actions.seek(ms); },
                                                toast,
                                                [this] { togglePerformance(); },
-                                               live};
+                                               live,
+                                               stems};
         performance = std::make_unique<perf::PerformanceView>(std::move(context));
         addAndMakeVisible(*performance);
         showTimeline(false);
@@ -491,8 +539,41 @@ void Workspace::setupResizeBars()
     addAndMakeVisible(headerBar);
 }
 
+void Workspace::placeDancer()
+{
+    // Put on the desktop once the workspace is on screen: where it was left, if that is still on
+    // a display, else in the workspace's bottom-right corner.
+    if (dancer == nullptr || !dancerWanted || dancer->isOnDesktop() || !isShowing()) return;
+    dancer->setOpaque(false);
+    dancer->addToDesktop(juce::ComponentPeer::windowIsTemporary | juce::ComponentPeer::windowIgnoresKeyPresses);
+    const auto corner = getScreenBounds().getBottomRight() - juce::Point<int>(dancer->getWidth() + 18, dancer->getHeight() + 40);
+    const juce::Point<int> saved{static_cast<int>(prefs.get("view", "dancerX", corner.x)), static_cast<int>(prefs.get("view", "dancerY", corner.y))};
+    const bool onScreen = juce::Desktop::getInstance().getDisplays().getDisplayForPoint(saved + juce::Point<int>(dancer->getWidth() / 2, dancer->getHeight() / 2)) != nullptr;
+    dancer->setTopLeftPosition(onScreen ? saved : corner);
+    dancer->setVisible(true);
+}
+
+void Workspace::rescanControllers()
+{
+    if (performance != nullptr) performance->rescanControllers();
+    else if (midi != nullptr) midi->rescan();
+    if (toast) toast("Looking for controllers...", true);
+}
+
+void Workspace::toggleDancer()
+{
+    if (dancer == nullptr) return;
+    dancerWanted = !isDancerShown();
+    if (!dancerWanted) dancer->setVisible(false);
+    else if (dancer->isOnDesktop()) dancer->setVisible(true);
+    prefs.set("view", "dancer", dancerWanted);
+    prefs.save();
+    placeDancer();
+}
+
 void Workspace::resized()
 {
+    placeDancer();
     if (performance != nullptr)
     {
         performance->setBounds(getLocalBounds());

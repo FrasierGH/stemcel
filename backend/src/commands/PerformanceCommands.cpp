@@ -16,6 +16,7 @@
 #include <samplerate.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <limits>
@@ -254,6 +255,85 @@ void streamAudio(StreamedAudio& s, const juce::File& file, juce::AudioFormatMana
     s.complete.store(true, std::memory_order_release);
 }
 
+// Stem Mix: a deck's track's stems read for the deck (worker thread). Each stem is read at
+// the track's rate, cut or padded to its length and kept as 16-bit samples scaled to its own
+// peak. With `instPath`, the instrumental (the track less the three) is written there too, so
+// the timeline has it as a stem of its own for takes made with stems out.
+struct StemLoad
+{
+    int deck = 0, serial = 0;
+    std::shared_ptr<const perf::DeckTrack> track;
+    std::array<juce::String, perf::StemSet::kParts> paths; // vocals, drums, bass
+    juce::String instPath;
+    std::shared_ptr<perf::StemSet> set;
+    juce::String error;
+    std::atomic<bool> done{false}, failed{false};
+};
+
+void readStems(StemLoad& load, juce::AudioFormatManager& formats)
+{
+    const auto& track = *load.track;
+    // The track's own read finishes first: its length is the stems' length.
+    for (int waited = 0; track.readyFrames != nullptr && track.totalFrames != nullptr &&
+                         track.readyFrames->load() < track.totalFrames->load() && waited < 3000;
+         ++waited)
+        juce::Thread::sleep(50);
+    const int frames = track.totalFrames != nullptr ? track.totalFrames->load() : track.audio->getNumSamples();
+    auto set = std::make_shared<perf::StemSet>();
+    set->frames = std::min(frames, track.audio->getNumSamples());
+    std::array<juce::AudioBuffer<float>, perf::StemSet::kParts> floats; // kept only for the instrumental
+    for (size_t part = 0; part < perf::StemSet::kParts; ++part)
+    {
+        if (load.paths[part].isEmpty()) continue; // a two-stem split: no bass or drums
+        set->present[part] = true;
+        StreamedAudio stream;
+        stream.rate = track.sampleRate;
+        streamAudio(stream, juce::File(load.paths[part]), formats);
+        if (!stream.complete.load() || stream.buffer == nullptr)
+        {
+            load.error = "can't read the stem " + juce::File(load.paths[part]).getFileName();
+            load.failed.store(true, std::memory_order_release);
+            return;
+        }
+        const auto& audio = *stream.buffer;
+        const int n = std::min(set->frames, stream.total->load());
+        float peak = 1.0e-6F;
+        for (int ch = 0; ch < 2; ++ch) peak = std::max(peak, audio.getMagnitude(ch, 0, n));
+        const float step = peak / 32767.0F;
+        set->scale[part] = step;
+        for (size_t ch = 0; ch < 2; ++ch)
+        {
+            auto& out = set->data[part][ch];
+            out.assign(static_cast<size_t>(set->frames), 0);
+            const float* in = audio.getReadPointer(static_cast<int>(ch));
+            for (int i = 0; i < n; ++i)
+                out[static_cast<size_t>(i)] = static_cast<std::int16_t>(std::lround(juce::jlimit(-32767.0F, 32767.0F, in[i] / step)));
+        }
+        if (load.instPath.isNotEmpty()) floats[part].makeCopyOf(audio);
+    }
+    if (load.instPath.isNotEmpty())
+    {
+        // The instrumental: the track less the vocals, drums and bass (less the vocals alone for a
+        // two-stem split), as 24-bit WAV.
+        juce::AudioBuffer<float> inst(2, set->frames);
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            inst.copyFrom(ch, 0, *track.audio, std::min(ch, track.audio->getNumChannels() - 1), 0, set->frames);
+            for (const auto& part : floats)
+                if (part.getNumSamples() > 0) inst.addFrom(ch, 0, part, ch, 0, std::min(set->frames, part.getNumSamples()), -1.0F);
+        }
+        const juce::File file(load.instPath);
+        file.getParentDirectory().createDirectory();
+        file.deleteFile();
+        juce::WavAudioFormat wav;
+        std::unique_ptr<juce::AudioFormatWriter> writer(wav.createWriterFor(new juce::FileOutputStream(file), track.sampleRate, 2, 24, {}, 0));
+        if (writer == nullptr || !writer->writeFromAudioSampleBuffer(inst, 0, inst.getNumSamples()))
+            load.instPath.clear();
+    }
+    load.set = std::move(set);
+    load.done.store(true, std::memory_order_release);
+}
+
 class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
 {
   public:
@@ -340,9 +420,26 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
             const auto it = devices.find(identifier);
             if (it == devices.end() || it->second.translator == nullptr) return;
             count = it->second.translator->translate(data, size, events, 4);
+            for (int i = 0; i < count; ++i) events[i].deck = static_cast<std::int16_t>(layered(*it->second.mapping, events[i].deck));
         }
         noteMonitor(data, size, count > 0 ? events[0] : perf::Event{});
         for (int i = 0; i < count; ++i) route(events[i]);
+    }
+
+    // PERF_DECK_LAYER {side: 1 | 2, on}: a two-deck controller's side on deck 3 or 4.
+    void setLayer(const juce::var& p)
+    {
+        const int side = static_cast<int>(p.getProperty("side", 0));
+        if (side < 1 || side > 2) return;
+        layers[static_cast<size_t>(side - 1)].store(static_cast<bool>(p.getProperty("on", false)));
+    }
+
+    // The deck a controller's deck `deck` drives: with two decks of its own and that side's
+    // layer on, the one behind it (1 → 3, 2 → 4).
+    int layered(const perf::Mapping& mapping, int deck) const
+    {
+        if (mapping.deckCount() > 2 || deck < 1 || deck > 2) return deck;
+        return layers[static_cast<size_t>(deck - 1)].load() ? deck + 2 : deck;
     }
 
     // Tests: raw bytes as if from a controller named `deviceName`.
@@ -578,6 +675,28 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
 
     static std::unique_ptr<PerformanceHost> g_host;
 
+    // PERF_STEMS {deck, serial, vocals, drums, bass, instPath?}: the deck's track's stems.
+    void stems(const juce::var& p)
+    {
+        const int deck = static_cast<int>(p.getProperty("deck", 0));
+        const int serial = static_cast<int>(p.getProperty("serial", 0));
+        const auto it = loadedTracks.find(deck);
+        if (it == loadedTracks.end() || it->second == nullptr || it->second->serial != serial || it->second->audio == nullptr)
+        {
+            broadcastStems(deck, serial, false, "the deck has another track now", {});
+            return;
+        }
+        auto load = std::make_shared<StemLoad>();
+        load->deck = deck;
+        load->serial = serial;
+        load->track = it->second;
+        load->paths = {p.getProperty("vocals", "").toString(), p.getProperty("drums", "").toString(), p.getProperty("bass", "").toString()};
+        load->instPath = p.getProperty("instPath", "").toString();
+        stemLoads.push_back(load);
+        auto& formats = engine.getFormatManager();
+        loadPool.addJob([load, &formats] { readStems(*load, formats); });
+    }
+
   private:
     struct PendingLoad
     {
@@ -638,10 +757,46 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
         return stream;
     }
 
+    void pollStems()
+    {
+        for (auto it = stemLoads.begin(); it != stemLoads.end();)
+        {
+            auto& load = **it;
+            if (load.failed.load(std::memory_order_acquire))
+            {
+                broadcastStems(load.deck, load.serial, false, load.error, {});
+                it = stemLoads.erase(it);
+                continue;
+            }
+            if (!load.done.load(std::memory_order_acquire))
+            {
+                ++it;
+                continue;
+            }
+            perfEngine().attachStems(load.deck, load.serial, load.set);
+            broadcastStems(load.deck, load.serial, true, {}, load.instPath);
+            it = stemLoads.erase(it);
+        }
+    }
+
+    void broadcastStems(int deck, int serial, bool ok, const juce::String& error, const juce::String& instPath)
+    {
+        auto* o = new juce::DynamicObject();
+        o->setProperty("deck", deck);
+        o->setProperty("serial", serial);
+        o->setProperty("ok", ok);
+        if (error.isNotEmpty()) o->setProperty("error", error);
+        if (instPath.isNotEmpty()) o->setProperty("instPath", instPath);
+        bridge.broadcast("PERF_STEMS_READY", juce::var(o));
+    }
+
+    std::vector<std::shared_ptr<StemLoad>> stemLoads;
+
     // On the message thread (the state timer, and a load): a deck takes its track once the
     // first seconds are in, and hears its loudness when the read ends.
     void pollLoads()
     {
+        pollStems();
         for (int d = 1; d <= perf::kDecks; ++d)
         {
             auto& pending = pendingLoads[static_cast<size_t>(d - 1)];
@@ -830,6 +985,7 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
                     o->setProperty("audible", (r.flags & 2) != 0);
                     o->setProperty("keyLock", (r.flags & 4) != 0);
                     o->setProperty("scratch", (r.flags & 8) != 0);
+                    o->setProperty("stemsOff", (r.flags >> 4) & 0xF);
                     break;
                 }
                 case perf::RecEvent::Kind::platter:
@@ -871,17 +1027,20 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
         o->setProperty("sampleRate", v.sampleRate);
         o->setProperty("crossfader", v.crossfader);
         o->setProperty("masterDeck", v.masterDeck);
+        juce::Array<juce::var> layerList{layers[0].load(), layers[1].load()};
+        o->setProperty("layers", layerList);
         o->setProperty("cueOutput", v.cueOutput);
         o->setProperty("cueDevice", cueDevice);
         o->setProperty("recording", v.recording);
-        std::array<float, perf::kDecks> peaks{};
+        std::array<std::array<float, 2>, perf::kDecks> peaks{};
         perfEngine().consumePeaks(peaks);
         juce::Array<juce::var> decks;
         for (int d = 0; d < perf::kDecks; ++d)
         {
             const auto& dv = v.decks[static_cast<size_t>(d)];
             const auto& cv = v.channels[static_cast<size_t>(d)];
-            lastPeaks[static_cast<size_t>(d)] = peaks[static_cast<size_t>(d)];
+            const auto& sides = peaks[static_cast<size_t>(d)];
+            lastPeaks[static_cast<size_t>(d)] = std::max(sides[0], sides[1]);
             auto* x = new juce::DynamicObject();
             x->setProperty("serial", dv.serial);
             x->setProperty("loaded", dv.loaded);
@@ -900,6 +1059,9 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
             x->setProperty("sync", dv.sync);
             x->setProperty("master", dv.master);
             x->setProperty("keyLock", dv.keyLock);
+            x->setProperty("hasStems", dv.hasStems);
+            x->setProperty("stemsOff", dv.stemsOff);
+            x->setProperty("stemsPresent", dv.stemsPresent);
             x->setProperty("quantize", dv.quantize);
             x->setProperty("touched", dv.touched);
             x->setProperty("slider", dv.slider);
@@ -924,7 +1086,9 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
             x->setProperty("keyboardCue", cv.keyboardCue);
             x->setProperty("padFxHeld", cv.padFxHeld);
             x->setProperty("bound", cv.bound);
-            x->setProperty("peak", peaks[static_cast<size_t>(d)]);
+            x->setProperty("peak", std::max(sides[0], sides[1]));
+            x->setProperty("peakL", sides[0]);
+            x->setProperty("peakR", sides[1]);
             decks.add(juce::var(x));
         }
         o->setProperty("decks", decks);
@@ -966,13 +1130,15 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
     {
         for (const auto& led : d.mapping->leds(state, deck, index))
         {
+            // Lit and dark are the controller's own values (a meter's level passes through).
+            const int sent = value == 0x7F ? led.on : value == 0 ? led.off : value;
             const int key = (led.status << 8) | led.data1;
             const auto it = d.ledsSent.find(key);
-            if (it != d.ledsSent.end() && it->second == value) continue;
-            d.ledsSent[key] = value;
+            if (it != d.ledsSent.end() && it->second == sent) continue;
+            d.ledsSent[key] = sent;
             if (d.injected) continue;
             const juce::uint8 bytes[3] = {static_cast<juce::uint8>(led.status), static_cast<juce::uint8>(led.data1),
-                                          static_cast<juce::uint8>(value)};
+                                          static_cast<juce::uint8>(sent)};
             sendMidiToDevice(id, bytes, 3);
         }
     }
@@ -986,8 +1152,10 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
             if (d.mapping == nullptr) continue;
             for (int deck = 1; deck <= perf::kDecks; ++deck)
             {
-                const auto& dv = v.decks[static_cast<size_t>(deck - 1)];
-                const auto& cv = v.channels[static_cast<size_t>(deck - 1)];
+                // The controller's deck lights show the deck it drives (its layer's).
+                const int source = layered(*d.mapping, deck);
+                const auto& dv = v.decks[static_cast<size_t>(source - 1)];
+                const auto& cv = v.channels[static_cast<size_t>(source - 1)];
                 const auto on = [](bool b) { return b ? 0x7F : 0x00; };
                 const bool paused = dv.loaded && !dv.playing && !dv.previewing;
                 setLed(d, id, "play", deck, 0, on(dv.playing || (paused && dv.atCue && blink)));
@@ -998,10 +1166,13 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
                 setLed(d, id, "reloop", deck, 0, on(dv.loopActive || (dv.loopArmed && blink)));
                 setLed(d, id, "hpCue", deck, 0, on(cv.hpCue));
                 setLed(d, id, "loaded", deck, 0, on(dv.loaded));
-                for (int m = 0; m < static_cast<int>(perf::PadMode::count); ++m)
+                // Stem Mix shows as SAMPLER blinking (the controller is in its sampler mode, and
+                // its pads light the stems that are in).
+                const bool stemMix = cv.padMode == perf::PadMode::stems;
+                for (int m = 0; m < static_cast<int>(perf::PadMode::stems); ++m)
                     setLed(d, id, juce::String("padMode.") + perf::padModeName(static_cast<perf::PadMode>(m)), deck, 0,
-                           on(static_cast<int>(cv.padMode) == m));
-                const auto modeName = juce::String("pad.") + perf::padModeName(cv.padMode);
+                           on(static_cast<int>(cv.padMode) == m || (stemMix && m == static_cast<int>(perf::PadMode::sampler) && blink)));
+                const auto modeName = juce::String("pad.") + perf::padModeName(stemMix ? perf::PadMode::sampler : cv.padMode);
                 for (int pad = 0; pad < 8; ++pad)
                 {
                     bool lit = false;
@@ -1020,7 +1191,7 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
                         case perf::PadMode::keyShift: lit = dv.loaded; break;
                         case perf::PadMode::sampler:
                         {
-                            const int slot = v.samplerBank * 16 + (deck - 1) * 8 + pad;
+                            const int slot = v.samplerBank * 16 + ((deck - 1) % 2) * 8 + pad;
                             const bool loaded = (v.samplesLoaded >> slot) & 1ULL;
                             const bool playing = (v.samplesPlaying >> slot) & 1ULL;
                             lit = playing ? blink : loaded;
@@ -1028,12 +1199,21 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
                         }
                         case perf::PadMode::padFx1:
                         case perf::PadMode::padFx2: lit = cv.padFxHeld == pad || cv.padFxHeld == pad + 8; break;
+                        case perf::PadMode::stems:
+                        {
+                            // 1–4: the stem is in; 5–8: it plays alone. Blinking: no stems yet.
+                            const int bit = 1 << (pad % perf::kStems);
+                            if (!dv.hasStems) lit = pad < perf::kStems && blink;
+                            else if ((dv.stemsPresent & bit) == 0) lit = false; // not in a two-stem split
+                            else lit = pad < perf::kStems ? (dv.stemsOff & bit) == 0 : dv.stemsOff == (dv.stemsPresent & ~bit);
+                            break;
+                        }
                         default: break;
                     }
                     setLed(d, id, modeName, deck, pad, on(lit));
                 }
                 // Channel meter: post-fader level, about −48 dB at the bottom.
-                const float peak = lastPeaks[static_cast<size_t>(deck - 1)];
+                const float peak = lastPeaks[static_cast<size_t>(source - 1)];
                 const double db = peak > 1.0e-5F ? 20.0 * std::log10(peak) : -100.0;
                 setLed(d, id, "meter", deck, 0, juce::jlimit(0, 127, static_cast<int>((db + 48.0) / 48.0 * 127.0)));
             }
@@ -1075,6 +1255,7 @@ class PerformanceHost final : public MidiPerformanceSink, private juce::Timer
     int serials = 0;
     int tick = 0;
     std::array<std::atomic<bool>, perf::kDecks> boundDecks{};
+    std::array<std::atomic<bool>, 2> layers{}; // the controller's sides on decks 3 and 4
 };
 
 std::unique_ptr<PerformanceHost> PerformanceHost::g_host;
@@ -1098,6 +1279,8 @@ bool dispatchPerformanceCommand(const juce::String& type, const juce::var& paylo
     else if (type == "PERF_LOAD") h.load(payload, project, decodedCache, pool);
     else if (type == "PERF_PRELOAD") h.preload(payload, project, decodedCache);
     else if (type == "PERF_ATTACH_ITEM") h.attachItem(payload);
+    else if (type == "PERF_STEMS") h.stems(payload);
+    else if (type == "PERF_DECK_LAYER") h.setLayer(payload);
     else if (type == "PERF_SAMPLER_LOAD") h.loadSample(payload, project, decodedCache, pool);
     else if (type == "PERF_TRACK_LIVE")
     {

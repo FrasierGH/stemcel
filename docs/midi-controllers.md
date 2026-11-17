@@ -74,21 +74,45 @@ corresponding binding, Stemcel applies these actions:
 | Shift + Browse | On profiles with a mapped Shift button, zooms the timeline when clip-browse mode is not active. Each clockwise or anticlockwise step uses the same increment as Zoom In or Zoom Out. |
 | Hot-cue pads | Jump to the corresponding numbered timeline marker. A shifted or dedicated clear pad toggles a marker at the playhead: it removes the marker the playhead is sitting on, or adds one there when it is not. This is the same action as the `M` key. Profiles expose four or eight marker pads according to the hardware. |
 | Headphone Cue / PFL | In the Scratch Editor, picks the deck that owns the platter. On the timeline it does nothing: the timeline is one channel, and both decks' Play, Cue, Sync and jog wheels control it. |
-| Channel fader | Changes the currently selected Stemcel track's volume. |
-| EQ and filter | Changes Bass, Mid, Treble, or Filter on the currently selected track and opens Track FX. Profiles only expose controls present on that model. |
-| Master level | Changes the project master volume on profiles that bind it. |
-| Crossfader | Records the hardware position as MIDI controller state. Its saved direction preference does not currently change the audible mix. |
+| Channel faders, trim, EQ, filter, master level | Nothing on the timeline: there the controller only navigates, and never changes what is heard. They mix in [performance mode](performance-mode.md). |
+| Crossfader | Records the hardware position as MIDI controller state. It does not change the audible mix. |
 | Shift and jog touch | Maintain modifier and touch state used by the other mapped actions. |
 
 Physical deck numbers identify the source control; they are not assigned to
-specific Stemcel tracks. Channel faders, EQ, and filter controls always target
-the track currently selected in the arrangement.
+specific Stemcel tracks.
 
-Stemcel cannot read every dial and slider's position when a controller first
-connects. When you first move an absolute fader, dial, or knob whose hardware
-value differs from the on-screen value, it catches up gradually instead of
-jumping. This soft adjustment prevents an abrupt change after selecting a track
-or editing a value on screen.
+## Performance mode controllers
+
+Performance mode has profiles of its own, in
+`backend/resources/midi-mappings/performance/`, one per controller. The decks behave the same
+whichever controller drives them; what changes is which controls the hardware has. A control a
+controller lacks stays on screen, for the mouse (the DDJ-200 has no LOAD buttons or browse
+knob, for instance: load from the browser with the mouse).
+
+| Controller | Deck and mixer | Pads | Notes |
+| --- | --- | --- | --- |
+| Pioneer DJ DDJ-400 | Everything, as in rekordbox | Every mode | Checked on the hardware |
+| Pioneer DJ DDJ-FLX4 | Everything, as in rekordbox | Every mode | The DDJ-400's messages, with SHIFT + PLAY, CH2's Beat FX select and HEADPHONES MIX as the FLX4 sends them |
+| Pioneer DJ DDJ-SB3 | Play, Cue, Sync, tempo, jog, loops, trim, EQ, filter, faders, browse, LOAD, master and headphone levels, FX on and level | Hot cue, FX fade (Pad FX1), pad scratch (Pad FX2), sampler; SHIFT: beat jump, roll (beat loop) | |
+| Pioneer DJ DDJ-200 | Play, Cue, Sync, tempo, jog, EQ, filter, faders, crossfader, headphone cue | Hot cue | No LOAD or browse knob |
+| Hercules DJControl Inpulse 200 | Play, Cue, Sync, tempo, jog, loops, trim, bass, treble, filter, faders, browse, LOAD | Hot cue, roll (beat loop), FX (Pad FX1), sampler | |
+| Hercules DJControl Inpulse 300 | As the 200, with the mid EQ and Q | Hot cue, roll, sampler, toneplay (keyboard), FX, beat jump | |
+| Hercules DJControl Inpulse 500 | As the 300, high resolution, with key lock | Hot cue, loop, sampler, toneplay (key shift), FX, beat jump | |
+| Numark Mixtrack Platinum FX; Mixtrack Pro FX | Play, Cue, Sync, tempo, jog, loops, trim, EQ, filter, faders, browse, LOAD; four decks with its deck buttons | Hot cue, auto loop, sample, beat jump (the pads act in the chosen mode) | SHIFT is Stemcel's: SHIFT + jog searches |
+| Denon DJ MC7000 | Play, Cue, Sync, key lock, tempo, jog, loops, quantize, trim, EQ, filter, faders, browse, LOAD; four decks | Hot cue, roll, sampler, pitch (key shift) | SHIFT is Stemcel's |
+
+The profiles other than the DDJ-400's were made from the controllers' MIDI messages as
+published in [Mixxx](https://github.com/mixxxdj/mixxx/tree/main/res/controllers)'s open
+mappings (each file names its source). They are untested on the hardware: tell us what a
+control does on yours, and the MIDI line at the top right of performance mode shows each
+message and what it was mapped to.
+
+A profile can say, beside its controls: `invert` for a slider wired the other way up, `toggle`
+for a button that flips key lock or quantize, a `shift` control for a SHIFT the software holds
+(with `shifted` naming what another control does under it), `"mode": "current"` for pads
+whose notes are the same in every mode, an LED's `on` and `off` values, and
+`jogTicksPerTurn`, the jog's resolution. A profile with four `deckChannels` drives four decks; one
+with two reaches decks 3 and 4 through performance mode's CTRL 3 / CTRL 4.
 
 ## Controller feedback
 

@@ -476,9 +476,10 @@ void TimelineView::paintGrid(juce::Graphics& g, juce::Rectangle<int> area, bool 
     const double beatPx = 60.0 / curve.bpmAt(startMs) * view.pxPerSecond;
     const auto grid = actions.snapGrid();
     int subdivisions = grid == "half" ? 2 : (grid == "quarter" || grid == "free") ? 4 : 1;
-    // Thin out lines that would crowd together at low zoom.
-    while (subdivisions > 1 && beatPx / subdivisions < 8.0) subdivisions /= 2;
-    const bool drawBeats = beatPx >= 6.0;
+    // Thin out lines that would crowd together: beats only once they are 15 px apart (about
+    // four zoom steps in from where they would first fit), sub-beats once they are 10 px apart.
+    while (subdivisions > 1 && beatPx / subdivisions < 10.0) subdivisions /= 2;
+    const bool drawBeats = beatPx >= 15.0;
     if (!drawBeats)
     {
         // Far out: every bar would crowd into a solid wash, so every 2nd, 4th, ... bar.
@@ -496,6 +497,10 @@ void TimelineView::paintGrid(juce::Graphics& g, juce::Rectangle<int> area, bool 
         return;
     }
 
+    // Within three zoom steps (the + button's, 1.25 each) of the closest view, every beat is drawn
+    // over the clips too, much fainter than the bars; further out only the bars cross the clips.
+    const bool closeUp = view.pxPerSecond >= VS::kMaxPxPerSecond / (1.25 * 1.25 * 1.25) - 1.0e-6;
+    if (overClips) subdivisions = 1;
     const double stepBeats = 1.0 / subdivisions;
     const auto firstStep = static_cast<juce::int64>(std::floor(curve.beatAt(startMs) / stepBeats));
     for (auto i = firstStep;; ++i)
@@ -507,11 +512,12 @@ void TimelineView::paintGrid(juce::Graphics& g, juce::Rectangle<int> area, bool 
         const bool isBar = isBeat && (i / subdivisions) % static_cast<juce::int64>(kBeatsPerBar) == 0;
         if (!isBeat && !drawBeats) continue;
         if (isBeat && !isBar && !drawBeats) continue;
+        if (overClips && !isBar && !closeUp) continue;
         if (overClips)
-            g.setColour(colours::text.withAlpha(isBar ? 0.22f : isBeat ? 0.14f : 0.12f));
+            g.setColour(colours::text.withAlpha(isBar ? (closeUp ? 0.3f : 0.22f) : 0.08f));
         else
-            g.setColour(isBar ? colours::grey500.withAlpha(0.7f)
-                              : isBeat ? colours::grey600.withAlpha(0.7f) : colours::grey700.withAlpha(0.6f));
+            g.setColour(isBar ? colours::grey500.withAlpha(closeUp ? 0.85f : 0.7f)
+                              : isBeat ? colours::grey600.withAlpha(closeUp ? 0.45f : 0.7f) : colours::grey700.withAlpha(0.6f));
         g.drawVerticalLine(static_cast<int>(x), static_cast<float>(area.getY()), static_cast<float>(area.getBottom()));
     }
 }

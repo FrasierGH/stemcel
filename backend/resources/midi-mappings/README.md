@@ -40,10 +40,8 @@ Supported input actions:
 | `browseTracks`, `browsePress` | Select tracks or clips and enter/leave clip-browse mode. |
 | `timelineZoom` | Zoom the timeline, or extend the clip selection while clip-browse mode is active. |
 | `markerJump`, `markerToggle` | Jump to, add, or remove numbered timeline markers. |
-| `trackGain` | Change the selected track's fader. |
-| `toneBass`, `toneMid`, `toneTreble`, `filter` | Change the selected track's Tone/Filter controls. |
-| `masterVolume` | Change the project master volume. |
-| `crossfader` | Publish crossfader telemetry; it does not currently change the audible mix. |
+| `trackGain`, `toneBass`, `toneMid`, `toneTreble`, `filter`, `masterVolume` | Accepted, and ignored on the timeline: there a controller only navigates, never changing what is heard. Performance mode's profiles (in `performance/`) map the mixer. |
+| `crossfader` | Publish crossfader telemetry; it does not change the audible mix. |
 
 Supported output purposes:
 
