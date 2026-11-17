@@ -333,7 +333,11 @@ double TimelineView::contentLengthMs() const
 
 void TimelineView::userScrolled()
 {
-    if (live.playing && view.followPlayback) view.followSuspended = true;
+    if (!live.playing || !view.followPlayback) return;
+    view.followSuspended = true;
+    // This playback has begun, as far as following goes: a scroll in its first moments, before
+    // the timer next looks, isn't undone by the timer taking playback as just started.
+    wasPlaying = true;
 }
 
 void TimelineView::clampScroll()
