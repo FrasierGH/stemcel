@@ -1,6 +1,7 @@
 #include "PerformanceEngine.h"
 
 #include <algorithm>
+#include <map>
 #include <cmath>
 
 namespace stemcel::perf
@@ -108,8 +109,9 @@ class PerformanceEngine::Recorder final : public DeckRecorder
         r.b = s.startPos;
         r.tempo = static_cast<float>(s.tempo);
         r.semitones = static_cast<std::int16_t>(s.semitones);
+        // The stems out of the mix in the high four bits.
         r.flags = static_cast<std::uint8_t>((s.moving ? 1 : 0) | (s.audible ? 2 : 0) | (s.keyLock ? 4 : 0) |
-                                            (s.scratch ? 8 : 0));
+                                            (s.scratch ? 8 : 0) | ((s.stemsOff & 0xF) << 4));
         engine.pushRec(r);
     }
     void platter(int deck, juce::int64 at, double pos) noexcept override
@@ -207,6 +209,27 @@ void PerformanceEngine::loadSample(int slot, std::shared_ptr<const DeckTrack> sa
     queueFifo.finishedWrite(1);
 }
 
+void PerformanceEngine::attachStems(int deck, int serial, std::shared_ptr<const StemSet> stems)
+{
+    if (deck < 1 || deck > kDecks) return;
+    const StemSet* raw = stems.get();
+    if (stems != nullptr)
+    {
+        const std::scoped_lock lock(tracksMutex);
+        stemSets.emplace_back(serial, std::move(stems));
+    }
+    const juce::SpinLock::ScopedLockType lock(writeLock);
+    int s1 = 0, n1 = 0, s2 = 0, n2 = 0;
+    queueFifo.prepareToWrite(1, s1, n1, s2, n2);
+    if (n1 == 0) return;
+    Queued q;
+    q.event.deck = static_cast<std::int16_t>(deck);
+    q.stems = raw;
+    q.stemSerial = serial;
+    queue[static_cast<size_t>(s1)] = q;
+    queueFifo.finishedWrite(1);
+}
+
 void PerformanceEngine::startCapture(int deck, double seconds)
 {
     captureDeck.store(0);
@@ -244,6 +267,18 @@ void PerformanceEngine::collectGarbage()
                                     return true;
                                 }),
                  tracks.end());
+    // A stem set goes with its track: once no deck shows that track (a newer set for the same
+    // track replaces it on the deck, so only the newest is kept).
+    std::map<int, const StemSet*> newest;
+    for (const auto& [serial, set] : stemSets) newest[serial] = set.get();
+    stemSets.erase(std::remove_if(stemSets.begin(), stemSets.end(),
+                                  [&](const auto& entry)
+                                  {
+                                      const bool onDeck = std::any_of(v.decks.begin(), v.decks.end(),
+                                                                      [&](const DeckView& d) { return d.serial == entry.first; });
+                                      return !onDeck || newest[entry.first] != entry.second.get();
+                                  }),
+                   stemSets.end());
 }
 
 void PerformanceEngine::drainRecording(std::vector<RecEvent>& out)
@@ -256,9 +291,10 @@ void PerformanceEngine::drainRecording(std::vector<RecEvent>& out)
     recFifo.finishedRead(n1 + n2);
 }
 
-void PerformanceEngine::consumePeaks(std::array<float, kDecks>& peaksOut)
+void PerformanceEngine::consumePeaks(std::array<std::array<float, 2>, kDecks>& peaksOut)
 {
-    for (int d = 0; d < kDecks; ++d) peaksOut[static_cast<size_t>(d)] = peaks[static_cast<size_t>(d)].exchange(0.0F);
+    for (size_t d = 0; d < static_cast<size_t>(kDecks); ++d)
+        for (size_t side = 0; side < 2; ++side) peaksOut[d][side] = peaks[d * 2 + side].exchange(0.0F);
 }
 
 // --- Audio thread ---------------------------------------------------------------------------
@@ -302,7 +338,7 @@ void PerformanceEngine::applyBeatFx() noexcept
     for (int unit = 0; unit <= kDecks; ++unit)
     {
         auto& fx = unit == 0 ? masterFx : channels[static_cast<size_t>(unit - 1)].fx.beat;
-        const bool routed = (fxChannel == 2 && unit == 0) || (fxChannel == unit - 1 && unit >= 1);
+        const bool routed = fxChannelUnit(fxChannel) == unit;
         const bool releasing = releaseLeft > 0 && releaseUnit == unit;
         fx.setType(releasing ? kReleaseTypes[static_cast<size_t>(std::clamp(releaseType, 0, 2))] : fxType);
         fx.setBeatStep(releasing ? djfx::kDefaultBeatStep : fxStep);
@@ -360,7 +396,7 @@ void PerformanceEngine::beatFxControl(const Event& e) noexcept
             if (fxType == static_cast<int>(djfx::BeatFx::spinBack)) fxType = static_cast<int>(djfx::BeatFx::echo);
             break;
         case Control::fxChannel:
-            fxChannel = std::clamp(static_cast<int>(e.index), 0, 2);
+            fxChannel = std::clamp(static_cast<int>(e.index), 0, kDecks);
             break;
         case Control::fxLevel:
             fxLevel = std::clamp(e.value, 0.0F, 1.0F);
@@ -371,7 +407,7 @@ void PerformanceEngine::beatFxControl(const Event& e) noexcept
         case Control::fxRelease:
             if (!press) break;
             // Release FX on the Beat FX's channel for a beat or two, then the Beat FX is off.
-            releaseUnit = fxChannel == 2 ? 0 : fxChannel + 1;
+            releaseUnit = fxChannelUnit(fxChannel);
             releaseLeft = static_cast<juce::int64>(60.0 / fxBpmFor(releaseUnit) * (releaseType == 1 ? 1.0 : 2.0) * rate);
             fxOn = false;
             break;
@@ -462,7 +498,7 @@ double PerformanceEngine::channelGain(int deck) const noexcept
     const double trim = juce::Decibels::decibelsToGain(curves::trimDb(c.trim) + static_cast<double>(c.autoGainDb), curves::kSilentDb);
     const auto curve = static_cast<curves::CrossfaderCurve>(crossfaderCurve.load(std::memory_order_relaxed));
     // Deck 1 on the crossfader's A side, deck 2 on B (rekordbox's default assign for two decks).
-    return trim * curves::faderGain(c.fader) * curves::crossfaderGain(crossfader, deck == 1 ? 0 : 1, curve);
+    return trim * curves::faderGain(c.fader) * curves::crossfaderGain(crossfader, crossfaderSide(deck), curve);
 }
 
 SyncSource PerformanceEngine::syncSourceFor(int deck) const noexcept
@@ -539,11 +575,25 @@ void PerformanceEngine::applyPad(int deck, const Event& e, bool shifted) noexcep
     auto& c = channels[static_cast<size_t>(deck - 1)];
     const int pad = juce::jlimit(0, 7, static_cast<int>(e.index));
     const bool press = e.value > 0.5F;
-    c.padMode = e.mode;
+    // In Stem Mix the controller is in its sampler mode: its sampler pads are the stems. Pads
+    // that don't say their mode (PadMode::count: the same notes in every mode) act in the
+    // channel's.
+    const auto mode = e.mode == PadMode::count ? c.padMode
+                      : c.padMode == PadMode::stems && e.mode == PadMode::sampler ? PadMode::stems
+                                                                                   : e.mode;
+    c.padMode = mode;
     Event out;
     out.deck = e.deck;
-    switch (e.mode)
+    switch (mode)
     {
+        case PadMode::stems:
+            // Pads 1–4 take a stem in or out, 5–8 solo it; SHIFT + a pad brings every stem back.
+            if (!press) break;
+            out.index = static_cast<std::int16_t>(pad % kStems);
+            out.value = 1.0F;
+            out.control = shifted ? Control::stemsReset : pad < kStems ? Control::stemToggle : Control::stemSolo;
+            player.handle(out);
+            break;
         case PadMode::hotCue:
             out.index = static_cast<std::int16_t>(pad);
             out.value = e.value;
@@ -628,7 +678,7 @@ void PerformanceEngine::applyPad(int deck, const Event& e, bool shifted) noexcep
         case PadMode::padFx1:
         case PadMode::padFx2:
         {
-            const int bank = e.mode == PadMode::padFx1 ? 0 : 1;
+            const int bank = mode == PadMode::padFx1 ? 0 : 1;
             const int slot = pad + (shifted ? 8 : 0);
             if (press)
             {
@@ -651,7 +701,7 @@ void PerformanceEngine::applyPad(int deck, const Event& e, bool shifted) noexcep
         case PadMode::sampler:
         {
             if (!press) break;
-            const int slot = samplerBank * 16 + (deck - 1) * 8 + pad;
+            const int slot = samplerBank * 16 + ((deck - 1) % 2) * 8 + pad; // decks 3 and 4 share 1's and 2's
             // A pad plays its slot from the start (again if it is playing); SHIFT stops it.
             // SHIFT on an idle slot loads the browser's track into it (the app does that).
             if (shifted) triggerSample(slot, false);
@@ -665,6 +715,12 @@ void PerformanceEngine::applyPad(int deck, const Event& e, bool shifted) noexcep
 
 void PerformanceEngine::apply(const Queued& q) noexcept
 {
+    if (q.stems != nullptr)
+    {
+        const int d = q.event.deck;
+        if (d >= 1 && d <= kDecks) decks[static_cast<size_t>(d - 1)]->setStems(q.stems, q.stemSerial);
+        return;
+    }
     if (q.sampleSlot >= 0)
     {
         auto& v = voices[static_cast<size_t>(q.sampleSlot)];
@@ -746,8 +802,17 @@ void PerformanceEngine::apply(const Queued& q) noexcept
         case Control::padMode:
             if (press)
             {
-                c.padMode = e.mode;
-                if (e.mode != PadMode::keyboard) c.keyboardCue = -1;
+                // SAMPLER pressed twice quickly: Stem Mix; once more, the sampler again.
+                auto mode = e.mode;
+                if (mode == PadMode::sampler)
+                {
+                    const bool twice = c.padMode == PadMode::sampler && c.samplerPressAt >= 0 &&
+                                       static_cast<double>(clock - c.samplerPressAt) < kStemModeDoubleSec * rate;
+                    if (twice) mode = PadMode::stems;
+                    c.samplerPressAt = twice ? -1 : clock;
+                }
+                c.padMode = mode;
+                if (mode != PadMode::keyboard) c.keyboardCue = -1;
             }
             break;
         case Control::pad:
@@ -785,7 +850,7 @@ void PerformanceEngine::recordParams(int deck, juce::int64 at, bool force) noexc
 {
     auto& c = channels[static_cast<size_t>(deck - 1)];
     const bool asFilter = colorType == static_cast<int>(djfx::ColorFx::filter);
-    const bool routed = fxChannel == deck - 1;
+    const bool routed = fxChannelUnit(fxChannel) == deck;
     const bool releasing = releaseLeft > 0 && releaseUnit == deck;
     const PadFxPreset* pad = nullptr;
     if (c.padFxHeld >= 0) pad = &padFxPreset(c.padMode == PadMode::padFx2 ? 1 : 0, c.padFxHeld % 8, c.padFxHeld >= 8);
@@ -842,7 +907,7 @@ void PerformanceEngine::recordMasterParams(juce::int64 at, bool force) noexcept
         {RecParam::beatFxType, static_cast<double>(releasing ? kReleaseTypes[static_cast<size_t>(std::clamp(releaseType, 0, 2))] : fxType)},
         {RecParam::beatFxBeats, static_cast<double>(releasing ? djfx::kDefaultBeatStep : fxStep)},
         {RecParam::beatFxLevel, releasing ? 0.8 : static_cast<double>(fxLevel)},
-        {RecParam::beatFxOn, (releasing || (fxChannel == 2 && fxOn)) ? 1.0 : 0.0},
+        {RecParam::beatFxOn, (releasing || (fxChannel == kFxMaster && fxOn)) ? 1.0 : 0.0},
         {RecParam::fxBpm, fxBpmFor(0)},
     }};
     const auto minGap = static_cast<juce::int64>(kParamMinIntervalSec * rate);
@@ -993,16 +1058,21 @@ void PerformanceEngine::renderBlock(float* const* out, int numOutChannels, int n
             for (int i = 0; i < room; ++i) captureBuffer[static_cast<size_t>(at + i)] = 0.5F * (buf[0][i] + buf[1][i]);
             captureLength.store(at + std::max(0, room), std::memory_order_release);
         }
-        float peak = 0.0F;
+        std::array<float, 2> peak{};
         for (int i = 0; i < n; ++i)
         {
             const float l = buf[0][i], r = buf[1][i];
             out[0][i] += l;
             if (numOutChannels > 1) out[1][i] += r;
-            peak = std::max({peak, std::abs(l), std::abs(r)});
+            peak[0] = std::max(peak[0], std::abs(l));
+            peak[1] = std::max(peak[1], std::abs(r));
         }
-        float prev = peaks[static_cast<size_t>(d - 1)].load(std::memory_order_relaxed);
-        while (peak > prev && !peaks[static_cast<size_t>(d - 1)].compare_exchange_weak(prev, peak)) {}
+        for (size_t side = 0; side < 2; ++side)
+        {
+            auto& slot = peaks[static_cast<size_t>(d - 1) * 2 + side];
+            float prev = slot.load(std::memory_order_relaxed);
+            while (peak[side] > prev && !slot.compare_exchange_weak(prev, peak[side])) {}
+        }
         if (rec) recordParams(d, clock, restart);
     }
     // The sampler into the master, then the master's Beat FX over everything.
@@ -1059,7 +1129,7 @@ void PerformanceEngine::publishView() noexcept
     v.fxLevel = fxLevel;
     v.fxOn = fxOn || releaseLeft > 0;
     v.fxTapMode = fxTapMode;
-    v.fxBpm = fxBpmFor(fxChannel == 2 ? 0 : fxChannel + 1);
+    v.fxBpm = fxBpmFor(fxChannelUnit(fxChannel));
     v.samplerBank = samplerBank;
     v.samplerVolume = samplerVolume;
     v.samplesLoaded = 0;

@@ -152,11 +152,14 @@ class PerformanceEngine final : public juce::AudioSource
     void load(int deck, std::shared_ptr<const DeckTrack> track, int copyFromDeck = 0);
     // A sampler slot's sample (0..kSamplerSlots-1); null empties it.
     void loadSample(int slot, std::shared_ptr<const DeckTrack> sample);
+    // Stem Mix: the stems of the track `serial` on `deck` (kept here until no deck holds them).
+    void attachStems(int deck, int serial, std::shared_ptr<const StemSet> stems);
     const EngineView& view() { return views.read(); }
     // Takes the recorder's events since the last call.
     void drainRecording(std::vector<RecEvent>& out);
-    // Post-fader channel peaks since the last call (for meters and the controller's LEDs).
-    void consumePeaks(std::array<float, kDecks>& peaksOut);
+    // Post-fader channel peaks since the last call (for meters and the controller's LEDs), left
+    // and right.
+    void consumePeaks(std::array<std::array<float, 2>, kDecks>& peaksOut);
     void setCrossfaderCurve(curves::CrossfaderCurve c) noexcept { crossfaderCurve.store(static_cast<int>(c)); }
     void setCueOutputAvailable(bool on) noexcept { cueOutputAvailable.store(on); }
     void collectGarbage();
@@ -181,6 +184,8 @@ class PerformanceEngine final : public juce::AudioSource
         int copyFrom = 0;
         bool isLoad = false;
         int sampleSlot = -1; // a sampler load
+        const StemSet* stems = nullptr; // a stem set for the deck's track `stemSerial`
+        int stemSerial = 0;
     };
     struct Channel
     {
@@ -193,6 +198,7 @@ class PerformanceEngine final : public juce::AudioSource
         int beatJumpPage = 1, keyPage = 0, keyboardCue = -1;
         int padFxHeld = -1;
         int padFxRestoreStep = -1;
+        juce::int64 samplerPressAt = -1; // SAMPLER's last press, for the double press into Stem Mix
         bool bound = false; // driving a timeline track: the deck is silent and not recorded // BEAT ◁/▷ during a held pad changes it until it is let go
         djfx::DjFxChain fx;
         bool wasMoving = false;
@@ -275,11 +281,12 @@ class PerformanceEngine final : public juce::AudioSource
     std::atomic<juce::int64> captureStart{-1};
 
     TripleBuffer<EngineView> views;
-    std::array<std::atomic<float>, kDecks> peaks{};
+    std::array<std::atomic<float>, static_cast<size_t>(kDecks) * 2> peaks{}; // deck 1 L, R, deck 2 L, R
 
     // Tracks the decks may hold (message thread).
     std::mutex tracksMutex;
     std::vector<std::shared_ptr<const DeckTrack>> tracks;
+    std::vector<std::pair<int, std::shared_ptr<const StemSet>>> stemSets; // with their track's serial
 };
 
 } // namespace stemcel::perf

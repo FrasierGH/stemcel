@@ -466,7 +466,28 @@ void StemService::splitChannels(const juce::String& clipId, const juce::StringAr
     if (onNotify) onNotify("Splitting channels of " + job.sourceName, false);
 }
 
-void StemService::importStem(Job& job, const juce::String& stem, const juce::File& file)
+juce::String StemService::findStem(const juce::String& sourceItemId, const juce::String& label) const
+{
+    for (const auto& item : mirror.model().library)
+        if (item.kind == "stem" && item.sourceItemId == sourceItemId && item.name.startsWithIgnoreCase(label + " ")) return item.id;
+    return {};
+}
+
+juce::String StemService::addLibraryStem(const juce::String& sourceItemId, const juce::String& label, const juce::File& file)
+{
+    const auto* source = mirror.model().findLibraryItem(sourceItemId);
+    if (source == nullptr) return {};
+    Job job;
+    job.sourceItemId = sourceItemId;
+    job.sourceName = source->displayName();
+    job.mediaId = source->mediaId;
+    const auto key = label.toLowerCase();
+    importStem(job, key, file, label);
+    mirror.refreshNow();
+    return findStem(sourceItemId, label);
+}
+
+void StemService::importStem(Job& job, const juce::String& stem, const juce::File& file, const juce::String& labelOverride)
 {
     if (stem.isEmpty() || job.placed.count(stem) != 0 || !file.existsAsFile()) return;
     juce::AudioFormatManager formats;
@@ -474,7 +495,10 @@ void StemService::importStem(Job& job, const juce::String& stem, const juce::Fil
     std::unique_ptr<juce::AudioFormatReader> reader(formats.createReaderFor(file));
     if (reader == nullptr) return;
     job.placed.insert(stem);
-    const auto label = stem == "left" ? juce::String("Left") : stem == "right" ? juce::String("Right") : uvr::stemLabel(stem);
+    const auto label = labelOverride.isNotEmpty() ? labelOverride
+                       : stem == "left"           ? juce::String("Left")
+                       : stem == "right"          ? juce::String("Right")
+                                                  : uvr::stemLabel(stem);
     const auto name = label + juce::String(juce::CharPointer_UTF8(" \xe2\x80\x94 ")) + job.sourceName;
     int next = 1;
     for (const auto& item : mirror.model().library)

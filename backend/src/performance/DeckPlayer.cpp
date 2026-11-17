@@ -21,6 +21,9 @@ constexpr double kAtCueTolerance = 0.0015; // seconds
 constexpr double kMinSplitSec = 0.25;      // pitch-fader splits are no closer than this
 constexpr double kTempoSplit = 0.0002;
 constexpr std::array<double, 4> kRanges{0.06, 0.10, 0.16, 1.00};
+constexpr double kStemFadeSec = 0.008; // a stem going in or out
+// Which of StemSet's parts each stem is (INST has none: it is what is left).
+constexpr std::array<int, kStems> kStemPart{0, -1, 2, 1};
 
 float smoothGain(double rate) noexcept
 {
@@ -48,6 +51,7 @@ void DeckPlayer::prepare(double outputSampleRate, int block)
 {
     outRate = outputSampleRate > 0.0 ? outputSampleRate : 44100.0;
     maxBlock = std::max(block, 64);
+    stemStep = static_cast<float>(1.0 / (kStemFadeSec * outRate));
     auto& s = *stretch;
     s.engine.presetDefault(2, static_cast<float>(outRate));
     const int seekLen = s.engine.outputSeekLength(4.0F) + 64;
@@ -182,7 +186,12 @@ bool DeckPlayer::moving() const noexcept { return loaded != nullptr && (playing 
 void DeckPlayer::load(const DeckTrack* track, const DeckPlayer* copy) noexcept
 {
     if (loaded != nullptr && runGain > 0.0F) jumpTo(pos); // fade the old track out
+    const bool sameTrack = copy != nullptr && copy->loaded == track;
     loaded = track;
+    stems = sameTrack ? copy->stems : nullptr;
+    stemsOff = sameTrack ? copy->stemsOff : 0;
+    stemGain = sameTrack ? copy->stemGain : std::array<float, kStems>{1.0F, 1.0F, 1.0F, 1.0F};
+    stemsMoving = stems != nullptr && stemsOff != 0;
     preview = Preview::none;
     playing = false;
     exitLoop();
@@ -403,6 +412,23 @@ void DeckPlayer::handle(const Event& e) noexcept
         case Control::keyShift:
             semitones = juce::jlimit(-12, 12, static_cast<int>(std::lround(e.value)));
             break;
+        case Control::stemToggle:
+        case Control::stemSolo:
+        case Control::stemsReset:
+        {
+            if (!press) break;
+            const int stem = juce::jlimit(0, kStems - 1, static_cast<int>(e.index));
+            const int bit = 1 << stem;
+            // A stem the set hasn't (a two-stem split's bass and drums) can't go in or out.
+            if (stems != nullptr && e.control != Control::stemsReset && (presentStems() & bit) == 0) break;
+            const int all = stems != nullptr ? presentStems() : (1 << kStems) - 1;
+            if (e.control == Control::stemsReset) stemsOff = 0;
+            else if (e.control == Control::stemToggle) stemsOff ^= bit;
+            // Solo: that stem alone; pressed again while it is alone, every stem back.
+            else stemsOff = stemsOff == (all & ~bit) ? 0 : (all & ~bit);
+            stemsMoving = stems != nullptr;
+            break;
+        }
         case Control::hotCue:
             hotCueButton(e.index, press);
             break;
@@ -689,17 +715,67 @@ void DeckPlayer::jog(Control control, double ticks) noexcept
 
 float DeckPlayer::sampleAt(int channel, double p) const noexcept
 {
-    const auto& audio = *loaded->audio;
     const int len = readyLength(); // past what has loaded, silence
-    const float* x = audio.getReadPointer(std::min(channel, audio.getNumChannels() - 1));
     const int i = static_cast<int>(std::floor(p));
     const auto f = static_cast<float>(p - i);
-    auto at = [&](int k) { return k >= 0 && k < len ? x[k] : 0.0F; };
-    const float xm1 = at(i - 1), x0 = at(i), x1 = at(i + 1), x2 = at(i + 2);
+    const float xm1 = frame(channel, i - 1, len), x0 = frame(channel, i, len), x1 = frame(channel, i + 1, len),
+                x2 = frame(channel, i + 2, len);
     const float c1 = 0.5F * (x1 - xm1);
     const float c2 = xm1 - 2.5F * x0 + 2.0F * x1 - 0.5F * x2;
     const float c3 = 0.5F * (x2 - xm1) + 1.5F * (x0 - x1);
     return ((c3 * f + c2) * f + c1) * f + x0;
+}
+
+float DeckPlayer::frame(int channel, int k, int len) const noexcept
+{
+    if (k < 0 || k >= len) return 0.0F;
+    const auto& audio = *loaded->audio;
+    const float mix = audio.getReadPointer(std::min(channel, audio.getNumChannels() - 1))[k];
+    if (!stemMixing()) return mix;
+    // The track at INST's gain, and each other stem moved from there to its own: with every
+    // stem in, the track itself; with one out, the track less that stem.
+    const float inst = stemGain[1];
+    float v = mix * inst;
+    if (k < stems->frames)
+        for (int s = 0; s < kStems; ++s)
+            if (const int part = kStemPart[static_cast<size_t>(s)]; part >= 0 && stems->present[static_cast<size_t>(part)])
+            {
+                const auto p = static_cast<size_t>(part);
+                v += static_cast<float>(stems->data[p][static_cast<size_t>(channel & 1)][static_cast<size_t>(k)]) * stems->scale[p] *
+                     (stemGain[static_cast<size_t>(s)] - inst);
+            }
+    return v;
+}
+
+void DeckPlayer::stepStemGains() noexcept
+{
+    if (!stemsMoving) return;
+    bool settled = true;
+    for (int s = 0; s < kStems; ++s)
+    {
+        auto& g = stemGain[static_cast<size_t>(s)];
+        const float target = (stemsOff & (1 << s)) != 0 ? 0.0F : 1.0F;
+        g = target > g ? std::min(target, g + stemStep) : std::max(target, g - stemStep);
+        settled = settled && g == target;
+    }
+    // Every stem back in and still: the track plays as it is (the fast path).
+    if (settled && stemsOff == 0) stemsMoving = false;
+}
+
+int DeckPlayer::presentStems() const noexcept
+{
+    int mask = 0b0011; // VOCAL and INST
+    if (stems != nullptr)
+        for (int s = 0; s < kStems; ++s)
+            if (const int part = kStemPart[static_cast<size_t>(s)]; part >= 0 && stems->present[static_cast<size_t>(part)]) mask |= 1 << s;
+    return mask;
+}
+
+void DeckPlayer::setStems(const StemSet* set, int serial) noexcept
+{
+    if (loaded == nullptr || loaded->serial != serial) return;
+    stems = set;
+    stemsMoving = stems != nullptr && (stemsOff != 0 || stemGain != std::array<float, kStems>{1.0F, 1.0F, 1.0F, 1.0F});
 }
 
 void DeckPlayer::advance(double& p, double delta, bool record, juce::int64 at) noexcept
@@ -727,7 +803,7 @@ void DeckPlayer::advance(double& p, double delta, bool record, juce::int64 at) n
     }
 }
 
-void DeckPlayer::readWrapped(float* const* dest, double& cursor, int n) const noexcept
+void DeckPlayer::readWrapped(float* const* dest, double& cursor, int n) noexcept
 {
     const auto& audio = *loaded->audio;
     const int len = readyLength();
@@ -739,15 +815,24 @@ void DeckPlayer::readWrapped(float* const* dest, double& cursor, int n) const no
         int run = n - written;
         if (loopActive && loopOut > loopIn && cursor < loopOut)
             run = std::min(run, std::max(1, static_cast<int>(std::ceil(loopOut - cursor))));
-        for (int ch = 0; ch < 2; ++ch)
-        {
-            const float* src = audio.getReadPointer(std::min(ch, chans - 1));
+        if (stemMixing())
             for (int i = 0; i < run; ++i)
             {
-                const auto k = c + i;
-                dest[ch][written + i] = k >= 0 && k < len ? src[k] : 0.0F;
+                stepStemGains();
+                const auto k = static_cast<int>(c + i);
+                dest[0][written + i] = frame(0, k, len);
+                dest[1][written + i] = frame(1, k, len);
             }
-        }
+        else
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                const float* src = audio.getReadPointer(std::min(ch, chans - 1));
+                for (int i = 0; i < run; ++i)
+                {
+                    const auto k = c + i;
+                    dest[ch][written + i] = k >= 0 && k < len ? src[k] : 0.0F;
+                }
+            }
         written += run;
         cursor += run;
         if (loopActive && loopOut > loopIn && cursor >= loopOut) cursor -= (loopOut - loopIn);
@@ -760,6 +845,7 @@ void DeckPlayer::renderVarispeed(float* const* out, int offset, int n, double ta
     for (int i = 0; i < n; ++i)
     {
         currentRate += (targetRate - currentRate) * k;
+        stepStemGains();
         const float g = smoothGain(currentRate);
         out[0][offset + i] = sampleAt(0, pos) * g;
         out[1][offset + i] = sampleAt(1, pos) * g;
@@ -845,6 +931,7 @@ void DeckPlayer::emitSegment(juce::int64 at, double endPos) noexcept
     s.audible = lastKey.audible;
     s.keyLock = lastKey.keyLock;
     s.scratch = lastKey.scratch;
+    s.stemsOff = lastKey.stemsOff;
     recorder->segment(s);
     segmentTempo = s.tempo;
     segmentStart = at;
@@ -885,7 +972,8 @@ void DeckPlayer::render(float* const* out, int n, const SyncSource& master, Deck
     const double motor = srcRatio * tempoFactor() * (1.0 + phaseCorrection);
 
     // What the deck is doing now, for the recorder: a change starts a new segment.
-    const RecKey key{moving(), audible && moving(), keyLockOn || semitones != 0, scratching || bend != 0.0, semitones};
+    const RecKey key{moving(), audible && moving(), keyLockOn || semitones != 0, scratching || bend != 0.0, semitones,
+                     stems != nullptr ? stemsOff : 0};
     const bool tempoMoved = std::abs(tempoFactor() - segmentTempo) > kTempoSplit * segmentTempo &&
                             static_cast<double>(clock - segmentStart) >= kMinSplitSec * outRate;
     if (forceSegment || jumped || key != lastKey || (tempoMoved && key.moving && !key.scratch))
@@ -1001,6 +1089,9 @@ void DeckPlayer::fillView(DeckView& v) const noexcept
     v.hotCues = hotCues;
     v.memoryCues = memoryCues;
     v.cueRevision = cueRevision;
+    v.hasStems = stems != nullptr;
+    v.stemsOff = stemsOff;
+    v.stemsPresent = stems != nullptr ? presentStems() : 0;
 }
 
 } // namespace stemcel::perf

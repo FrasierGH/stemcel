@@ -25,7 +25,12 @@ class DeckDisplay final : public juce::Component
         juce::String audioPath;
     };
     void showTrack(const juce::String& name, std::vector<TrackClip> clips, double playheadMs, double lengthMs, bool playing);
-    void showDeck() { trackMode = false; }
+    void showDeck()
+    {
+        if (!trackMode) return;
+        trackMode = false;
+        repaint();
+    }
     void setZoom(double secondsEachSide) { halfWindow = juce::jlimit(1.0, 16.0, secondsEachSide); }
     double zoom() const { return halfWindow; }
     std::function<void(double seconds)> onSeek; // a click on the overview

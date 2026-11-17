@@ -6,6 +6,7 @@
 
 #include <functional>
 #include <memory>
+#include <set>
 #include <vector>
 
 namespace stemcel::native
@@ -22,6 +23,9 @@ class FxKnob final : public juce::Component
            std::function<juce::String(double)> format = {});
 
     void setValue(double value);
+    // A knob that turns as another does: `toValue` takes its travel (0..1) to the value,
+    // `toTravel` back. Track FX's tone and filter use performance mode's mixer curves.
+    void setCurve(std::function<double(double)> toValue, std::function<double(double)> toTravel);
     void resized() override;
 
   private:
@@ -58,7 +62,7 @@ class FxModule final : public juce::Component
 };
 
 // Track FX for the selected track: Tone (bass/mid/treble), Filter, Sends (room/echo),
-// Punch, Saturation, Bit crusher.
+// Punch, Saturation; the bit crusher once added (Add effect...) or in use.
 class TrackFxView final : public juce::Component, private juce::ChangeListener
 {
   public:
@@ -75,6 +79,11 @@ class TrackFxView final : public juce::Component, private juce::ChangeListener
     void toggleLanesForTest(FxModule& module) { toggleLanes(module); }
 
   private:
+    // The bit crusher: shown when the track uses it or it was added here; x takes it off.
+    FxModule* crusher = nullptr;
+    juce::TextButton crusherRemove{"x"};
+    std::set<juce::String> crusherAdded; // tracks it was added to
+    static bool crusherInUse(const TrackModel& track);
     void changeListenerCallback(juce::ChangeBroadcaster*) override;
     void sync();
     void sendTrack(const juce::String& type, std::initializer_list<std::pair<const char*, juce::var>> props,

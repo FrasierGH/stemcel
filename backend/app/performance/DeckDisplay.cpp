@@ -21,11 +21,28 @@ const juce::Colour kHotCueColours[8] = {juce::Colour(0xff28e214), juce::Colour(0
 
 void DeckDisplay::update(const DeckState& s, const DeckTrackInfo& i, double posSec, bool master)
 {
+    // A still deck showing the same thing needs no new frame (60 a second otherwise, per deck).
+    const auto sameCues = [&]
+    {
+        for (size_t c = 0; c < s.hotCues.size(); ++c)
+            if (s.hotCues[c].pos != state.hotCues[c].pos) return false;
+        return s.memoryCues.size() == state.memoryCues.size();
+    };
+    const bool same = !trackMode && posSec == pos && master == isMaster && s.serial == state.serial && i.serial == info.serial &&
+                      i.itemId == info.itemId && i.title == info.title && i.audioPath == info.audioPath && i.bpm == info.bpm &&
+                      i.beats.size() == info.beats.size() && i.anchorSec == info.anchorSec &&
+                      s.loaded == state.loaded && s.playing == state.playing && s.cueSec == state.cueSec &&
+                      s.loopActive == state.loopActive && s.loopInSec == state.loopInSec && s.loopOutSec == state.loopOutSec &&
+                      s.tempo == state.tempo && s.range == state.range && s.effectiveBpm == state.effectiveBpm &&
+                      s.semitones == state.semitones && s.keyLock == state.keyLock && s.quantize == state.quantize &&
+                      s.sync == state.sync && s.master == state.master && s.lengthSec == state.lengthSec &&
+                      s.hasStems == state.hasStems && s.stemsOff == state.stemsOff && s.stemsPresent == state.stemsPresent &&
+                      sameCues();
     state = s;
     info = i;
     pos = posSec;
     isMaster = master;
-    repaint();
+    if (!same) repaint();
 }
 
 void DeckDisplay::showTrack(const juce::String& name, std::vector<TrackClip> clips, double playheadMs, double lengthMs, bool playing)
@@ -121,7 +138,7 @@ juce::Rectangle<int> DeckDisplay::topBand() const
     auto band = getLocalBounds().reduced(6).removeFromTop(kTopBand);
     if (platterShown())
     {
-        if (deck == 1) band.removeFromLeft(kTopBand + 4);
+        if (deck % 2 == 1) band.removeFromLeft(kTopBand + 4); // decks 1 and 3 on the left
         else band.removeFromRight(kTopBand + 4);
     }
     return band;
@@ -131,7 +148,7 @@ void DeckDisplay::resized()
 {
     if (platterComponent == nullptr) return;
     auto band = getLocalBounds().reduced(6).removeFromTop(kTopBand);
-    platterComponent->setBounds(deck == 1 ? band.removeFromLeft(kTopBand) : band.removeFromRight(kTopBand));
+    platterComponent->setBounds(deck % 2 == 1 ? band.removeFromLeft(kTopBand) : band.removeFromRight(kTopBand));
 }
 
 juce::Rectangle<int> DeckDisplay::overviewArea() const
@@ -168,6 +185,22 @@ void DeckDisplay::paint(juce::Graphics& g)
     g.setFont(uiFont(15.0F, true));
     auto titleRow = header.removeFromTop(20);
     g.drawText(state.loaded ? info.title : "Load a track (browse, then LOAD)", titleRow, juce::Justification::centredLeft, true);
+    // Stem Mix: the stems on the deck, those out of the mix dimmed (V, I, B, D).
+    if (state.hasStems)
+    {
+        auto chips = header.removeFromRight(4 * 15).toFloat();
+        g.setFont(uiFont(9.0F, true));
+        for (int stem = 0; stem < kStems; ++stem)
+        {
+            const auto chip = chips.removeFromLeft(15.0F).reduced(1.5F, 2.0F);
+            if ((state.stemsPresent & (1 << stem)) == 0) continue; // a two-stem split's bass and drums
+            const bool in = (state.stemsOff & (1 << stem)) == 0;
+            g.setColour(stemColour(stem).withAlpha(in ? 0.85F : 0.15F));
+            g.fillRoundedRectangle(chip, 2.0F);
+            g.setColour(in ? juce::Colours::black : colours::textFaint);
+            g.drawText(juce::String::charToString(static_cast<juce::juce_wchar>(kStemNames[stem][0])), chip, juce::Justification::centred);
+        }
+    }
     g.setColour(colours::textDim);
     g.setFont(uiFont(12.0F));
     g.drawText(info.artist, header, juce::Justification::centredLeft, true);
@@ -301,8 +334,11 @@ void DeckDisplay::paintCloseUp(juce::Graphics& g, juce::Rectangle<float> area, d
     for (const auto& line : grid)
     {
         if (line.half) continue;
+        // Every line is centred on its moment, as the cue and hot cue marks are: a bar's wider
+        // line drawn from its moment rightwards made a cue on it look early.
+        const float w = line.bar ? 1.5F : 1.0F;
         g.setColour(line.bar ? colours::text.withAlpha(0.55F) : colours::textDim.withAlpha(0.3F));
-        g.fillRect(xAt(line.t), area.getY(), line.bar ? 1.5F : 1.0F, area.getHeight());
+        g.fillRect(xAt(line.t) - w * 0.5F, area.getY(), w, area.getHeight());
     }
     if (info.audioPath.isNotEmpty())
         if (auto peaks = waveforms.get(info.audioPath))
@@ -325,12 +361,12 @@ void DeckDisplay::paintCloseUp(juce::Graphics& g, juce::Rectangle<float> area, d
         const float tick = area.getHeight() * (line.half ? 0.14F : 0.2F);
         g.setColour(line.bar ? colours::text.withAlpha(0.9F) : line.half ? colours::text.withAlpha(0.6F) : colours::text.withAlpha(0.75F));
         const float w = line.bar ? 2.0F : 1.0F;
-        g.fillRect(x, area.getY(), w, tick);
-        g.fillRect(x, area.getBottom() - tick, w, tick);
+        g.fillRect(x - w * 0.5F, area.getY(), w, tick);
+        g.fillRect(x - w * 0.5F, area.getBottom() - tick, w, tick);
         if (line.half)
         {
             g.setColour(colours::text.withAlpha(0.2F));
-            g.fillRect(x, area.getY() + tick, 1.0F, area.getHeight() - 2.0F * tick);
+            g.fillRect(x - 0.5F, area.getY() + tick, 1.0F, area.getHeight() - 2.0F * tick);
         }
     }
     for (int i = 0; i < 8; ++i)

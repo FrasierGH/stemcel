@@ -7,6 +7,7 @@
 #include "performance/PerformanceMapping.h"
 #include "DjFx.h"
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -638,6 +639,158 @@ void testEffectsAndSamplerAreRecorded()
     require(sampleStarted, "a sampler pad should record its hit");
     require((engine.view().samplesPlaying & 1ULL) != 0, "the sampler slot should be playing");
 }
+// Stem Mix: with every stem in, the deck plays its track untouched; a stem out takes it away
+// (here the "vocals" are the whole track, so the deck falls silent), and solo leaves one stem.
+void testStemMixTakesStemsInAndOut()
+{
+    DeckRig rig;
+    auto set = std::make_shared<StemSet>();
+    const auto& audio = *rig.track->audio;
+    set->frames = audio.getNumSamples();
+    set->present = {true, true, true};
+    for (size_t part = 0; part < StemSet::kParts; ++part)
+    {
+        set->scale[part] = 0.25F / 32767.0F;
+        for (size_t ch = 0; ch < 2; ++ch)
+        {
+            auto& data = set->data[part][ch];
+            data.assign(static_cast<size_t>(set->frames), 0);
+            if (part == 0) // vocals: the track itself
+                for (int i = 0; i < set->frames; ++i)
+                    data[static_cast<size_t>(i)] = static_cast<std::int16_t>(std::lround(audio.getSample(static_cast<int>(ch), i) / set->scale[part]));
+        }
+    }
+    rig.deck.setStems(set.get(), rig.track->serial);
+    const auto level = [&] { return *std::max_element(rig.l.begin(), rig.l.end(), [](float a, float b) { return std::abs(a) < std::abs(b); }); };
+    rig.press(Control::play);
+    rig.run(0.2);
+    require(std::abs(level()) > 0.2F, "with every stem in the deck should play its track");
+    rig.press(Control::stemToggle, 1.0F, 0); // VOCAL out
+    rig.run(0.1);
+    require(std::abs(level()) < 0.01F, "taking out a stem that is the whole track should silence the deck");
+    require(rig.view().stemsOff == 1, "the view should show VOCAL out");
+    rig.press(Control::stemToggle, 1.0F, 0); // back in
+    rig.run(0.1);
+    require(std::abs(level()) > 0.2F, "the stem back in should restore the track");
+    rig.press(Control::stemSolo, 1.0F, 1); // INST alone: the track less the vocals = nothing here
+    rig.run(0.1);
+    require(std::abs(level()) < 0.01F && rig.view().stemsOff == 0b1101, "INST alone should leave only the instrumental");
+    rig.press(Control::stemSolo, 1.0F, 1); // again: every stem back
+    rig.run(0.1);
+    require(rig.view().stemsOff == 0 && std::abs(level()) > 0.2F, "soloing the same stem again should bring them all back");
+    bool split = false;
+    for (const auto& s : rig.rec.segments) split = split || s.stemsOff != 0;
+    require(split, "a stem out should start a recorded segment that carries it");
+
+    // A two-stem split: vocals and the rest. BASS and DRUMS aren't there to take out.
+    auto two = std::make_shared<StemSet>(*set);
+    two->present = {true, false, false};
+    rig.deck.setStems(two.get(), rig.track->serial);
+    rig.press(Control::stemToggle, 1.0F, 2);
+    rig.run(0.05);
+    require(rig.view().stemsOff == 0 && rig.view().stemsPresent == 0b0011, "a two-stem split has no BASS to take out");
+    rig.press(Control::stemSolo, 1.0F, 1); // INST alone: the track less the vocals
+    rig.run(0.1);
+    require(rig.view().stemsOff == 0b0001 && std::abs(level()) < 0.01F, "a two-stem INST solo should take the vocals out");
+}
+
+// SAMPLER pressed twice quickly turns the channel's pads to Stem Mix; the controller's sampler
+// pads then take stems in and out.
+void testDoubleSamplerPressIsStemMix()
+{
+    PerformanceEngine engine;
+    engine.prepareToPlay(kBlock, kRate);
+    engine.setOpen(true);
+    engine.load(1, makeTrack(5.0, 120.0, 1));
+    juce::AudioBuffer<float> out(2, kBlock);
+    auto render = [&](double seconds)
+    {
+        for (int i = 0; i < std::max(1, static_cast<int>(seconds * kRate / kBlock)); ++i)
+            engine.getNextAudioBlock(juce::AudioSourceChannelInfo(&out, 0, kBlock));
+    };
+    auto post = [&](Control c, float v, int index = 0, PadMode mode = PadMode::hotCue)
+    {
+        Event e;
+        e.control = c;
+        e.deck = 1;
+        e.value = v;
+        e.index = static_cast<std::int16_t>(index);
+        e.mode = mode;
+        engine.post(e);
+    };
+    render(0.05);
+    post(Control::padMode, 1.0F, 0, PadMode::sampler);
+    render(0.6);
+    post(Control::padMode, 1.0F, 0, PadMode::sampler); // slow second press: still the sampler
+    render(0.05);
+    require(engine.view().channels[0].padMode == PadMode::sampler, "a slow second press should keep the sampler");
+    post(Control::padMode, 1.0F, 0, PadMode::sampler); // quick: Stem Mix
+    render(0.05);
+    require(engine.view().channels[0].padMode == PadMode::stems, "a quick second SAMPLER press should be Stem Mix");
+    post(Control::pad, 1.0F, 2, PadMode::sampler); // the controller's sampler pad 3: BASS
+    render(0.05);
+    require(engine.view().decks[0].stemsOff == 0b0100, "sampler pad 3 in Stem Mix should take BASS out");
+    post(Control::padMode, 1.0F, 0, PadMode::sampler);
+    render(0.05);
+    require(engine.view().channels[0].padMode == PadMode::sampler, "SAMPLER once more should be the sampler again");
+}
+
+// Every controller's mapping loads and is found by its device name; the newer mapping features
+// (a software SHIFT, an inverted slider, a toggle button, pads in the channel's mode, the jog's
+// resolution) translate as they should.
+void testControllerMappings()
+{
+    juce::Array<juce::File> files;
+    midiMappingDirectory().getChildFile("performance").findChildFiles(files, juce::File::findFiles, false, "*.json");
+    require(files.size() >= 9, "the performance mappings should all be installed");
+    for (const auto& f : files)
+    {
+        juce::String error;
+        require(Mapping::fromFile(f, error) != nullptr, (f.getFileName() + " should load: " + error).toStdString().c_str());
+    }
+    for (const auto* device : {"DDJ-FLX4", "DDJ-SB3", "DDJ-200", "DJControl Inpulse 200", "DJControl Inpulse 300",
+                               "DJControl Inpulse 500", "Mixtrack Platinum FX", "Mixtrack Pro FX", "MC7000"})
+        require(Mapping::forDevice(device) != nullptr, (juce::String(device) + " should find its mapping").toStdString().c_str());
+    require(Mapping::forDevice("DDJ-FLX4")->name() == "Pioneer DDJ-FLX4", "the FLX4 should get its own mapping, not the 400's");
+
+    Event e[4];
+    const auto send = [&](Mapping::Translator& t, std::initializer_list<int> bytes)
+    {
+        std::vector<juce::uint8> b;
+        for (int x : bytes) b.push_back(static_cast<juce::uint8>(x));
+        return t.translate(b.data(), static_cast<int>(b.size()), e, 4);
+    };
+    {
+        Mapping::Translator t(Mapping::forDevice("DDJ-FLX4"));
+        require(send(t, {0x90, 0x0E, 0x7F}) == 1 && e[0].control == Control::playShift, "FLX4 SHIFT + PLAY is 0E");
+    }
+    {
+        Mapping::Translator t(Mapping::forDevice("Mixtrack Platinum FX"));
+        require(send(t, {0xB0, 0x06, 0x01}) == 1 && e[0].control == Control::jogScratch &&
+                    std::abs(e[0].value - 720.0F / 1024.0F) < 1.0e-5F,
+                "the Mixtrack's jog should scale to 720 ticks a turn");
+        require(send(t, {0x90, 0x20, 0x7F}) == 0, "the Mixtrack's SHIFT is held, not sent on");
+        require(send(t, {0xB0, 0x06, 0x7F}) == 1 && e[0].control == Control::jogSearch, "SHIFT + jog should search");
+        send(t, {0x80, 0x20, 0x00});
+        require(send(t, {0xB0, 0x06, 0x7F}) == 1 && e[0].control == Control::jogScratch, "the jog again once SHIFT is up");
+        require(send(t, {0x94, 0x16, 0x7F}) == 1 && e[0].control == Control::pad && e[0].mode == PadMode::count && e[0].index == 2,
+                "the Mixtrack's pads act in the channel's mode");
+    }
+    {
+        Mapping::Translator t(Mapping::forDevice("DJControl Inpulse 300"));
+        send(t, {0xB1, 0x08, 0x00});
+        require(send(t, {0xB1, 0x28, 0x00}) == 1 && e[0].control == Control::tempo && e[0].value > 0.99F,
+                "the Inpulse's tempo slider is inverted");
+        require(send(t, {0x91, 0x02, 0x7F}) == 1 && e[0].control == Control::quantize && e[0].value < 0.0F,
+                "Q should toggle quantize");
+        require(send(t, {0x91, 0x02, 0x00}) == 0, "Q's release does nothing");
+    }
+    {
+        Mapping::Translator t(Mapping::forDevice("MC7000"));
+        send(t, {0x90, 0x32, 0x7F});
+        require(send(t, {0x90, 0x00, 0x7F}) == 1 && e[0].control == Control::playShift, "MC7000 SHIFT + PLAY");
+    }
+}
 } // namespace
 
 void addPerformanceTests(std::vector<TestCase>& tests)
@@ -658,6 +811,9 @@ void addPerformanceTests(std::vector<TestCase>& tests)
     tests.push_back({"Performance tempo and scratch", testTempoAndScratch});
     tests.push_back({"Performance sync and recorded levels", testEngineSyncAndRecordingParams});
     tests.push_back({"Performance DDJ-400 mapping", testDdj400Mapping});
+    tests.push_back({"Performance Stem Mix takes stems in and out", testStemMixTakesStemsInAndOut});
+    tests.push_back({"Performance SAMPLER twice is Stem Mix", testDoubleSamplerPressIsStemMix});
+    tests.push_back({"Performance controller mappings", testControllerMappings});
 }
 
 } // namespace stemcel::tests

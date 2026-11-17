@@ -22,7 +22,7 @@ struct LiveState;
 namespace stemcel::native::perf
 {
 
-class TimelineStrip final : public juce::Component, private juce::Timer
+class TimelineStrip final : public juce::Component, public juce::TooltipClient, private juce::Timer
 {
   public:
     // A stretch the recording take will add: on deck `deck`'s lane, in timeline ms.
@@ -40,6 +40,12 @@ class TimelineStrip final : public juce::Component, private juce::Timer
 
     void paint(juce::Graphics&) override;
     void mouseDown(const juce::MouseEvent&) override;
+    void mouseMove(const juce::MouseEvent&) override;
+    // More tracks than fit: the wheel scrolls the lanes (the names stay readable).
+    void mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
+    juce::String getTooltip() override; // the track under the mouse
+    // The height that gives every track a lane tall enough to read its name (within limits).
+    int preferredHeight() const;
     void mouseDrag(const juce::MouseEvent&) override;
     void mouseUp(const juce::MouseEvent&) override;
     void mouseDoubleClick(const juce::MouseEvent&) override;
@@ -52,6 +58,13 @@ class TimelineStrip final : public juce::Component, private juce::Timer
     void timerCallback() override;
     double lengthMs() const;
     float xAt(double ms) const;
+    juce::Rectangle<float> timeArea() const;  // right of the names: what the time axis spans
+    float namesWidth() const;
+    float laneHeight() const;
+    juce::Point<float> mouseAt;
+    int firstLane = 0; // the lane at the top, when they don't all fit
+    int laneCount() const;
+    int visibleLanes() const;
     juce::Rectangle<float> lanesArea() const;
 
     ProjectMirror& mirror;

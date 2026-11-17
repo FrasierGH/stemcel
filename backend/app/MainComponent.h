@@ -64,6 +64,8 @@ enum : juce::CommandID
     rippleDelete,
     insertTime,
     duplicateTrack,
+    toggleDancer,
+    rescanControllers,
 };
 } // namespace CommandIds
 

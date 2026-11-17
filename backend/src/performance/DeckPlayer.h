@@ -51,6 +51,21 @@ struct DeckTrack
     std::array<Cue, kMemoryCues> memoryCues{};
 };
 
+// A track's stems for Stem Mix: its vocals, drums and bass at the track's rate and length,
+// as 16-bit samples (a 6-minute set takes about 190 MB as floats; this, half that). The
+// instrumental (INST) is what is left: the track less the three, so with every stem in the
+// deck plays the track itself, untouched.
+struct StemSet
+{
+    static constexpr int kParts = 3; // vocals, drums, bass
+    int frames = 0;
+    std::array<std::array<std::vector<std::int16_t>, 2>, kParts> data;
+    std::array<float, kParts> scale{}; // a sample's value per step
+    // Which parts there are: a two-stem split has the vocals alone (its instrumental is the
+    // track less them), and no bass or drums.
+    std::array<bool, kParts> present{};
+};
+
 // What the deck tells the recorder (implemented by the engine, called on the audio thread).
 class DeckRecorder
 {
@@ -68,6 +83,7 @@ class DeckRecorder
         bool audible = false;        // reaching the master
         bool keyLock = false;
         bool scratch = false;        // jog in control: the platter is recorded point by point
+        int stemsOff = 0;            // Stem Mix: the stems out of the mix (bit per stem)
     };
     virtual void segment(const Segment& s) noexcept = 0;
     virtual void platter(int deck, juce::int64 at, double pos) noexcept = 0;
@@ -100,6 +116,9 @@ struct DeckView
     std::array<Cue, kHotCues> hotCues{};
     std::array<Cue, kMemoryCues> memoryCues{};
     int cueRevision = 0; // bumps when hot or memory cues change, for saving them
+    bool hasStems = false;
+    int stemsOff = 0;     // bit per stem (kStemNames' order)
+    int stemsPresent = 0; // the stems the set has (VOCAL and INST always; BASS and DRUMS with four)
 };
 
 class DeckPlayer
@@ -124,6 +143,9 @@ class DeckPlayer
     void render(float* const* out, int n, const SyncSource& master, DeckRecorder* recorder, juce::int64 clock,
                 bool audible) noexcept;
     void fillView(DeckView& view) const noexcept;
+    // Stem Mix: the loaded track's stems (`serial` must be the track's; null removes them).
+    void setStems(const StemSet* set, int serial) noexcept;
+    int presentStems() const noexcept; // bit per stem the loaded set has
     void announce() noexcept { forceSegment = true; } // the next block starts a segment
     // The take ends here: the open segment is closed for the recorder.
     void endTake(DeckRecorder* r, juce::int64 at) noexcept;
@@ -176,8 +198,12 @@ class DeckPlayer
 
     void renderVarispeed(float* const* out, int offset, int n, double targetRate) noexcept;
     void renderStretch(float* const* out, int offset, int n, double rate, double transpose) noexcept;
-    void readWrapped(float* const* dest, double& cursor, int n) const noexcept; // loop-aware copy
+    void readWrapped(float* const* dest, double& cursor, int n) noexcept; // loop-aware copy (moves the stem mix on)
     float sampleAt(int channel, double p) const noexcept;
+    // The track's sample at frame k (silence outside what has loaded), with the stems mixed in.
+    float frame(int channel, int k, int len) const noexcept;
+    void stepStemGains() noexcept; // once per output sample while the stem mix moves
+    bool stemMixing() const noexcept { return stems != nullptr && stemsMoving; }
     void advance(double& p, double delta, bool record, juce::int64 at) noexcept;
     void emitSegment(juce::int64 at, double endPos) noexcept;
 
@@ -233,6 +259,14 @@ class DeckPlayer
     std::unique_ptr<Stretch> stretch;
     bool stretchActive = false;
 
+    // Stem Mix: each stem's gain eases to its target over a few ms, so a stem goes in or out
+    // without a click.
+    const StemSet* stems = nullptr;
+    int stemsOff = 0;
+    std::array<float, kStems> stemGain{1.0F, 1.0F, 1.0F, 1.0F};
+    bool stemsMoving = false; // a gain is off 1 or still moving: the slow path mixes
+    float stemStep = 0.0F;
+
     // Recording
     DeckRecorder* recorder = nullptr;
     bool jumped = false;
@@ -240,11 +274,11 @@ class DeckPlayer
     struct RecKey
     {
         bool moving = false, audible = false, keyLock = false, scratch = false;
-        int semitones = 0;
+        int semitones = 0, stemsOff = 0;
         bool operator!=(const RecKey& o) const noexcept
         {
             return moving != o.moving || audible != o.audible || keyLock != o.keyLock || scratch != o.scratch ||
-                   semitones != o.semitones;
+                   semitones != o.semitones || stemsOff != o.stemsOff;
         }
     } lastKey;
     double segmentTempo = 1.0;

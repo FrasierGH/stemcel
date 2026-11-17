@@ -156,7 +156,7 @@ void MainComponent::getAllCommands(juce::Array<juce::CommandID>& ids)
                   CommandIds::showLibraryTab, CommandIds::showFilesTab, CommandIds::showRekordboxTab,
                   CommandIds::exportMixdown, CommandIds::projectProperties, CommandIds::recordAudio,
                   CommandIds::importFromProject, CommandIds::cutClips, CommandIds::copyClips, CommandIds::pasteClips,
-                  CommandIds::toggleMixer, CommandIds::togglePerformance, CommandIds::toggleLibraryMode, CommandIds::selectAllClips, CommandIds::joinClips, CommandIds::toggleAutomation,
+                  CommandIds::toggleMixer, CommandIds::toggleDancer, CommandIds::rescanControllers, CommandIds::togglePerformance, CommandIds::toggleLibraryMode, CommandIds::selectAllClips, CommandIds::joinClips, CommandIds::toggleAutomation,
                   CommandIds::toggleLoop, CommandIds::toggleMetronome, CommandIds::toggleSnap, CommandIds::openClipEditor,
                   CommandIds::zoomToSelection, CommandIds::nudgeLeft, CommandIds::nudgeRight, CommandIds::rippleDelete,
                   CommandIds::insertTime, CommandIds::duplicateTrack});
@@ -314,6 +314,15 @@ void MainComponent::getCommandInfo(juce::CommandID id, juce::ApplicationCommandI
         info.setActive(open);
         info.setTicked(workspace != nullptr && workspace->isMixerShown());
         break;
+    case CommandIds::rescanControllers:
+        info.setInfo("Rescan Controllers", "Look for DJ controllers again and enable the supported ones (a controller plugged in late, or freed by another program)", "Debug", 0);
+        info.setActive(open);
+        break;
+    case CommandIds::toggleDancer:
+        info.setInfo("Dancer", "Show or hide Sprig, who dances to what plays", "View", 0);
+        info.setActive(open);
+        info.setTicked(workspace != nullptr && workspace->isDancerShown());
+        break;
     case CommandIds::togglePerformance:
         info.setInfo("Performance Mode", "Play two decks live with a DJ controller (DDJ-400) and record it into the timeline", "View", 0);
         info.addDefaultKeypress('l', cmd | juce::ModifierKeys::shiftModifier);
@@ -439,6 +448,8 @@ bool MainComponent::perform(const InvocationInfo& info)
     case CommandIds::showFilesTab: if (workspace != nullptr) workspace->showLibraryTab(1); return true;
     case CommandIds::showRekordboxTab: if (workspace != nullptr) workspace->showLibraryTab(2); return true;
     case CommandIds::toggleMixer: if (workspace != nullptr) workspace->toggleMixer(); return true;
+    case CommandIds::toggleDancer: if (workspace != nullptr) workspace->toggleDancer(); return true;
+    case CommandIds::rescanControllers: if (workspace != nullptr) workspace->rescanControllers(); return true;
     case CommandIds::togglePerformance: if (workspace != nullptr) workspace->togglePerformance(); return true;
     case CommandIds::toggleLibraryMode: if (workspace != nullptr) workspace->toggleLibrary(); return true;
     case CommandIds::selectAllClips: if (workspace != nullptr) workspace->selectAllClips(); return true;
@@ -471,7 +482,7 @@ bool MainComponent::perform(const InvocationInfo& info)
 
 juce::StringArray MainComponent::getMenuBarNames()
 {
-    return {"File", "Edit", "View", "Track", "Help"};
+    return {"File", "Edit", "View", "Track", "Debug", "Help"};
 }
 
 juce::PopupMenu MainComponent::getMenuForIndex(int topLevelMenuIndex, const juce::String&)
@@ -549,6 +560,7 @@ juce::PopupMenu MainComponent::getMenuForIndex(int topLevelMenuIndex, const juce
         menu.addCommandItem(&commandManager, CommandIds::showRekordboxTab);
         menu.addSeparator();
         menu.addCommandItem(&commandManager, CommandIds::toggleMixer);
+        menu.addCommandItem(&commandManager, CommandIds::toggleDancer);
         menu.addCommandItem(&commandManager, CommandIds::togglePerformance);
         menu.addCommandItem(&commandManager, CommandIds::toggleLibraryMode);
     }
@@ -560,6 +572,10 @@ juce::PopupMenu MainComponent::getMenuForIndex(int topLevelMenuIndex, const juce
         menu.addCommandItem(&commandManager, CommandIds::toggleAutomation);
     }
     else if (topLevelMenuIndex == 4)
+    {
+        menu.addCommandItem(&commandManager, CommandIds::rescanControllers);
+    }
+    else if (topLevelMenuIndex == 5)
     {
 #if !JUCE_MAC
         menu.addCommandItem(&commandManager, CommandIds::about);

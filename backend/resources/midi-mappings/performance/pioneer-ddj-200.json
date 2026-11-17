@@ -1,0 +1,40 @@
+{
+  "name": "Pioneer DDJ-200",
+  "source": "Mixxx's Pioneer DDJ-200 mapping (messages); SHIFT is the controller's own",
+  "models": ["DDJ-200"],
+  "deckChannels": [0, 1],
+  "padChannels": [[7, 8], [9, 10]],
+  "jogTicksPerTurn": 720,
+  "controls": [
+    {"control": "play", "midi": "9n 0B"},
+    {"control": "playShift", "midi": "9n 47"},
+    {"control": "cue", "midi": "9n 0C"},
+    {"control": "cueShift", "midi": "9n 48"},
+    {"control": "sync", "midi": "9n 58"},
+    {"control": "syncShift", "midi": "9n 60"},
+    {"control": "tempo", "midi": "Bn 00", "lsb": "20"},
+    {"control": "jogTouch", "midi": "9n 36"},
+    {"control": "jogBend", "midi": "Bn 21", "encoding": "rel64"},
+    {"control": "jogScratch", "midi": "Bn 22", "encoding": "rel64"},
+    {"control": "jogSearch", "midi": "Bn 29", "encoding": "rel64"},
+    {"control": "pad", "midi": "P 00", "count": 8, "mode": "hotCue"},
+    {"control": "padShift", "midi": "S 00", "count": 8, "mode": "hotCue"},
+    {"control": "eqHi", "midi": "Bn 07", "lsb": "27"},
+    {"control": "eqMid", "midi": "Bn 0B", "lsb": "2B"},
+    {"control": "eqLow", "midi": "Bn 0F", "lsb": "2F"},
+    {"control": "fader", "midi": "Bn 13", "lsb": "33"},
+    {"control": "hpCue", "midi": "9n 54"},
+    {"control": "filter", "midi": "B6 17", "lsb": "37", "deck": 1},
+    {"control": "filter", "midi": "B6 18", "lsb": "38", "deck": 2},
+    {"control": "crossfader", "midi": "B6 1F", "lsb": "3F"},
+    {"control": "masterCue", "midi": "96 63"}
+  ],
+  "leds": [
+    {"state": "play", "midi": ["9n 0B", "9n 47"]},
+    {"state": "cue", "midi": ["9n 0C", "9n 48"]},
+    {"state": "sync", "midi": ["9n 58", "9n 60"]},
+    {"state": "hpCue", "midi": ["9n 54"]},
+    {"state": "pad.hotCue", "midi": ["P 00", "S 00"], "count": 8},
+    {"state": "masterCue", "midi": ["96 63"]}
+  ]
+}

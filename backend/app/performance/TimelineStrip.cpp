@@ -42,21 +42,81 @@ double TimelineStrip::lengthMs() const
     return std::max(30000.0, end);
 }
 
+// The track names take a column at the left; the time axis spans the rest.
+float TimelineStrip::namesWidth() const
+{
+    return std::clamp(static_cast<float>(getWidth()) * 0.09F, 70.0F, 150.0F);
+}
+
+juce::Rectangle<float> TimelineStrip::timeArea() const
+{
+    return getLocalBounds().toFloat().reduced(1.0F).withTrimmedLeft(namesWidth());
+}
+
 juce::Rectangle<float> TimelineStrip::lanesArea() const
 {
-    return getLocalBounds().toFloat().reduced(1.0F).withTrimmedTop(kRuler);
+    return timeArea().withTrimmedTop(kRuler);
+}
+
+// Every lane at least 12 px, so its name reads; more than fit scroll (the mouse wheel).
+constexpr float kLeastLane = 12.0F;
+
+int TimelineStrip::laneCount() const
+{
+    const auto pendingNow = pending ? pending() : std::vector<Pending>{};
+    int recLanes = 0; // a lane per deck up to the highest the take uses
+    for (const auto& p : pendingNow) recLanes = std::max({recLanes, 2, p.deck});
+    return std::max(1, static_cast<int>(mirror.model().tracks.size()) + recLanes);
+}
+
+float TimelineStrip::laneHeight() const
+{
+    return std::clamp(lanesArea().getHeight() / static_cast<float>(laneCount()), kLeastLane, 14.0F);
+}
+
+int TimelineStrip::visibleLanes() const
+{
+    return std::max(1, static_cast<int>(lanesArea().getHeight() / laneHeight()));
+}
+
+int TimelineStrip::preferredHeight() const
+{
+    // Up to about fourteen lanes on show; past that the strip scrolls.
+    const int lanes = std::max(1, static_cast<int>(mirror.model().tracks.size())) + 2;
+    return std::clamp(static_cast<int>(kRuler) + 2 + lanes * static_cast<int>(kLeastLane), 58, 190);
+}
+
+void TimelineStrip::mouseWheelMove(const juce::MouseEvent&, const juce::MouseWheelDetails& wheel)
+{
+    const int most = std::max(0, laneCount() - visibleLanes());
+    firstLane = std::clamp(firstLane + (wheel.deltaY < 0.0F ? 1 : -1), 0, most);
+    repaint();
 }
 
 float TimelineStrip::xAt(double ms) const
 {
-    const auto area = getLocalBounds().toFloat().reduced(1.0F);
+    const auto area = timeArea();
     return area.getX() + static_cast<float>(ms / lengthMs()) * area.getWidth();
 }
 
 double TimelineStrip::msAt(float x) const
 {
-    const auto area = getLocalBounds().toFloat().reduced(1.0F);
+    const auto area = timeArea();
     return juce::jlimit(0.0, lengthMs(), (x - area.getX()) / std::max(1.0F, area.getWidth()) * lengthMs());
+}
+
+void TimelineStrip::mouseMove(const juce::MouseEvent& e)
+{
+    mouseAt = e.position;
+}
+
+juce::String TimelineStrip::getTooltip()
+{
+    const auto lanes = lanesArea();
+    if (mouseAt.y < lanes.getY()) return "Click or drag to move the playhead";
+    const auto index = static_cast<size_t>(firstLane) + static_cast<size_t>((mouseAt.y - lanes.getY()) / laneHeight());
+    const auto& tracks = mirror.model().tracks;
+    return index < tracks.size() ? tracks[index].name : juce::String();
 }
 
 void TimelineStrip::paint(juce::Graphics& g)
@@ -68,7 +128,7 @@ void TimelineStrip::paint(juce::Graphics& g)
     const double length = lengthMs();
 
     // The ruler: a tick every so many seconds, at least 70 px apart.
-    const auto area = bounds.reduced(1.0F);
+    const auto area = timeArea();
     double step = 1000.0;
     for (const double s : {1000.0, 5000.0, 10000.0, 15000.0, 30000.0, 60000.0, 120000.0, 300000.0, 600000.0})
     {
@@ -88,13 +148,23 @@ void TimelineStrip::paint(juce::Graphics& g)
     // The tracks: one lane each, the clips in it.
     const auto lanes = lanesArea();
     const auto pendingNow = pending ? pending() : std::vector<Pending>{};
-    const int recLanes = pendingNow.empty() ? 0 : 2;
-    const int count = std::max(1, static_cast<int>(model.tracks.size()) + recLanes);
-    const float laneH = std::clamp(lanes.getHeight() / static_cast<float>(count), 2.0F, 12.0F);
-    float y = lanes.getY();
+    const float laneH = laneHeight();
+    // Each track's name beside its lane, in its colour (just the title). The lanes scroll when
+    // there are more than fit.
+    const auto names = bounds.reduced(1.0F).withRight(lanes.getX() - 2.0F).withTrimmedTop(kRuler);
+    g.setColour(colours::rule);
+    g.drawVerticalLine(juce::roundToInt(lanes.getX() - 1.0F), bounds.getY() + 2.0F, bounds.getBottom() - 2.0F);
+    firstLane = std::clamp(firstLane, 0, std::max(0, laneCount() - visibleLanes()));
+    g.saveState();
+    g.reduceClipRegion(bounds.withTrimmedTop(kRuler + 1.0F).toNearestInt());
+    float y = lanes.getY() - static_cast<float>(firstLane) * laneH;
     for (const auto& track : model.tracks)
     {
         const auto colour = track.colorIndex >= 0 ? paletteSwatch(track.colorIndex) : colours::zinc500;
+        g.setFont(uiFont(std::min(11.0F, laneH - 1.0F), true));
+        g.setColour(track.muted ? colours::textFaint : colour.interpolatedWith(colours::text, 0.45F));
+        g.drawText(track.name, juce::Rectangle<float>(names.getX() + 4.0F, y, names.getWidth() - 6.0F, laneH),
+                   juce::Justification::centredLeft, true);
         for (const auto& clip : track.clips)
         {
             const float x0 = xAt(clip.offsetMs), x1 = xAt(clip.endMs());
@@ -102,7 +172,6 @@ void TimelineStrip::paint(juce::Graphics& g)
             g.fillRect(juce::Rectangle<float>(x0, y + 0.5F, std::max(1.0F, x1 - x0), laneH - 1.0F));
         }
         y += laneH;
-        if (y > lanes.getBottom()) break;
     }
     // What the take now recording will add, a lane per deck.
     for (const auto& p : pendingNow)
@@ -111,6 +180,16 @@ void TimelineStrip::paint(juce::Graphics& g)
         const float x0 = xAt(p.startMs), x1 = xAt(p.endMs);
         g.setColour(colours::red500.withAlpha(0.7F));
         g.fillRect(juce::Rectangle<float>(x0, laneY + 0.5F, std::max(1.0F, x1 - x0), laneH - 1.0F));
+    }
+    g.restoreState();
+    // A thumb on the right when the lanes scroll.
+    if (const int count = laneCount(), shown = visibleLanes(); count > shown)
+    {
+        const float track = lanes.getHeight();
+        const float thumb = std::max(10.0F, track * static_cast<float>(shown) / static_cast<float>(count));
+        const float at = lanes.getY() + (track - thumb) * static_cast<float>(firstLane) / static_cast<float>(count - shown);
+        g.setColour(colours::textFaint.withAlpha(0.6F));
+        g.fillRoundedRectangle(juce::Rectangle<float>(lanes.getRight() - 4.0F, at, 3.0F, thumb), 1.5F);
     }
 
     // The selected range (or the one being dragged).

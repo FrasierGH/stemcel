@@ -3,6 +3,7 @@
 #include "Theme.h"
 #include "Automation.h"
 #include "DjFx.h"
+#include "performance/PerfCurves.h"
 #include "AudioEngine.h"
 #include "EngineHost.h"
 #include "PluginCatalogue.h"
@@ -74,6 +75,16 @@ FxKnob::FxKnob(const juce::String& text, double min, double max, double step, do
     label.setFont(uiFont(11.0f));
     label.setColour(juce::Label::textColourId, colours::textDim);
     addAndMakeVisible(label);
+}
+
+void FxKnob::setCurve(std::function<double(double)> toValue, std::function<double(double)> toTravel)
+{
+    const double value = slider.getValue();
+    juce::NormalisableRange<double> range(slider.getMinimum(), slider.getMaximum(),
+                                          [toValue](double, double, double travel) { return toValue(travel); },
+                                          [toTravel](double, double, double v) { return toTravel(v); });
+    slider.setNormalisableRange(range);
+    slider.setValue(value, juce::dontSendNotification);
 }
 
 void FxKnob::setValue(double value)
@@ -264,17 +275,35 @@ TrackFxView::TrackFxView(LibraryContext& context) : ctx(context)
     addEffect.onClick = [this] { showAddMenu(); };
     addAndMakeVisible(addEffect);
 
+    // Tone and filter turn as performance mode's EQ and FILTER knobs do (the same curves, the
+    // same DSP), so a take's curves sit where the knobs were: kill at the left, 0 dB at the
+    // centre, +6 dB at the right; the filter low-pass left, high-pass right, a detent between.
     auto& tone = module("Tone");
     for (const auto& [key, label, field] : std::vector<std::tuple<juce::String, juce::String, const char*>>{
              {"toneBassDb", "Bass", "bassDb"}, {"toneMidDb", "Mid", "midDb"}, {"toneTrebleDb", "Treble", "trebleDb"}})
-        knob(tone, key, label, -15.0, 15.0, 0.5, 0.0,
+    {
+        knob(tone, key, label, stemcel::perf::curves::kEqKillDb, 6.0, 0.0, 0.0,
              [this, field = juce::String(field)](double v, const juce::String& g, bool end)
              { sendTrack("TRACK_SET_TONE", {{field.toRawUTF8(), v}}, g, end); },
-             db);
+             [](double v) { return v <= stemcel::perf::curves::kEqKillDb + 0.5 ? juce::String("Kill") : db(v); });
+        knobs[key]->setCurve([](double travel) { return stemcel::perf::curves::eqDb(travel); },
+                             [](double v)
+                             {
+                                 if (v >= 0.0) return juce::jlimit(0.5, 1.0, 0.5 + v / 12.0);
+                                 return v <= stemcel::perf::curves::kEqKillDb + 1.0e-3 ? 0.0 : 0.5 * std::pow(10.0, v / 20.0);
+                             });
+    }
     auto& filter = module("Filter");
-    knob(filter, "toneFilter", "LP / HP", -1.0, 1.0, 0.01, 0.0,
+    knob(filter, "toneFilter", "LP / HP", -1.0, 1.0, 0.0, 0.0,
          [this](double v, const juce::String& g, bool end) { sendTrack("TRACK_SET_TONE", {{"filter", v}}, g, end); },
          [](double v) { return std::abs(v) < 0.005 ? juce::String("Off") : (v < 0 ? "LP " : "HP ") + percent(std::abs(v)); });
+    knobs["toneFilter"]->setCurve([](double travel) { return stemcel::perf::curves::filterAmount(travel); },
+                                  [](double v)
+                                  {
+                                      constexpr double kDead = 0.03;
+                                      if (std::abs(v) < 1.0e-6) return 0.5;
+                                      return 0.5 + std::copysign(kDead + std::abs(v) * (1.0 - kDead), v) * 0.5;
+                                  });
     auto& sends = module("Sends");
     knob(sends, "sendReverb", "Room", 0.0, 1.0, 0.01, 0.0,
          [this](double v, const juce::String& g, bool end)
@@ -298,7 +327,16 @@ TrackFxView::TrackFxView(LibraryContext& context) : ctx(context)
          [this](double v, const juce::String& g, bool end) { sendTrack("TRACK_SET_SATURATION", {{"drive", v}}, g, end); }, percent);
     knob(saturation, "saturationMix", "Mix", 0.0, 1.0, 0.01, 1.0,
          [this](double v, const juce::String& g, bool end) { sendTrack("TRACK_SET_SATURATION", {{"mix", v}}, g, end); }, percent);
-    auto& crusher = module("Bit crusher");
+    auto& crusherModule = module("Bit crusher");
+    crusher = &crusherModule;
+    crusherRemove.setTooltip("Take the bit crusher off this track");
+    crusherRemove.onClick = [this]
+    {
+        crusherAdded.erase(ctx.view.selectedTrackId);
+        sendTrack("TRACK_SET_BIT_CRUSHER", {{"rate", 1.0}, {"bits", 16.0}, {"boost", 0.0}, {"mix", 0.0}}, {}, false);
+    };
+    crusherModule.addTitleButton(crusherRemove, 22);
+    auto& crusher = crusherModule;
     knob(crusher, "bitCrusherRate", "Rate", 0.01, 1.0, 0.01, 1.0,
          [this](double v, const juce::String& g, bool end) { sendTrack("TRACK_SET_BIT_CRUSHER", {{"rate", v}}, g, end); }, percent);
     knob(crusher, "bitCrusherBits", "Bits", 1.0, 16.0, 1.0, 16.0,
@@ -373,6 +411,19 @@ void TrackFxView::sync()
     };
     for (auto& m : modules) m->setAutomationShown(showing(*m));
     for (auto& e : effects) e.module->setAutomationShown(showing(*e.module));
+    const bool crusherShown = crusherInUse(*track) || crusherAdded.count(track->id) != 0;
+    if (crusher != nullptr && crusher->isVisible() != crusherShown)
+    {
+        crusher->setVisible(crusherShown);
+        relayout();
+    }
+}
+
+bool TrackFxView::crusherInUse(const TrackModel& track)
+{
+    return num(track.raw, "bitCrusherMix", 0.0) > 0.0 || num(track.raw, "bitCrusherBits", 16.0) < 16.0 ||
+           num(track.raw, "bitCrusherRate", 1.0) < 1.0 || num(track.raw, "bitCrusherBoost", 0.0) > 0.0 ||
+           !automation::pointsOf(track, "bitCrusherMix").empty();
 }
 
 FxModule* TrackFxView::effectModuleForTest(const juce::String& slotId)
@@ -416,6 +467,16 @@ void TrackFxView::showAddMenu()
     }
     for (auto& [maker, sub] : byMaker) plugins.addSubMenu(maker, sub);
     juce::PopupMenu menu;
+    // The bit crusher (built in, off the bar until added): an audible start, 8 bits at half rate.
+    const auto trackId = ctx.view.selectedTrackId;
+    menu.addItem("Bit crusher", crusher != nullptr && !crusher->isVisible(),
+                 false,
+                 [this, trackId]
+                 {
+                     crusherAdded.insert(trackId);
+                     sendTrack("TRACK_SET_BIT_CRUSHER", {{"rate", 0.5}, {"bits", 8.0}, {"mix", 1.0}}, {}, false);
+                     sync();
+                 });
     menu.addSubMenu("Beat FX", beat);
     menu.addSubMenu("Sound Color FX", color);
     menu.addSeparator();
@@ -587,7 +648,8 @@ void TrackFxView::relayout()
         return y + kModuleHeight + 8;
     };
     std::vector<FxModule*> list;
-    for (auto& m : modules) list.push_back(m.get());
+    for (auto& m : modules)
+        if (m->isVisible()) list.push_back(m.get());
     for (auto& e : effects) list.push_back(e.module.get());
     content.setSize(width, place(list));
 }

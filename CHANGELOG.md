@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Stem Mix** in performance mode: double-press SAMPLER (or the deck's STEMS button) and the pads take the track's vocals, instrumental, bass and drums in and out of the mix (5–8 solo one), with a key over the pads. Stems in the library are on the deck as it loads; otherwise STEMS separates them (Mel-Band RoFormer vocals, BS-Roformer SW drums and bass). A take played with stems out goes onto the timeline as its stems. See [the guide](docs/performance-mode.md#stem-mix).
+- **More controllers in performance mode**: Pioneer DJ DDJ-FLX4, DDJ-SB3 and DDJ-200, Hercules DJControl Inpulse 200, 300 and 500, Numark Mixtrack Platinum FX and Pro FX, and Denon DJ MC7000, each with what its hardware has. See [the controller guide](docs/midi-controllers.md#performance-mode-controllers).
+- **The Beat FX list**: clicking the Beat FX display opens every effect in a menu.
+- **Sprig**, a little sapling who dances to whatever plays, in a window of its own: drag it anywhere on screen, out of Stemcel's window too (View > Dancer).
+- **Four decks** in performance mode: 4 DECKS shows decks 3 and 4 below 1 and 2, four channels on the mixer (3 1 2 4) and the four close-ups stacked. CTRL 3 / CTRL 4 put a two-deck controller's left or right side on them; the Mixtrack Platinum FX / Pro FX and MC7000 reach them with their own deck buttons.
+- **A choice of split** for Stem Mix: vocals and instrumental (two stems, one model, faster) or the four-stem ensemble.
+- **Debug > Rescan Controllers**: looks for controllers again (one plugged in late, or freed by another program).
+- **Track names** on performance mode's timeline strip, beside their lanes.
+
+### Changed
+
+- On the timeline the controller only navigates: its faders, trim, EQ, filter and master level no longer change what is heard.
+- Performance mode's channel meters are drawn as the timeline's master meter is: L and R in segments, with peak holds.
+- The Fusion theme's performance pads and buttons are raised keys.
+- Every beat has a faint line on the timeline's grid within three zoom steps of the closest view; further out, beat lines only once they are 15 px apart (they crowded in too early).
+- Track FX's tone and filter turn as performance mode's EQ and FILTER do (kill to +6 dB, the same filter curve), so a take's curves sit where the knobs were; a track's EQ now reaches the kill.
+- The bit crusher is in Track FX's Add effect... menu rather than always on the bar.
+- Performance mode's CUE and PLAY sit at the bottom of the deck, round, as on the controller; the sampler's bank and volume fit the FX section.
+
+### Fixed
+
+- **Stacked meters**: with the stacked waveforms on, the mixer's faders and meters were squeezed to almost nothing; the browser and the waveforms now give way to them.
+- **Cues on bars looked early**: a bar's line was drawn from its moment rightwards, so a cue on it seemed a pixel or two early. Every grid line is centred on its moment.
+- **Waveforms warbled while playing**: each frame sampled the peaks afresh at a new offset. The columns now sit on fixed stretches of the track and move together, and the position eases between the engine's updates.
+- A controller's jog resolution in its profile is applied (it was read but unused).
+
 ## 0.6.0
 
 ### Added

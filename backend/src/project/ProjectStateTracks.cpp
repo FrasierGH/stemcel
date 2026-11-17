@@ -498,7 +498,8 @@ static bool applyClampedDb(juce::ValueTree& tree,
                            float value,
                            juce::UndoManager* undo)
 {
-    const auto clamped = juce::jlimit(-15.0f, 15.0f, value);
+    // Down to the kill (performance mode's EQ, ToneEq's −40 dB), up to +15 dB.
+    const auto clamped = juce::jlimit(-40.0f, 15.0f, value);
     const bool hadProperty = tree.hasProperty(id);
     const auto previous = hadProperty
         ? static_cast<float>(static_cast<double>(tree.getProperty(id)))

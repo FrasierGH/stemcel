@@ -85,6 +85,10 @@ constexpr ControlName kControlNames[] = {
     {Control::colorFxSelect, "colorFxSelect"},
     {Control::releaseFxSelect, "releaseFxSelect"},
     {Control::fxTypeSelect, "fxTypeSelect"},
+    {Control::stemToggle, "stemToggle"},
+    {Control::stemSolo, "stemSolo"},
+    {Control::stemsReset, "stemsReset"},
+    {Control::shift, "shift"},
     {Control::samplerBank, "samplerBank"},
     {Control::samplerVolume, "samplerVolume"},
     {Control::samplerLoad, "samplerLoad"},
@@ -93,7 +97,7 @@ constexpr ControlName kControlNames[] = {
 };
 
 constexpr const char* kPadModeNames[] = {"hotCue",   "padFx1", "beatJump", "sampler",
-                                         "keyboard", "padFx2", "beatLoop", "keyShift"};
+                                         "keyboard", "padFx2", "beatLoop", "keyShift", "stems"};
 
 int parseHexByte(const juce::String& token)
 {
@@ -241,6 +245,7 @@ std::shared_ptr<const Mapping> Mapping::fromJson(const juce::var& json, juce::St
         error = "deckChannels must list 1.." + juce::String(kDecks) + " channels";
         return nullptr;
     }
+    mapping->decks = static_cast<int>(deckChannels.size());
     std::vector<std::array<int, 2>> padChannels;
     if (const auto* pads = json.getProperty("padChannels", {}).getArray())
         for (const auto& p : *pads)
@@ -279,7 +284,25 @@ std::shared_ptr<const Mapping> Mapping::fromJson(const juce::var& json, juce::St
         binding.control = control;
         binding.index = static_cast<int>(entry.getProperty("index", 0));
         binding.pressOnly = static_cast<bool>(entry.getProperty("pressOnly", false));
-        if (entry.hasProperty("mode"))
+        binding.invert = static_cast<bool>(entry.getProperty("invert", false));
+        binding.toggle = static_cast<bool>(entry.getProperty("toggle", false));
+        if (entry.hasProperty("whenShift")) binding.whenShift = static_cast<bool>(entry.getProperty("whenShift", false)) ? 1 : 0;
+        // "shifted": the control this message is while a software SHIFT is held.
+        Control shiftedControl = Control::none;
+        if (entry.hasProperty("shifted"))
+        {
+            shiftedControl = controlFromName(entry.getProperty("shifted", "").toString());
+            if (shiftedControl == Control::none)
+            {
+                error = "unknown shifted control in " + controlText;
+                return nullptr;
+            }
+            binding.whenShift = 0;
+        }
+        // "current": pads whose notes are the same in every mode (the controller keeps its
+        // mode to itself, or has none): they act in the channel's pad mode.
+        if (entry.getProperty("mode", "").toString() == "current") binding.mode = PadMode::count;
+        else if (entry.hasProperty("mode"))
         {
             binding.mode = padModeFromName(entry.getProperty("mode", "").toString());
             if (binding.mode == PadMode::count)
@@ -311,26 +334,35 @@ std::shared_ptr<const Mapping> Mapping::fromJson(const juce::var& json, juce::St
             return nullptr;
         }
 
-        for (const auto& address : addresses)
-            for (int i = 0; i < count; ++i)
-            {
-                const int data1 = address.data1 + i;
-                if (data1 > 127) break;
-                auto b = binding;
-                b.deck = address.deck;
-                if (count > 1) b.index = i;
-                mapping->table[static_cast<size_t>(address.status)][static_cast<size_t>(data1)].push_back(b);
-                if (hasLsb)
+        std::vector<Binding> variants{binding};
+        if (shiftedControl != Control::none)
+        {
+            auto shifted = binding;
+            shifted.control = shiftedControl;
+            shifted.whenShift = 1;
+            variants.push_back(shifted);
+        }
+        for (const auto& variant : variants)
+            for (const auto& address : addresses)
+                for (int i = 0; i < count; ++i)
                 {
-                    auto low = b;
-                    low.isLsb = true;
-                    low.msbData1 = data1;
-                    mapping->table[static_cast<size_t>(address.status)][static_cast<size_t>(lsb)].push_back(low);
+                    const int data1 = address.data1 + i;
+                    if (data1 > 127) break;
+                    auto b = variant;
+                    b.deck = address.deck;
+                    if (count > 1) b.index = i;
+                    mapping->table[static_cast<size_t>(address.status)][static_cast<size_t>(data1)].push_back(b);
+                    if (hasLsb)
+                    {
+                        auto low = b;
+                        low.isLsb = true;
+                        low.msbData1 = data1;
+                        mapping->table[static_cast<size_t>(address.status)][static_cast<size_t>(lsb)].push_back(low);
+                    }
+                    // Note Off arrives on its own status (0x8n) for some controllers.
+                    if ((address.status & 0xF0) == 0x90)
+                        mapping->table[static_cast<size_t>(address.status & 0x8F)][static_cast<size_t>(data1)].push_back(b);
                 }
-                // Note Off arrives on its own status (0x8n) for some controllers.
-                if ((address.status & 0xF0) == 0x90)
-                    mapping->table[static_cast<size_t>(address.status & 0x8F)][static_cast<size_t>(data1)].push_back(b);
-            }
     }
 
     if (const auto* leds = json.getProperty("leds", {}).getArray())
@@ -338,6 +370,8 @@ std::shared_ptr<const Mapping> Mapping::fromJson(const juce::var& json, juce::St
         {
             const auto state = entry.getProperty("state", "").toString();
             const int count = juce::jlimit(1, 64, static_cast<int>(entry.getProperty("count", 1)));
+            const int onValue = juce::jlimit(0, 127, static_cast<int>(entry.getProperty("on", 0x7F)));
+            const int offValue = juce::jlimit(0, 127, static_cast<int>(entry.getProperty("off", 0x00)));
             const int pinned = static_cast<int>(entry.getProperty("deck", 0));
             juce::Array<juce::var> midiList;
             if (const auto* list = entry.getProperty("midi", {}).getArray()) midiList = *list;
@@ -358,7 +392,7 @@ std::shared_ptr<const Mapping> Mapping::fromJson(const juce::var& json, juce::St
                     led.state = state;
                     led.deck = a.deck;
                     led.count = count;
-                    led.addresses.push_back({a.status, a.data1});
+                    led.addresses.push_back({a.status, a.data1, onValue, offValue});
                 }
             }
             for (auto& [deck, led] : perDeck) mapping->ledBindings.push_back(std::move(led));
@@ -462,6 +496,13 @@ int Mapping::Translator::translate(const juce::uint8* bytes, int size, Event* ou
     for (const auto& b : bindings)
     {
         if (written >= maxEvents) break;
+        if (b.control == Control::shift)
+        {
+            // A software SHIFT: held here, for the entries that read it.
+            shiftHeld = !noteOff && data2 > 0;
+            continue;
+        }
+        if (b.whenShift >= 0 && (b.whenShift == 1) != shiftHeld) continue;
         Event e;
         e.control = b.control;
         e.deck = static_cast<std::int16_t>(b.deck);
@@ -471,7 +512,8 @@ int Mapping::Translator::translate(const juce::uint8* bytes, int size, Event* ou
         {
             case Encoding::button:
                 e.value = (!noteOff && data2 > 0) ? 1.0F : 0.0F;
-                if (b.pressOnly && e.value < 0.5F) continue;
+                if ((b.pressOnly || b.toggle) && e.value < 0.5F) continue;
+                if (b.toggle) e.value = -1.0F; // the control's toggle
                 break;
             case Encoding::rel64:
                 e.value = static_cast<float>(data2 - 64);
@@ -509,8 +551,13 @@ int Mapping::Translator::translate(const juce::uint8* bytes, int size, Event* ou
                 {
                     e.value = static_cast<float>(data2) / 127.0F;
                 }
+                if (b.invert) e.value = 1.0F - e.value;
                 break;
         }
+        // Jog ticks in the decks' units (a DDJ's 720 a turn), whatever the wheel's resolution.
+        if ((b.control == Control::jogScratch || b.control == Control::jogBend || b.control == Control::jogSearch) &&
+            mapping->ticksPerTurn > 0 && mapping->ticksPerTurn != 720)
+            e.value *= 720.0F / static_cast<float>(mapping->ticksPerTurn);
         out[written++] = e;
     }
     return written;

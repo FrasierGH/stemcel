@@ -181,6 +181,7 @@ void PerformanceTake::add(const juce::var& payload)
             s.audible = static_cast<bool>(e.getProperty("audible", false));
             s.keyLock = static_cast<bool>(e.getProperty("keyLock", false));
             s.scratch = static_cast<bool>(e.getProperty("scratch", false));
+            s.stemsOff = static_cast<int>(e.getProperty("stemsOff", 0));
             segments.push_back(std::move(s));
         }
         else if (kind == "sample")
@@ -240,6 +241,7 @@ TakeEdits PerformanceTake::edits(double startMs) const
             const auto& s = *list[i];
             const auto& next = *list[i + 1];
             if (!s.moving || !s.audible || s.itemId.isEmpty()) continue;
+            if (s.stemsOff == (1 << kStems) - 1) continue; // every stem out: silence
             const double t0 = ms(s.at), t1 = ms(next.at);
             if (t1 - t0 < kMinClipMs) continue;
             auto addClip = [&](double from, double to, double srcFrom, double srcTo)
@@ -250,6 +252,7 @@ TakeEdits PerformanceTake::edits(double startMs) const
                 c.positionMs = from;
                 c.semitones = s.semitones;
                 c.keyLock = s.keyLock && !s.scratch;
+                c.stemsOff = s.stemsOff;
                 c.reversed = srcTo < srcFrom;
                 c.inMs = std::min(srcFrom, srcTo) * 1000.0;
                 c.durationMs = std::abs(srcTo - srcFrom) * 1000.0;
@@ -349,6 +352,7 @@ bool PerformanceTake::write(EngineClient& engine, ProjectMirror& mirror, Timelin
         {
             if (before) before();
             std::map<int, juce::String> tracks;
+            std::map<int, std::map<int, juce::String>> stemTracks; // deck → stem → track
             for (const int deck : e.decksUsed)
             {
                 if (const auto existing = onto.find(deck); existing != onto.end())
@@ -371,23 +375,66 @@ bool PerformanceTake::write(EngineClient& engine, ProjectMirror& mirror, Timelin
                     c.durationMs -= cutSource;
                     c.positionMs = 0.0;
                 }
-                const auto clipId = EngineClient::newId("clip");
-                engine.send("CLIP_ADD", obj({{"trackId", tracks[c.deck]},
-                                             {"clipId", clipId},
-                                             {"libraryItemId", c.itemId},
-                                             {"positionMs", c.positionMs},
-                                             {"inMs", c.inMs},
-                                             {"durationMs", c.durationMs}}));
-                const bool timed = std::abs(c.tempoRatio - 1.0) > 1.0e-4 || c.semitones != 0 || c.keyLock;
-                // Pinned: the clip plays at the speed it was played, whatever the project tempo does.
-                engine.send("CLIP_SET_WARP", obj({{"clipId", clipId},
-                                                  {"warpEnabled", timed},
-                                                  {"warpMode", c.keyLock ? "pro" : "repitch"},
-                                                  {"tempoRatio", c.tempoRatio},
-                                                  {"semitones", c.semitones},
-                                                  {"cents", 0}}));
-                if (c.reversed) engine.send("CLIP_SET_REVERSED", obj({{"clipId", clipId}, {"reversed", true}}));
+                // Played with stems out: the stems that were in, each on the deck's track for
+                // that stem (made when first needed, with the deck's automation), so the take
+                // sounds as it did. Without the stems in the library, the whole track.
+                std::vector<std::pair<juce::String, juce::String>> parts; // (track, library item)
+                if (c.stemsOff != 0 && stemsOf)
+                {
+                    const auto items = stemsOf(c.itemId);
+                    const bool twoStems = items[0].isNotEmpty() && items[1].isNotEmpty() && items[2].isEmpty() && items[3].isEmpty();
+                    if (twoStems || std::all_of(items.begin(), items.end(), [](const juce::String& id) { return id.isNotEmpty(); }))
+                        for (int stem = 0; stem < (twoStems ? 2 : kStems); ++stem)
+                        {
+                            if ((c.stemsOff & (1 << stem)) != 0) continue;
+                            auto& track = stemTracks[c.deck][stem];
+                            if (track.isEmpty())
+                            {
+                                track = actions.addTrack();
+                                static const char* const names[kStems] = {"Vocal", "Inst", "Bass", "Drums"};
+                                actions.renameTrack(track, "Deck " + juce::String(c.deck) + " " + names[stem] +
+                                                               (takeNumber > 1 ? " (take " + juce::String(takeNumber) + ")" : ""));
+                            }
+                            parts.emplace_back(track, items[static_cast<size_t>(stem)]);
+                        }
+                }
+                if (parts.empty()) parts.emplace_back(tracks[c.deck], c.itemId);
+                for (const auto& [trackId, itemId] : parts)
+                {
+                    const auto clipId = EngineClient::newId("clip");
+                    engine.send("CLIP_ADD", obj({{"trackId", trackId},
+                                                 {"clipId", clipId},
+                                                 {"libraryItemId", itemId},
+                                                 {"positionMs", c.positionMs},
+                                                 {"inMs", c.inMs},
+                                                 {"durationMs", c.durationMs}}));
+                    const bool timed = std::abs(c.tempoRatio - 1.0) > 1.0e-4 || c.semitones != 0 || c.keyLock;
+                    // Pinned: the clip plays at the speed it was played, whatever the project tempo does.
+                    engine.send("CLIP_SET_WARP", obj({{"clipId", clipId},
+                                                      {"warpEnabled", timed},
+                                                      {"warpMode", c.keyLock ? "pro" : "repitch"},
+                                                      {"tempoRatio", c.tempoRatio},
+                                                      {"semitones", c.semitones},
+                                                      {"cents", 0}}));
+                    if (c.reversed) engine.send("CLIP_SET_REVERSED", obj({{"clipId", clipId}, {"reversed", true}}));
+                }
             }
+            // The stem tracks mix as the deck's channel did: its curves on each.
+            for (const auto& [deck, stems] : stemTracks)
+                if (const auto curves = e.automation.find(deck); curves != e.automation.end())
+                    for (const auto& [stem, track] : stems)
+                    {
+                        std::vector<automation::Lane> lanes;
+                        for (const auto& [param, pts] : curves->second)
+                        {
+                            std::vector<automation::Point> points;
+                            for (const auto& [t, v] : pts) points.push_back({t, v, stepped(param) ? "hold" : "linear"});
+                            if (points.empty()) continue;
+                            actions.setAutomation(track, param, points);
+                            if (!constantCurve(param, pts)) lanes.push_back({param, automation::kDefaultLaneHeight});
+                        }
+                        if (!lanes.empty()) actions.setAutomationLanes(track, lanes);
+                    }
             for (const auto& [deck, curves] : e.automation)
             {
                 const auto track = tracks.find(deck);

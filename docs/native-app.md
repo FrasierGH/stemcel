@@ -328,6 +328,16 @@ in Fusion Dark); `applyTheme` sets them all. Clips keep their per-track colours 
 `STEMCEL_THEME=fusionDark` runs the app (or its smoke test) in a theme without touching the
 preferences.
 
+Beats get lines once they are 15 px apart, and within three zoom steps of the closest view
+every beat has one over the clips too, much fainter than the bars'.
+
+**Sprig** dances to whatever plays: the timeline's beat, or the leading deck's in performance
+mode, harder as it gets louder. It is a little window of its own: drag it anywhere on screen,
+out of Stemcel's window too; double-click for another dance; right-click to keep it on top or
+not, or to hide it (**View > Dancer** brings it back). It hides while Stemcel is minimised.
+
+**Debug > Rescan Controllers** looks for DJ controllers again and enables the supported ones.
+
 The timeline's scrollbar zooms as well as scrolls: drag its middle to scroll, either end to
 show more or less of the arrangement (the zoom slider follows); double-click it to fit the
 project. The playhead's head in the ruler drags it (snapped to the grid, free with Alt). The
@@ -404,6 +414,11 @@ Track FX's **Add effect…** adds, after the built-in modules:
   timeline's.
 - **Plugins**: the scanned VST3, VST 2 and Audio Unit effects. A plugin has an **Edit** button
   for its own window.
+
+Tone and Filter turn as performance mode's EQ and FILTER knobs do: the EQ from the kill on the
+left through 0 dB at the centre to +6 dB, the filter low-pass left and high-pass right with a
+detent between, through the same filter. The **bit crusher** is in **Add effect…**, and shows on
+the bar once added (or in use); its **x** takes it off.
 
 Every effect has a **Mix** knob: how much of it is heard against the track's own sound (the
 dry sound delayed by the plugin's latency, so they line up). Its title row has bypass and

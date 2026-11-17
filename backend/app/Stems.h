@@ -44,6 +44,11 @@ class StemService final
     // to keep (empty = all).
     void startUvr(const juce::String& sourceItemId, const juce::String& clipId, const juce::String& recipeId,
                   const juce::String& customModel, const juce::StringArray& keep);
+    // Adds `file` to the library as the stem `label` of `sourceItemId` ("Melody — Title"); the
+    // new item's id, empty when the file can't be read.
+    juce::String addLibraryStem(const juce::String& sourceItemId, const juce::String& label, const juce::File& file);
+    // A stem of `sourceItemId` already in the library by its label ("Vocals"), or empty.
+    juce::String findStem(const juce::String& sourceItemId, const juce::String& label) const;
 
   private:
     struct Job
@@ -54,7 +59,7 @@ class StemService final
         double startMs = 0.0;
         std::set<juce::String> placed;
     };
-    void importStem(Job& job, const juce::String& stem, const juce::File& file);
+    void importStem(Job& job, const juce::String& stem, const juce::File& file, const juce::String& labelOverride = {});
 
     // One run of the tool; with `vocalPassAfter`, the recipe's vocal model runs after it on
     // the same audio and takes the vocals.

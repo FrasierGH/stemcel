@@ -11,7 +11,17 @@
 namespace stemcel::perf
 {
 
-constexpr int kDecks = 2;
+// Four decks (rekordbox's four-deck mode); the view shows two unless 4 DECKS is on. Decks 1
+// and 3 are on the crossfader's left, 2 and 4 on its right.
+constexpr int kDecks = 4;
+
+// The Beat FX's CH SELECT codes: 0 CH1, 1 CH2, 2 the master (as the DDJ-400 sends them), then
+// 3 CH3 and 4 CH4. The unit each drives: 0 the master, else the deck.
+constexpr int kFxMaster = 2;
+constexpr int fxChannelUnit(int code) noexcept { return code == kFxMaster ? 0 : code < kFxMaster ? code + 1 : code; }
+constexpr int fxChannelCode(int unit) noexcept { return unit == 0 ? kFxMaster : unit <= 2 ? unit - 1 : unit; }
+// A deck's side of the crossfader: 0 left (A), 1 right (B).
+constexpr int crossfaderSide(int deck) noexcept { return deck % 2 == 1 ? 0 : 1; }
 
 // Every control, named as in the mapping files (controlName / controlFromName).
 enum class Control : std::uint8_t
@@ -100,6 +110,13 @@ enum class Control : std::uint8_t
     samplerLoad,   // index = slot (the app loads the browser's item)
     channelBind,   // value 1: the channel drives a timeline track (the deck is silent), 0: the deck again
     tempoHold,     // value = tempo factor: the deck plays at it until the TEMPO slider reaches it
+    // Stem Mix (the STEMS pad mode, or the view): index = the stem (kStemNames' order).
+    stemToggle,    // press: the stem in or out of the mix
+    stemSolo,      // press: that stem alone; again, every stem back
+    stemsReset,    // press: every stem back in
+    // A controller whose SHIFT is the software's (it sends its own message, and the other
+    // controls the same messages either way): held in the mapping's translator.
+    shift,
     count
 };
 
@@ -113,8 +130,16 @@ enum class PadMode : std::uint8_t
     padFx2,
     beatLoop,
     keyShift,
+    // Stem Mix: double-press SAMPLER (a second press within kStemModeDoubleMs). The pads keep
+    // sending the sampler's notes; the channel reads them as stems.
+    stems,
     count
 };
+
+// Stem Mix's stems, in pad order: pads 1–4 take each in or out, pads 5–8 solo it.
+constexpr int kStems = 4;
+inline constexpr const char* kStemNames[kStems] = {"VOCAL", "INST", "BASS", "DRUMS"};
+constexpr double kStemModeDoubleSec = 0.45;
 
 const char* controlName(Control control) noexcept;
 Control controlFromName(const juce::String& name) noexcept;

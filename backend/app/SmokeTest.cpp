@@ -1179,6 +1179,7 @@ void SmokeTest::addTempoJourney()
                   midiActions = std::make_unique<MidiControllerActions>(engine, mirror, actions, midiView, *midiLive, prefs,
                                                                         MidiControllerActions::Hooks{});
                   midiView.selectedTrackId = model().tracks.empty() ? juce::String() : model().tracks.front().id;
+                  midiMasterBefore = model().masterVolume;
                   const auto control = [](std::initializer_list<std::pair<const char*, juce::var>> props)
                   {
                       auto p = object(props);
@@ -1192,13 +1193,14 @@ void SmokeTest::addTempoJourney()
               {},
               [this](const juce::var&)
               {
-                  const double expected = db::positionToLinear(0.5, db::kMaxMasterDb);
+                  // The knobs only navigate on the timeline: the master level stays where it was.
+                  const double expected = midiMasterBefore;
                   const bool marker = std::any_of(model().markers.begin(), model().markers.end(),
                                                   [](const MarkerModel& m) { return std::abs(m.positionMs) < 1.0; });
-                  const bool master = std::abs(model().masterVolume - expected) < 1e-3;
+                  const bool master = std::abs(model().masterVolume - expected) < 1e-6;
                   const bool browsed = model().tracks.size() > 1 && midiView.selectedTrackId == model().tracks[1].id;
                   lastTempoLine = "midi marker=" + juce::String(marker ? "yes" : "no") + " master=" + juce::String(model().masterVolume, 4)
-                                  + " (want " + juce::String(expected, 4) + ") browsed=" + juce::String(browsed ? "yes" : "no");
+                                  + " (unchanged from " + juce::String(expected, 4) + ") browsed=" + juce::String(browsed ? "yes" : "no");
                   if (marker && master && browsed) report.add(lastTempoLine);
                   return marker && master && browsed;
               }};
@@ -4754,6 +4756,67 @@ void SmokeTest::addTempoJourney()
                      }});
     steps.back().poll = true;
     steps.back().timeoutMs = 15000.0;
+    // Pictures of performance mode, for eyes (CI uploads them): its normal layout with deck 1's
+    // pads in Stem Mix (its key over the pads), the stacked waveforms, and Sprig mid-dance.
+    steps.push_back({"performance pictures",
+                     [this, perfWorkspace]
+                     {
+                         auto* view = perfWorkspace() != nullptr ? perfWorkspace()->performanceView() : nullptr;
+                         if (view == nullptr) return;
+                         perf::sendControl(engine, "padMode", 1, 1.0, 0, "stems");
+                         perfPicturePhase = 0;
+                     },
+                     {},
+                     [this, perfWorkspace](const juce::var&)
+                     {
+                         auto* view = perfWorkspace() != nullptr ? perfWorkspace()->performanceView() : nullptr;
+                         if (view == nullptr) return false;
+                         const auto write = [this](juce::Component& c, const juce::String& name)
+                         {
+                             const auto image = c.createComponentSnapshot(c.getLocalBounds());
+                             juce::FileOutputStream out(workDir.getChildFile(name));
+                             if (out.openedOk()) juce::PNGImageFormat().writeImageToStream(image, out);
+                         };
+                         if (perfPicturePhase == 0)
+                         {
+                             if (view->stateForTest().decks[0].padMode != "stems") return false;
+                             view->resized();
+                             write(*view, "performance.png");
+                             view->setStackedForTest(true);
+                             perfPicturePhase = 1;
+                             return false;
+                         }
+                         if (perfPicturePhase == 1)
+                         {
+                             write(*view, "performance-stacked.png");
+                             view->setStackedForTest(false);
+                             view->setFourDecksForTest(true);
+                             perfPicturePhase = 3;
+                             return false;
+                         }
+                         if (perfPicturePhase == 3)
+                         {
+                             write(*view, "performance-four.png");
+                             view->setFourDecksForTest(false);
+                             perf::sendControl(engine, "padMode", 1, 1.0, 0, "hotCue");
+                             Dancer sprig;
+                             sprig.setSize(192, 248);
+                             sprig.beatSource = [] { return Dancer::Beat{true, 0.15, 0.8F}; };
+                             for (int frame = 0; frame < 30; ++frame) sprig.tick();
+                             write(sprig, "sprig.png");
+                             perfPicturePhase = 2;
+                             return false;
+                         }
+                         const auto pose = Dancer().poseAt({true, 0.0, 0.8F}, 1.0);
+                         const bool dancing = pose.squash > 0.05F && Dancer().poseAt({false, 0.0, 0.0F}, 1.0).squash < 0.05F;
+                         report.add("performance pictures: performance.png, performance-stacked.png, performance-four.png, sprig.png; Sprig "
+                                    + juce::String(dancing ? "lands on the beat" : "does not dance"));
+                         return workDir.getChildFile("performance.png").existsAsFile() &&
+                                workDir.getChildFile("performance-stacked.png").existsAsFile() &&
+                                workDir.getChildFile("performance-four.png").existsAsFile() && dancing;
+                     }});
+    steps.back().poll = true;
+    steps.back().delayMs = 300.0;
     // A stretch of the timeline onto a deck: the selected range's mix rendered onto deck 2, played
     // with REC on, and the take replaces that stretch.
     steps.push_back({"performance loads a timeline region",

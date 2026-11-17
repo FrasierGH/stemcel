@@ -61,7 +61,7 @@ std::map<juce::String, double> TrackDriver::valuesFor(const State& s, int deck, 
     const auto& x = s.decks[static_cast<size_t>(deck - 1)];
     std::map<juce::String, double> v;
     const double gain = juce::Decibels::decibelsToGain(curves::trimDb(x.trim), curves::kSilentDb) * curves::faderGain(x.fader) *
-                        curves::crossfaderGain(s.crossfader, deck == 1 ? 0 : 1, curves::CrossfaderCurve::full);
+                        curves::crossfaderGain(s.crossfader, crossfaderSide(deck), curves::CrossfaderCurve::full);
     v["level"] = juce::jlimit(-60.0, 6.0, curves::gainToDb(gain));
     v["toneBass"] = curves::eqDb(x.eqLow);
     v["toneMid"] = curves::eqDb(x.eqMid);
@@ -70,7 +70,7 @@ std::map<juce::String, double> TrackDriver::valuesFor(const State& s, int deck, 
     v["filter"] = asFilter ? curves::filterAmount(x.filter) : 0.0;
     v["colorFxType"] = s.fx.colorType;
     v["colorFx"] = asFilter ? 0.0 : curves::filterAmount(x.filter);
-    const bool routed = s.fx.channel == deck - 1;
+    const bool routed = fxChannelUnit(s.fx.channel) == deck;
     v["beatFxType"] = s.fx.type;
     v["beatFxBeats"] = s.fx.step;
     v["beatFxLevel"] = s.fx.level;
