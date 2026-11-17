@@ -84,7 +84,7 @@ class SmokeTest final : private juce::Timer
 
     juce::StringArray tempoItemIds;
     TimelineViewState midiView;
-    float midiMasterBefore = 1.0F;
+    double midiMasterBefore = 1.0;
     std::unique_ptr<LiveState> midiLive;
     std::unique_ptr<MidiControllerActions> midiActions;
     std::unique_ptr<RecordDialog> reviewDialog;

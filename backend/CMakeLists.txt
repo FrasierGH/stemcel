@@ -667,16 +667,19 @@ juce_add_console_app(StemcelBackend
 # regenerated. A version bump then leaves the built exe reporting the old
 # FileVersion/ProductVersion even though Info.txt and kBackendVersion are
 # current. Drop a stale .rc at configure time so the version the exe reports
-# always matches project() above.
-get_target_property(STEMCEL_RC_DIR StemcelBackend JUCE_GENERATED_SOURCES_DIRECTORY)
-set(STEMCEL_RC_FILE "${STEMCEL_RC_DIR}/StemcelBackend_resources.rc")
-if(EXISTS "${STEMCEL_RC_FILE}")
-    file(READ "${STEMCEL_RC_FILE}" STEMCEL_RC_CONTENTS)
-    if(NOT STEMCEL_RC_CONTENTS MATCHES "\"ProductVersion\",[ \t]+\"${PROJECT_VERSION}")
-        message(STATUS "Removing stale VERSIONINFO resource so it regenerates as ${PROJECT_VERSION}")
-        file(REMOVE "${STEMCEL_RC_FILE}")
+# always matches project() above. Called for each JUCE target (the native app too).
+function(stemcel_drop_stale_version_resource target)
+    get_target_property(rc_dir ${target} JUCE_GENERATED_SOURCES_DIRECTORY)
+    set(rc_file "${rc_dir}/${target}_resources.rc")
+    if(EXISTS "${rc_file}")
+        file(READ "${rc_file}" rc_contents)
+        if(NOT rc_contents MATCHES "\"ProductVersion\",[ \t]+\"${PROJECT_VERSION}")
+            message(STATUS "Removing stale ${target} VERSIONINFO resource so it regenerates as ${PROJECT_VERSION}")
+            file(REMOVE "${rc_file}")
+        endif()
     endif()
-endif()
+endfunction()
+stemcel_drop_stale_version_resource(StemcelBackend)
 
 target_sources(StemcelBackend PRIVATE
     src/core/Main.cpp)
@@ -774,6 +777,7 @@ if(STEMCEL_BUILD_NATIVE_APP)
         HARDENED_RUNTIME_OPTIONS
             com.apple.security.device.audio-input
             com.apple.security.cs.disable-library-validation)
+    stemcel_drop_stale_version_resource(StemcelNative)
 
     target_sources(StemcelNative PRIVATE
         app/AppController.cpp

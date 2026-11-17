@@ -16,7 +16,7 @@
 namespace stemcel::native
 {
 class TimelineActions;
-struct LiveState;
+class LiveState;
 } // namespace stemcel::native
 
 namespace stemcel::native::perf
