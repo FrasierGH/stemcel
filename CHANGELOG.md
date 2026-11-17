@@ -1,24 +1,5 @@
 # Changelog
 
-## Unreleased
-
-### Added
-
-- **One library across projects.** Every track a project imports (a minute or longer) joins the DJ collection, and a project opened from before joins its tracks too. A track the collection has analysed comes into a project with its grid, key and cues instead of being analysed again.
-- **Stems stay with the track.** Separating a collection track writes its stems into the collection (`~/Stemcel/Collection/Stems`), and any project that uses the track, in performance mode or with Separate Stems, takes them from there instead of separating again.
-- **Playlists to and from rekordbox**: a Library-mode playlist's menu has **Send to rekordbox** (its tracks, with Stemcel's grid, key and cues, in a rekordbox playlist of the same name), and a rekordbox playlist's menu has **Copy to Stemcel Collection**.
-
-### Changed
-
-- The panel's first tab is **Project** (what this project uses); the library is Library mode.
-- Performance mode's pads, CUE and PLAY are drawn as the Fusion theme's other buttons, still raised.
-- Performance mode's mixer: each knob's caption under it, and CUE clear of the FILTER knob.
-
-### Fixed
-
-- **Hot cues crashed Stemcel** on a track in the DJ collection: saving the cues to the collection read memory that had just been freed.
-- **STACKED squeezed the mixer**: an old picture of the Beat FX display stayed over the EQ knobs, and the timeline strip took the mixer's room. The view repaints after a re-layout, and the strip gives way before the mixer does.
-
 ## 0.7.0
 
 ### Added
@@ -31,6 +12,9 @@
 - **A choice of split** for Stem Mix: vocals and instrumental (two stems, one model, faster) or the four-stem ensemble.
 - **Debug > Rescan Controllers**: looks for controllers again (one plugged in late, or freed by another program).
 - **Track names** on performance mode's timeline strip, beside their lanes.
+- **One library across projects.** Every track a project imports (a minute or longer) joins the DJ collection, and a project opened from before joins its tracks too. A track the collection has analysed comes into a project with its grid, key and cues instead of being analysed again.
+- **Stems stay with the track.** Separating a collection track writes its stems into the collection (`~/Stemcel/Collection/Stems`), and any project that uses the track, in performance mode or with Separate Stems, takes them from there instead of separating again.
+- **Playlists to and from rekordbox**: a Library-mode playlist's menu has **Send to rekordbox** (its tracks, with Stemcel's grid, key and cues, in a rekordbox playlist of the same name), and a rekordbox playlist's menu has **Copy to Stemcel Collection**.
 
 ### Changed
 
@@ -41,6 +25,9 @@
 - Track FX's tone and filter turn as performance mode's EQ and FILTER do (kill to +6 dB, the same filter curve), so a take's curves sit where the knobs were; a track's EQ now reaches the kill.
 - The bit crusher is in Track FX's Add effect... menu rather than always on the bar.
 - Performance mode's CUE and PLAY sit at the bottom of the deck, round, as on the controller; the sampler's bank and volume fit the FX section.
+- The panel's first tab is **Project** (what this project uses); the library is Library mode.
+- Performance mode's pads, CUE and PLAY are drawn as the Fusion theme's other buttons, still raised.
+- Performance mode's mixer: each knob's caption under it, and CUE clear of the FILTER knob.
 
 ### Fixed
 
@@ -48,6 +35,9 @@
 - **Cues on bars looked early**: a bar's line was drawn from its moment rightwards, so a cue on it seemed a pixel or two early. Every grid line is centred on its moment.
 - **Waveforms warbled while playing**: each frame sampled the peaks afresh at a new offset. The columns now sit on fixed stretches of the track and move together, and the position eases between the engine's updates.
 - A controller's jog resolution in its profile is applied (it was read but unused).
+- **Hot cues crashed Stemcel** on a track in the DJ collection: saving the cues to the collection read memory that had just been freed.
+- **STACKED squeezed the mixer**: an old picture of the Beat FX display stayed over the EQ knobs, and the timeline strip took the mixer's room. The view repaints after a re-layout, and the strip gives way before the mixer does.
+- Scrolling the timeline just as playback started could be undone: following snapped back to the playhead.
 
 ## 0.6.0
 
