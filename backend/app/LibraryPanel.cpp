@@ -1464,7 +1464,9 @@ LibraryPanel::LibraryPanel(LibraryContext context) : ctx(std::move(context))
     views = {library.get(), files.get(), rekordbox.get(), transitions.get(), trackFx.get(), projectFx.get(), plugins.get()};
     for (auto* v : views) addChildComponent(v);
 
-    const juce::StringArray names{"Library", "Files", "rekordbox", "Transitions", "Track FX", "Project FX", "Plugins"};
+    // "Project": what this project uses. The library itself (the DJ collection, shared by every
+    // project) is Library mode, the transport's Library button.
+    const juce::StringArray names{"Project", "Files", "rekordbox", "Transitions", "Track FX", "Project FX", "Plugins"};
     for (int index = 0; index < names.size(); ++index)
     {
         auto* tab = tabs.add(new juce::TextButton(names[index]));

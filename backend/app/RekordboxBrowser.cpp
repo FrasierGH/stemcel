@@ -2,6 +2,7 @@
 
 #include "KeyDetection.h"
 #include "Theme.h"
+#include "collection/Collection.h"
 
 #include <algorithm>
 
@@ -646,6 +647,20 @@ void RekordboxBrowser::showPlaylistMenu(const RekordboxPlaylist* playlist)
             menu.addItem("Add audio files...", [this, id = list.id] { addFilesToPlaylist(id); });
         menu.addItem("Rename...", [this, list] { renamePlaylist(list); });
         menu.addItem("Delete...", [this, list] { deletePlaylist(list); });
+        menu.addSeparator();
+        // Into Stemcel's own library (shared by every project), with rekordbox's grids, keys and
+        // cues: under its "rekordbox" folder.
+        menu.addItem("Copy to Stemcel Collection",
+                     [this, list]
+                     {
+                         if (ctx.notify) ctx.notify("Copying \"" + list.name + "\" into the collection...", false);
+                         auto notify = ctx.notify;
+                         dj::Collection::shared().importRekordboxPlaylist(ctx.rekordbox, currentSource, {}, list.id, {},
+                                                                          [notify](const juce::String& summary, bool ok)
+                                                                          {
+                                                                              if (notify) notify(summary, !ok);
+                                                                          });
+                     });
     }
     menu.addSeparator();
     menu.addItem("Show backups", [] { Rekordbox::backupFolder().createDirectory(); Rekordbox::backupFolder().revealToUser(); });

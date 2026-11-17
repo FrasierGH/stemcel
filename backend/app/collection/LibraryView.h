@@ -71,6 +71,10 @@ class LibraryView final : public juce::Component,
     void importFromRekordbox();
     // Into the project library, with the collection's grid, key and cues.
     void addToProject(const std::vector<juce::int64>& ids);
+    // A playlist into this computer's rekordbox library: its tracks (with the collection's
+    // grid and key, so rekordbox doesn't analyse them again) in a rekordbox playlist of the
+    // same name, and their hot and memory cues. Refused while rekordbox is running.
+    void sendToRekordbox(juce::int64 playlist);
 
   private:
     class ListItem;

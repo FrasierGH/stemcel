@@ -2,6 +2,7 @@
 #include "SectionAnalysis.h"
 
 #include "AppPaths.h"
+#include "collection/Collection.h"
 #include "KeyDetection.h"
 #include "Log.h"
 #include "MediaStore.h"
@@ -16,6 +17,8 @@ const juce::StringArray kAudioExtensions{"wav", "wave", "aif", "aiff", "flac", "
                                          "alac", "ogg", "oga", "wma", "caf"};
 constexpr double kMinManualBpm = 20.0;
 constexpr double kMaxManualBpm = 300.0;
+// A track joins the DJ collection from a minute long (shorter: a loop or one-shot).
+constexpr double kCollectionLeastMs = 60000.0;
 
 juce::var object(std::initializer_list<std::pair<const char*, juce::var>> props)
 {
@@ -117,6 +120,30 @@ void AudioImporter::import(const juce::Array<juce::File>& files, Done done)
     import(std::move(requests), std::move(done));
 }
 
+ImportHints hintsFromCollection(const dj::Track& t)
+{
+    ImportHints h;
+    h.title = t.title;
+    h.artist = t.artist;
+    h.key = t.key;
+    h.bpm = t.bpm;
+    if (t.bpm > 0.0)
+    {
+        const auto beats = t.beatTimes();
+        // The first downbeat, as the item's grid anchor.
+        double anchor = beats.empty() ? t.anchorSec : beats.front();
+        for (size_t i = 0; i < beats.size() && i < 4; ++i)
+            if (t.beatNumberAt(static_cast<int>(i)) == 1)
+            {
+                anchor = beats[i];
+                break;
+            }
+        h.beatAnchorSec = anchor;
+    }
+    h.perfCues = dj::toPerfCues(t);
+    return h;
+}
+
 void AudioImporter::import(std::vector<ImportRequest> requests, Done done)
 {
     if (requests.empty())
@@ -124,6 +151,15 @@ void AudioImporter::import(std::vector<ImportRequest> requests, Done done)
         if (done) done({});
         return;
     }
+    // One library across projects: a track the collection has analysed comes in with its
+    // grid, key and cues rather than being analysed again for this project.
+    auto& collection = dj::Collection::shared();
+    collection.load();
+    for (auto& r : requests)
+        if (r.hints.rekordboxId.isEmpty() && r.hints.bpm <= 0.0)
+            if (const auto* t = collection.findByPath(r.file.getFullPathName());
+                t != nullptr && t->state == dj::Track::State::ready && t->bpm > 0.0)
+                r.hints = hintsFromCollection(*t);
     struct Batch
     {
         std::vector<Prepared> results;
@@ -306,6 +342,7 @@ void AudioImporter::commit(std::vector<Prepared> prepared, const Done& done)
 {
     juce::StringArray itemIds;
     juce::StringArray failures;
+    juce::Array<juce::File> joining; // tracks new to the DJ collection
     mirror.refreshNow();
     const auto mediaRoot = media::rootFor(mirror.model().filePath);
 
@@ -352,12 +389,16 @@ void AudioImporter::commit(std::vector<Prepared> prepared, const Done& done)
                 if (p.perfCues.isObject()) engine.send("LIBRARY_ITEM_SET_PERF_CUES", object({{"itemId", itemId}, {"cues", p.perfCues}}));
                 mirror.refreshNow();
                 itemIds.add(itemId);
+                // A track (a minute or more; not a loop or one-shot, nor audio Stemcel made)
+                // joins the DJ collection, where every project finds what is known of it.
+                if (p.durationMs >= kCollectionLeastMs && !p.file.isAChildOf(systemTempDirectory())) joining.add(p.file);
                 log::info("import", "imported " + path + " as " + itemId + (p.bpm > 0.0 ? " bpm=" + juce::String(p.bpm, 2) : ""));
             }
             // Inside the group, so placing what was imported is the same undo step.
             if (done) done(itemIds);
         });
 
+    if (!joining.isEmpty()) dj::Collection::shared().addFiles(joining);
     pending = juce::jmax(0, pending);
     if (onProgress) onProgress();
     if (!failures.isEmpty() && onNotify)

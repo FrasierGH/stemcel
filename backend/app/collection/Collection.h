@@ -74,6 +74,9 @@ struct Track
 
     juce::String rekordboxId; // where it came from, when imported from rekordbox
     juce::String artwork;     // a cover image in the collection folder
+    // Its separated stems, by the library's label ("Vocals", "Drums", "Bass", "Melody",
+    // "Instrumental", ...) to the file: every project that uses the track takes them from here.
+    std::map<juce::String, juce::String> stems;
 
     enum class State
     {
@@ -150,6 +153,10 @@ class Collection final : public juce::ChangeBroadcaster, private juce::Timer
     void setPaused(bool pause); // the smoke test and exports hold analysis back
     // A track's loudness, measured where it was already in memory (a deck loading it).
     void setLoudness(const juce::String& path, double lufs);
+    // Where a track's separated stems are written, and recording one there (by the track's
+    // file; nothing when the file isn't in the collection).
+    static juce::File stemsFolder(juce::int64 id);
+    void setStem(const juce::String& trackPath, const juce::String& label, const juce::File& file);
 
     juce::int64 createPlaylist(const juce::String& name, juce::int64 parent, Playlist::Kind kind = Playlist::Kind::playlist);
     void renamePlaylist(juce::int64 id, const juce::String& name);
@@ -173,6 +180,11 @@ class Collection final : public juce::ChangeBroadcaster, private juce::Timer
     void importRekordbox(Rekordbox& rekordbox, const RekordboxSource& source, const juce::String& passphrase,
                          std::function<void(int done, int total)> progress,
                          std::function<void(const juce::String& summary, bool ok)> done);
+    // One playlist (a folder with all it holds) of the library `source`, and its tracks: into
+    // the "rekordbox" folder beside what is there.
+    void importRekordboxPlaylist(Rekordbox& rekordbox, const RekordboxSource& source, const juce::String& passphrase,
+                                 const juce::String& playlistId, std::function<void(int done, int total)> progress,
+                                 std::function<void(const juce::String& summary, bool ok)> done);
 
     // The request the rekordbox module's export takes (`rbx_export_json`): these
     // playlists (folders with what they hold) and their tracks, with grids, cues and tags.
@@ -189,6 +201,9 @@ class Collection final : public juce::ChangeBroadcaster, private juce::Timer
     void timerCallback() override;
     void changed(bool save = true);
     void queueAnalysis(juce::int64 id, bool force);
+    void importFromRekordbox(Rekordbox& rekordbox, const RekordboxSource& source, const juce::String& passphrase,
+                             const juce::String& onlyPlaylist, std::function<void(int done, int total)> progress,
+                             std::function<void(const juce::String& summary, bool ok)> done);
     juce::int64 nextId() { return ++lastId; }
     static juce::var entryFor(const Track& track); // one track of an export or Link request
     void read(const juce::File& file);

@@ -10,12 +10,23 @@ Open it with the **Library** button in the transport bar, or **View ▸ Library 
 mode. **Back to Timeline**, `Esc`
 or the same command returns to the project.
 
-The collection is shared by every project. It is kept in `~/Stemcel/Collection`:
+The collection is shared by every project: it is Stemcel's library. Every track a project
+imports (a minute or longer; loops and one-shots stay with their project) joins it, and so do
+the tracks of a project opened from before. A track the collection has already analysed comes
+into a project with its beat grid, key and cues, without being analysed again. The panel's
+**Project** tab shows what one project uses.
+
+A track's separated stems are kept with it too: separating a collection track (Separate Stems,
+or STEMS in performance mode) writes the stems into the collection, and every project that
+uses the track takes them from there rather than separating again.
+
+It is kept in `~/Stemcel/Collection`:
 
 - `collection.json` holds the tracks, playlists and histories.
 - `collection.previous.json` is the version before the last save.
 - `artwork/` holds the cover images.
 - `anlz/` holds the analysis files made for exports.
+- `Stems/` holds each track's separated stems.
 
 ## Bringing music in
 
@@ -28,6 +39,21 @@ The collection is shared by every project. It is kept in `~/Stemcel/Collection`:
   Tracks already in the collection keep their own grid and cues. rekordbox's library is
   only read, never changed. Bringing it in again replaces the "rekordbox" folder, so it
   isn't doubled.
+- **Copy to Stemcel Collection**, in a playlist's menu on the **rekordbox** tab, brings in
+  just that playlist (a folder with all it holds) and its tracks, into the "rekordbox" folder
+  beside what is there. It works for a library on a drive or a USB stick too.
+
+## To rekordbox
+
+**Send to rekordbox**, in a playlist's menu, puts it into this computer's rekordbox library:
+
+- its tracks, with Stemcel's beat grid, BPM and key, so rekordbox doesn't analyse them again
+  (a track rekordbox has analysed already keeps rekordbox's);
+- a rekordbox playlist of the same name holding them (one there already gets them added);
+- their hot and memory cues (rekordbox's own hot cues stay).
+
+rekordbox has to be closed: it refuses changes to its library while it runs. Its database is
+backed up to `~/Stemcel/Backups/rekordbox` before the first change in a session.
 
 New tracks are analysed in the background:
 

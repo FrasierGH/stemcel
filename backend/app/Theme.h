@@ -109,6 +109,10 @@ void drawGhostDigits(juce::Graphics& g, const juce::String& text, const juce::Fo
                      juce::Justification justification);
 // A colour that marks a lit button (an on state): saturated and bright.
 bool isLitColour(juce::Colour c);
+// Fusion's push button face, as every TextButton has it (lit: tinted with `litColour` and
+// outlined in a light shade of it), for controls that draw themselves.
+void drawFusionButton(juce::Graphics& g, juce::Rectangle<float> r, bool lit, juce::Colour litColour, bool down, bool hover,
+                      float radius = 2.0f);
 
 class StemcelLookAndFeel final : public juce::LookAndFeel_V4
 {
