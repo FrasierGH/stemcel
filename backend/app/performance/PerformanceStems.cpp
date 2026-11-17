@@ -1,8 +1,9 @@
 // Stem Mix in performance mode: a deck's track's stems (vocals, the instrumental, bass and
 // drums) taken in and out of its mix on the pads. Double-press SAMPLER (or the deck's STEMS
-// button) for the stem pads. The stems come from the library: separated already, they are read
-// for the deck as it loads; otherwise STEMS separates them (UVR's models, as the library's
-// Separate Stems does) and the deck takes them when the separation ends. The instrumental is
+// button) for the stem pads. The stems come from the library: separated already (in this
+// project, or any other: the DJ collection keeps them with the track), they are read for the
+// deck as it loads; otherwise STEMS separates them (UVR's models, as the library's Separate
+// Stems does) and the deck takes them when the separation ends. The instrumental is
 // what is left of the track without the other three; it is written once as a "Melody" stem
 // of its own, so a take made with stems out can put each stem on the timeline.
 
@@ -111,6 +112,8 @@ void PerformanceView::prepareStems(int deck, bool separateIfMissing, bool twoSte
         ds.serial = info.serial;
     }
     if (ds.loading || ds.separating) return;
+    // Separated in another project: the collection keeps the track's stems for this one too.
+    ctx.stems.adoptCollectionStems(info.itemId);
     const auto items = stemItemsFor(info.itemId);
     const auto& model = ctx.mirror.model();
     const auto pathOf = [&](int stem) -> juce::String

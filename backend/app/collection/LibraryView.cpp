@@ -800,6 +800,8 @@ void LibraryView::showListMenu(const Playlist* playlist, bool histories)
                      { askForName("Rename", name, [this, id](const juce::String& n) { collection.renamePlaylist(id, n); }); });
         if (playlist->kind != Playlist::Kind::history)
             menu.addItem("Export to USB...", [this, id = playlist->id] { UsbExport::show(ctx.rekordbox, {id}, ctx.notify); });
+        if (!playlist->isFolder())
+            menu.addItem("Send to rekordbox", ctx.rekordbox.isAvailable(), false, [this, id = playlist->id] { sendToRekordbox(id); });
         if (playlist->kind == Playlist::Kind::history)
             menu.addItem("Copy to a Playlist", [this, history = playlist->id, name = playlist->name]
                          {
@@ -859,27 +861,7 @@ void LibraryView::addToProject(const std::vector<juce::int64>& ids)
     for (const auto id : ids)
         if (const auto* t = collection.find(id))
         {
-            ImportRequest r;
-            r.file = juce::File(t->path);
-            r.hints.title = t->title;
-            r.hints.artist = t->artist;
-            r.hints.key = t->key;
-            r.hints.bpm = t->bpm;
-            if (t->bpm > 0.0)
-            {
-                const auto beats = t->beatTimes();
-                // The first downbeat, as the item's grid anchor.
-                double anchor = beats.empty() ? t->anchorSec : beats.front();
-                for (size_t i = 0; i < beats.size() && i < 4; ++i)
-                    if (t->beatNumberAt(static_cast<int>(i)) == 1)
-                    {
-                        anchor = beats[i];
-                        break;
-                    }
-                r.hints.beatAnchorSec = anchor;
-            }
-            r.hints.perfCues = toPerfCues(*t);
-            requests.push_back(r);
+            requests.push_back({juce::File(t->path), hintsFromCollection(*t)});
         }
     if (requests.empty()) return;
     ctx.importer.import(std::move(requests));
@@ -975,6 +957,85 @@ void LibraryView::importFromRekordbox()
                         if (ctx.notify) ctx.notify(summary, !ok);
                     });
             }));
+}
+
+void LibraryView::sendToRekordbox(juce::int64 playlistId)
+{
+    const auto* playlist = collection.findPlaylist(playlistId);
+    if (playlist == nullptr || playlist->isFolder()) return;
+    juce::Array<juce::File> files;
+    juce::Array<juce::var> analysis;
+    std::vector<std::pair<juce::File, juce::var>> cues;
+    for (const auto id : playlist->tracks)
+    {
+        const auto* t = collection.find(id);
+        if (t == nullptr || !juce::File(t->path).existsAsFile() || files.contains(juce::File(t->path))) continue;
+        const juce::File file(t->path);
+        files.add(file);
+        auto* known = new juce::DynamicObject();
+        const juce::var held(known);
+        known->setProperty("path", file.getFullPathName());
+        if (t->bpm > 0.0)
+        {
+            known->setProperty("bpm", t->bpm);
+            known->setProperty("anchorSec", t->anchorSec);
+        }
+        if (!t->beats.empty())
+        {
+            juce::Array<juce::var> beats;
+            beats.ensureStorageAllocated(static_cast<int>(t->beats.size()));
+            for (const double b : t->beats) beats.add(b);
+            known->setProperty("beats", beats);
+        }
+        if (t->key.isNotEmpty()) known->setProperty("key", t->key);
+        analysis.add(held);
+        if (!t->cues.empty()) cues.emplace_back(file, toPerfCues(*t));
+    }
+    if (files.isEmpty())
+    {
+        if (ctx.notify) ctx.notify("\"" + playlist->name + "\" has no tracks whose files are where the collection says", true);
+        return;
+    }
+    const auto name = playlist->name;
+    if (ctx.notify) ctx.notify("Sending \"" + name + "\" to rekordbox (" + juce::String(files.size()) + " track(s))...", false);
+    const juce::var analysisVar(analysis);
+    auto notify = ctx.notify;
+    auto& rekordbox = ctx.rekordbox;
+    juce::Thread::launch(
+        [files, analysisVar, cues, name, notify, &rekordbox, alive = alive]
+        {
+            const auto result = rekordbox.addToComputerLibrary(files, name, analysisVar);
+            const bool ok = result.getProperty("ok", false);
+            // Then the cues, a track at a time (rekordbox's own hot cues stay).
+            int cued = 0;
+            juce::String cueError;
+            if (ok)
+                for (const auto& [file, c] : cues)
+                {
+                    const auto r = rekordbox.sendCuesToComputerLibrary(file, c, false);
+                    if (static_cast<bool>(r.getProperty("ok", false))) ++cued;
+                    else if (cueError.isEmpty()) cueError = r.getProperty("error", "").toString();
+                }
+            juce::MessageManager::callAsync(
+                [result, ok, cued, cueError, name, notify, alive]
+                {
+                    if (!alive->load() || !notify) return;
+                    if (!ok)
+                    {
+                        notify("rekordbox: " + result.getProperty("error", "the change was refused").toString(), true);
+                        return;
+                    }
+                    const int added = result.getProperty("added", 0);
+                    const int existing = result.getProperty("existing", 0);
+                    const auto* refused = result.getProperty("refused", {}).getArray();
+                    juce::String text = "Sent \"" + name + "\" to rekordbox: " + juce::String(added) + " new track(s)";
+                    if (existing > 0) text << ", " << existing << " already in its collection";
+                    if (cued > 0) text << "; cues on " << cued;
+                    if (refused != nullptr && !refused->isEmpty()) text << "; skipped " << refused->size() << ": " << (*refused)[0].toString();
+                    if (cueError.isNotEmpty()) text << "; cues: " << cueError;
+                    notify(text, (refused != nullptr && !refused->isEmpty()) || cueError.isNotEmpty());
+                });
+        });
 }
 
 void LibraryView::exportToStick()

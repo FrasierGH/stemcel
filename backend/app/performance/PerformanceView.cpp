@@ -13,6 +13,9 @@ constexpr const char* kModes[8] = {"hotCue", "beatLoop", "beatJump", "sampler", 
 constexpr const char* kModeLabels[8] = {"HOT CUE", "BEAT LOOP", "BEAT JUMP", "SAMPLER", "KEYBOARD", "PAD FX1", "PAD FX2", "KEY SHIFT"};
 constexpr const char* kBeatLoopLabels[8] = {"1/4", "1/2", "1", "2", "4", "8", "16", "32"};
 constexpr const char* kBeatJumpValues[3][4] = {{"FINE", "1/8", "1/4", "1/2"}, {"1", "2", "4", "8"}, {"16", "32", "64", "128"}};
+// The mixer column: a knob's caption under it, the gap over CUE and CUE, the gap over the fader,
+// the meter's reading under it.
+constexpr int kKnobCaption = 12, kCueGap = 10, kCue = 26, kFaderGap = 6, kReading = 14;
 constexpr int kKeyPages[3][8] = {{4, 5, 6, 7, 0, 1, 2, 3}, {-4, -3, -2, -1, -8, -7, -6, -5}, {8, 9, 10, 11, -12, -11, -10, -9}};
 const juce::Colour kPadLit{0xffff4040};
 
@@ -561,17 +564,21 @@ void PerformanceView::onCues(const juce::var& p)
     // Hot and memory cues stay with the item, for the next time it is loaded.
     const auto itemId = p.getProperty("libraryItemId", "").toString();
     if (itemId.isEmpty()) return;
-    auto* cues = new juce::DynamicObject();
-    cues->setProperty("hot", p.getProperty("hotCues", {}));
-    cues->setProperty("memory", p.getProperty("memoryCues", {}));
+    // Held as a var throughout: the message below lets go of its reference once sent, and a
+    // raw pointer kept past that pointed at freed memory (setting a hot cue on a collection
+    // track crashed).
+    auto* cuesObject = new juce::DynamicObject();
+    const juce::var cues(cuesObject);
+    cuesObject->setProperty("hot", p.getProperty("hotCues", {}));
+    cuesObject->setProperty("memory", p.getProperty("memoryCues", {}));
     auto* o = new juce::DynamicObject();
     o->setProperty("itemId", itemId);
-    o->setProperty("cues", juce::var(cues));
+    o->setProperty("cues", cues);
     ctx.engine.send("LIBRARY_ITEM_SET_PERF_CUES", juce::var(o));
     // And with the track in the DJ collection, where the export and library mode find them.
     if (const auto* item = ctx.mirror.model().findLibraryItem(itemId))
         if (const auto* track = dj::Collection::shared().findByPath(item->filePath))
-            dj::Collection::shared().update(track->id, [&cues](dj::Track& t) { t.cues = dj::cuesFromPerf(juce::var(cues), t.cues); });
+            dj::Collection::shared().update(track->id, [&cues](dj::Track& t) { t.cues = dj::cuesFromPerf(cues, t.cues); });
 }
 
 void PerformanceView::onUi(const juce::var& p)
@@ -1143,7 +1150,7 @@ void PerformanceView::paint(juce::Graphics& g)
     for (auto& d : decks)
         for (auto* s : {d.trim.get(), d.eqHi.get(), d.eqMid.get(), d.eqLow.get(), d.filter.get()})
             if (s->isVisible())
-                g.drawText(s->caption().toUpperCase(), s->getBounds().translated(0, s->getHeight() - 4).withHeight(12),
+                g.drawText(s->caption().toUpperCase(), s->getBounds().withY(s->getBottom()).withHeight(kKnobCaption).expanded(20, 0),
                            juce::Justification::centred);
     // Each channel's level beside its fader, drawn as the transport bar's master meter is: L and
     // R in segments (green, amber above -12 dB, red above -3 dB) with their peak holds, the
@@ -1319,14 +1326,19 @@ void PerformanceView::layoutMixer(juce::Rectangle<int> area)
         auto& d = decks[static_cast<size_t>(i)];
         meterOnRight[static_cast<size_t>(i)] = column < order.size() / 2;
         auto col = r.withX(r.getX() + static_cast<int>(column) * columnWidth).withWidth(columnWidth);
-        // The knobs give way before the fader does: it keeps 90 px, with the meter readouts
-        // and the CUE button under and over it.
-        const int knob = juce::jmax(22, juce::jmin(44, juce::jmin(col.getWidth() - 10, (col.getHeight() - 26 - 4 - 14 - 90) / 5 - 4)));
+        // Each knob with its caption under it; CUE clear of the last one; the fader (at least
+        // 90 px) with its reading under it. The knobs give way before the fader does.
+        const int knob = juce::jmax(20, juce::jmin(44, juce::jmin(col.getWidth() - 10, (col.getHeight() - kCueGap - kCue - kFaderGap - kReading - 90) / 5 -
+                                                                                        kKnobCaption - 2)));
         for (auto* s : {d.trim.get(), d.eqHi.get(), d.eqMid.get(), d.eqLow.get(), d.filter.get()})
-            s->setBounds(col.removeFromTop(knob + 4).withSizeKeepingCentre(knob, knob));
-        d.hpCue->setBounds(col.removeFromTop(26).reduced(6, 2));
-        col.removeFromTop(4);
-        col.removeFromBottom(14); // the meter's reading
+        {
+            auto slot = col.removeFromTop(knob + 2 + kKnobCaption);
+            s->setBounds(slot.removeFromTop(knob + 2).withSizeKeepingCentre(knob, knob));
+        }
+        col.removeFromTop(kCueGap);
+        d.hpCue->setBounds(col.removeFromTop(kCue).reduced(6, 2));
+        col.removeFromTop(kFaderGap);
+        col.removeFromBottom(kReading); // the meter's reading
         d.fader->setBounds(col.withSizeKeepingCentre(30, col.getHeight()));
     }
 }
@@ -1353,8 +1365,6 @@ void PerformanceView::resized()
     status.setBounds(bar.removeFromLeft(bar.getWidth() / 2));
     midiLine.setBounds(bar);
     area.removeFromTop(4);
-    timelineStrip->setBounds(area.removeFromTop(timelineStrip->preferredHeight()));
-    area.removeFromTop(4);
     if (stacked == nullptr)
     {
         stacked = std::make_unique<StackedWaveforms>();
@@ -1366,17 +1376,26 @@ void PerformanceView::resized()
     for (int deck = 1; deck <= (fourDecks() ? 4 : 2); ++deck) lanes.emplace_back(deck, decks[static_cast<size_t>(deck - 1)].display.get());
     stacked->setDecks(std::move(lanes));
     stacked->setVisible(stackButton.getToggleState() || fourDecks());
-    // The mixer column needs its height (the knobs, a fader long enough to meter, the FX section
-    // and the crossfader). The stacked waveforms and the browser give way for it: the browser
-    // first, down to a few rows, then the waveforms, down to two short lanes.
-    constexpr int kMixerNeeds = 532, kBrowserLeast = 110, kStackedLeast = 100;
-    int stackedHeight = stacked->isVisible() ? (fourDecks() ? juce::jlimit(180, 340, area.getHeight() * 7 / 20)
-                                                             : juce::jlimit(120, 260, area.getHeight() * 3 / 10))
-                                             : 0;
-    int browserHeight = juce::jmax(150, (area.getHeight() - stackedHeight) / 3);
-    const auto mixerRoom = [&] { return area.getHeight() - stackedHeight - (stackedHeight > 0 ? 4 : 0) - browserHeight - 6; };
-    if (mixerRoom() < kMixerNeeds) browserHeight = juce::jmax(kBrowserLeast, browserHeight - (kMixerNeeds - mixerRoom()));
-    if (stackedHeight > 0 && mixerRoom() < kMixerNeeds) stackedHeight = juce::jmax(kStackedLeast, stackedHeight - (kMixerNeeds - mixerRoom()));
+    // The mixer column needs its height (the knobs and their captions, CUE, a fader long enough
+    // to meter, the FX section and the crossfader). The others give way for it: the browser
+    // first, down to a few rows, then the timeline strip (its lanes scroll), then the stacked
+    // waveforms, down to two short lanes.
+    constexpr int kMixerNeeds = 5 * (28 + 2 + kKnobCaption) + kCueGap + kCue + kFaderGap + kReading + 90 + 212 + 30 + 16;
+    constexpr int kBrowserLeast = 110, kStripLeast = 58, kStackedLeast = 100;
+    int stripHeight = timelineStrip->preferredHeight();
+    const int below = area.getHeight() - stripHeight - 4;
+    int stackedHeight = stacked->isVisible() ? (fourDecks() ? juce::jlimit(180, 340, below * 7 / 20) : juce::jlimit(120, 260, below * 3 / 10)) : 0;
+    int browserHeight = juce::jmax(150, (below - stackedHeight) / 3);
+    const auto mixerRoom = [&] { return area.getHeight() - stripHeight - 4 - stackedHeight - (stackedHeight > 0 ? 4 : 0) - browserHeight - 6; };
+    const auto giveWay = [&](int& height, int least)
+    {
+        if (mixerRoom() < kMixerNeeds) height = juce::jmax(least, height - (kMixerNeeds - mixerRoom()));
+    };
+    giveWay(browserHeight, kBrowserLeast);
+    giveWay(stripHeight, juce::jmin(kStripLeast, stripHeight));
+    if (stackedHeight > 0) giveWay(stackedHeight, kStackedLeast);
+    timelineStrip->setBounds(area.removeFromTop(stripHeight));
+    area.removeFromTop(4);
     if (stackedHeight > 0)
     {
         stacked->setBounds(area.removeFromTop(stackedHeight));
@@ -1409,6 +1428,9 @@ void PerformanceView::resized()
         layoutDeck(2, rightSide);
     }
     layoutMixer(area);
+    // What the view paints itself (the mixer's panel, the FX display, the captions, the meters)
+    // has moved: a re-layout from a button (STACKED, 4 DECKS) doesn't repaint it on its own.
+    repaint();
 }
 
 } // namespace stemcel::native::perf

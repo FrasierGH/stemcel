@@ -90,6 +90,9 @@ class Workspace final : public juce::Component, public juce::DragAndDropContaine
     void selectAdjacentTrack(int direction);
     // After a tempo is detected or seeded: line placed clips up with the beat grid (preference).
     void alignAfterAnalysis(const juce::var& analysis);
+    // One library across projects: an opened project's tracks (from before the collection kept
+    // every one) join the DJ collection.
+    void joinCollection();
     void alignAfterTempoSeed();
     bool isMixerShown() const { return mixer != nullptr && mixer->isVisible(); }
     // Live performance mode (the decks, mixer and browser) in place of the timeline, or back:

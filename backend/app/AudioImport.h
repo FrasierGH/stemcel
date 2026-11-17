@@ -31,6 +31,13 @@ struct ImportRequest
     ImportHints hints;
 };
 
+namespace dj
+{
+struct Track;
+}
+// What the DJ collection knows of a track (its grid, key, title, cues), as import hints.
+ImportHints hintsFromCollection(const dj::Track& track);
+
 // The native import pipeline, matching the renderer's `importAudioIntoLibrary`: probe the
 // file (duration, rate, channels), read its tags, detect its key, make a WAV the engine
 // can play when the format is one it can't read (m4a/aac/ogg), save tags + cover into the

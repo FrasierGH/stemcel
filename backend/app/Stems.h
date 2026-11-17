@@ -49,6 +49,9 @@ class StemService final
     juce::String addLibraryStem(const juce::String& sourceItemId, const juce::String& label, const juce::File& file);
     // A stem of `sourceItemId` already in the library by its label ("Vocals"), or empty.
     juce::String findStem(const juce::String& sourceItemId, const juce::String& label) const;
+    // The stems the DJ collection keeps for the item's track (separated in any project) into
+    // this project's library, those it hasn't got; how many came.
+    int adoptCollectionStems(const juce::String& sourceItemId);
 
   private:
     struct Job

@@ -2,6 +2,7 @@
 
 #include "AppPaths.h"
 #include "Log.h"
+#include "collection/Collection.h"
 #include "ProjectSession.h"
 #include "Theme.h"
 
@@ -270,6 +271,20 @@ void StemService::startUvr(const juce::String& sourceItemId, const juce::String&
         log::warn("stems", "UVR: no library item " + sourceItemId + " or recipe " + recipeId);
         return;
     }
+    // Separated already, in this project or another: the collection's stems, no new run.
+    if (clipId.isEmpty())
+    {
+        adoptCollectionStems(sourceItemId);
+        const auto wanted = keep.isEmpty() ? recipe->stems : keep;
+        bool have = !wanted.isEmpty(); // a custom model's stems aren't known beforehand
+        for (const auto& stem : wanted)
+            have = have && findStem(sourceItemId, uvr::stemLabel(stem)).isNotEmpty();
+        if (have)
+        {
+            if (onNotify) onNotify("The stems of " + item->displayName() + " are in the library already", false);
+            return;
+        }
+    }
     if (!uvr::findExecutable(prefs).existsAsFile())
     {
         if (onNotify) onNotify("audio-separator is not installed. Install it with: " + uvr::installCommand(), true);
@@ -322,10 +337,14 @@ void StemService::startUvr(const juce::String& sourceItemId, const juce::String&
         if (onNotify) onNotify("Source audio not found for " + job.sourceName, true);
         return;
     }
-    // In the project's stems folder, so the library's file clean-up covers them.
+    // The whole of a collection track: its stems are the collection's, kept with the track for
+    // every project (none separated again). Otherwise (a clip's window, a track only this
+    // project has) in the project's stems folder, so the library's file clean-up covers them.
     auto folder = juce::File::createLegalFileName(juce::File(item->filePath).getFileNameWithoutExtension()).trim();
     if (folder.isEmpty()) folder = "stems";
-    const auto base = projectArtifactsBaseDir(mirror.model().filePath, "stems");
+    const auto* collectionTrack = clipId.isEmpty() ? dj::Collection::shared().findByPath(item->filePath) : nullptr;
+    const auto base = collectionTrack != nullptr ? dj::Collection::stemsFolder(collectionTrack->id)
+                                                 : projectArtifactsBaseDir(mirror.model().filePath, "stems");
     auto outputDir = base.getChildFile(folder + "-stems");
     for (int n = 2; outputDir.exists(); ++n) outputDir = base.getChildFile(folder + "-stems-" + juce::String(n));
 
@@ -466,6 +485,22 @@ void StemService::splitChannels(const juce::String& clipId, const juce::StringAr
     if (onNotify) onNotify("Splitting channels of " + job.sourceName, false);
 }
 
+int StemService::adoptCollectionStems(const juce::String& sourceItemId)
+{
+    const auto* source = mirror.model().findLibraryItem(sourceItemId);
+    if (source == nullptr || source->kind != "source") return 0;
+    const auto* track = dj::Collection::shared().findByPath(source->filePath);
+    if (track == nullptr) return 0;
+    int adopted = 0;
+    const auto stems = track->stems; // a copy: adding one records it on the track again
+    for (const auto& [label, path] : stems)
+        if (findStem(sourceItemId, label).isEmpty() && juce::File(path).existsAsFile()
+            && addLibraryStem(sourceItemId, label, juce::File(path)).isNotEmpty())
+            ++adopted;
+    if (adopted > 0) log::info("stems", "took " + juce::String(adopted) + " stem(s) of " + source->displayName() + " from the collection");
+    return adopted;
+}
+
 juce::String StemService::findStem(const juce::String& sourceItemId, const juce::String& label) const
 {
     for (const auto& item : mirror.model().library)
@@ -522,7 +557,13 @@ void StemService::importStem(Job& job, const juce::String& stem, const juce::Fil
                                                                {"sourceDurationMs", 0.0},
                                                                {"mediaId", job.mediaId.isNotEmpty() ? juce::var(job.mediaId) : juce::var()}}));
                            mirror.refreshNow();
-                           if (job.clipId.isEmpty()) return;
+                           if (job.clipId.isEmpty())
+                           {
+                               // A whole track's stem: kept with it in the DJ collection too.
+                               if (const auto* source = mirror.model().findLibraryItem(job.sourceItemId))
+                                   dj::Collection::shared().setStem(source->filePath, label, file);
+                               return;
+                           }
                            const auto trackId = actions.addTrack();
                            actions.renameTrack(trackId, name);
                            mirror.refreshNow();

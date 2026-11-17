@@ -128,49 +128,26 @@ class HoldButton final : public juce::Component
     }
 
   private:
-    // Fusion: a raised key, as on the hardware. A soft shadow under it, a face that catches the
-    // light at the top and darkens toward the bottom, a highlight along its top edge and a dark
-    // rim. Pressed, it sinks: the shadow goes, the shading turns over and the label drops a pixel.
-    // Lit, the face takes the colour, with a glow around it.
+    // Fusion: the face, outline and corners of the app's own buttons (lit, tinted as a lit
+    // button is), standing up from the panel as the controller's keys do: a shadow under it,
+    // and pressed it sinks into the shadow's place.
     void paintRaised(juce::Graphics& g)
     {
         const bool down = isMouseButtonDown();
-        auto r = getLocalBounds().toFloat().reduced(2.0F);
-        r.removeFromBottom(1.0F);
-        const float corner = round ? juce::jmin(r.getWidth(), r.getHeight()) * 0.5F : juce::jlimit(3.0F, 6.0F, r.getHeight() * 0.12F);
-        if (isLit)
+        auto r = getLocalBounds().toFloat().reduced(1.5F);
+        r.removeFromBottom(1.5F);
+        const float radius = round ? juce::jmin(r.getWidth(), r.getHeight()) * 0.5F : (r.getHeight() > 40.0F ? 3.0F : 2.0F);
+        if (down)
+            r.translate(0.0F, 1.5F);
+        else
         {
-            g.setColour(lit.withAlpha(0.28F));
-            g.fillRoundedRectangle(r.expanded(1.5F), corner + 1.5F);
+            g.setColour(juce::Colours::black.withAlpha(0.4F));
+            g.fillRoundedRectangle(r.translated(0.0F, 1.5F), radius);
         }
-        if (!down)
-        {
-            g.setColour(juce::Colours::black.withAlpha(0.45F));
-            g.fillRoundedRectangle(r.translated(0.0F, 1.5F), corner);
-        }
-        else r.translate(0.0F, 1.0F);
-        const auto base = isLit ? lit.withMultipliedBrightness(down ? 0.85F : 1.0F)
-                                : (isMouseOver() ? colours::zinc700.brighter(0.08F) : colours::zinc700.darker(0.05F));
-        auto top = base.brighter(isLit ? 0.25F : 0.35F), bottom = base.darker(isLit ? 0.35F : 0.45F);
-        if (down) std::swap(top, bottom);
-        g.setGradientFill(juce::ColourGradient(top, 0.0F, r.getY(), bottom, 0.0F, r.getBottom(), false));
-        g.fillRoundedRectangle(r, corner);
-        if (!down)
-        {
-            g.setColour(juce::Colours::white.withAlpha(isLit ? 0.35F : 0.14F));
-            g.drawHorizontalLine(static_cast<int>(r.getY() + 1.0F), r.getX() + corner, r.getRight() - corner);
-        }
-        g.setColour(juce::Colours::black.withAlpha(0.75F));
-        g.drawRoundedRectangle(r, corner, 1.0F);
-        auto textArea = r.toNearestInt().reduced(2);
+        drawFusionButton(g, r, isLit, lit, down, isMouseOver(), radius);
+        g.setColour(colours::text);
         g.setFont(uiFont(juce::jlimit(9.0F, 13.0F, r.getHeight() * 0.42F), true));
-        if (!isLit)
-        {
-            g.setColour(juce::Colours::black.withAlpha(0.6F));
-            g.drawFittedText(label, textArea.translated(0, 1), juce::Justification::centred, 2);
-        }
-        g.setColour(isLit ? colours::onAccent : colours::text);
-        g.drawFittedText(label, textArea, juce::Justification::centred, 2);
+        g.drawFittedText(label, r.toNearestInt().reduced(2), juce::Justification::centred, 2);
     }
 
     juce::String label;

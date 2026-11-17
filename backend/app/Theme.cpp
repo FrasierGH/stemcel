@@ -231,6 +231,14 @@ bool isLitColour(juce::Colour c)
     return c.getSaturation() > 0.35f && c.getBrightness() > 0.45f;
 }
 
+void drawFusionButton(juce::Graphics& g, juce::Rectangle<float> r, bool lit, juce::Colour litColour, bool down, bool hover, float radius)
+{
+    namespace f = fusionPalette;
+    const auto face = lit ? f::button.interpolatedWith(litColour, 0.45f) : f::button;
+    const auto outline = lit ? litColour.interpolatedWith(juce::Colours::white, 0.3f) : f::outline;
+    fusionBevel(g, r, face, down, hover, true, outline, radius);
+}
+
 void drawWell(juce::Graphics& g, juce::Rectangle<float> area)
 {
     if (fusion())

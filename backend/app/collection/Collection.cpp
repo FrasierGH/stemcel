@@ -105,6 +105,13 @@ juce::var trackJson(const Track& t)
         o->setProperty("cues", cues);
     }
     if (t.hasLoudness) o->setProperty("loudnessLufs", t.loudnessLufs);
+    if (!t.stems.empty())
+    {
+        auto* stems = new juce::DynamicObject();
+        const juce::var heldStems(stems);
+        for (const auto& [label, file] : t.stems) stems->setProperty(label, file);
+        o->setProperty("stems", heldStems);
+    }
     o->setProperty("state", t.state == Track::State::ready    ? "ready"
                             : t.state == Track::State::failed ? "failed"
                                                               : "pending");
@@ -149,6 +156,8 @@ Track trackFrom(const juce::var& v)
         for (const auto& c : *cues) t.cues.push_back(cueFrom(c));
     t.hasLoudness = v.hasProperty("loudnessLufs");
     t.loudnessLufs = v.getProperty("loudnessLufs", 0.0);
+    if (const auto* stems = v.getProperty("stems", {}).getDynamicObject())
+        for (const auto& p : stems->getProperties()) t.stems[p.name.toString()] = p.value.toString();
     const auto state = str("state");
     t.state = state == "ready" ? Track::State::ready : state == "failed" ? Track::State::failed : Track::State::pending;
     t.error = str("error");
@@ -690,6 +699,22 @@ void Collection::setLoudness(const juce::String& path, double lufs)
     changed();
 }
 
+juce::File Collection::stemsFolder(juce::int64 id)
+{
+    return folder().getChildFile("Stems").getChildFile(juce::String(id));
+}
+
+void Collection::setStem(const juce::String& trackPath, const juce::String& label, const juce::File& file)
+{
+    const auto it = byPath.find(normalisedPath(trackPath));
+    if (it == byPath.end() || label.isEmpty()) return;
+    auto& t = trackList[it->second];
+    const auto path = file.getFullPathName();
+    if (const auto had = t.stems.find(label); had != t.stems.end() && had->second == path) return;
+    t.stems[label] = path;
+    changed();
+}
+
 void Collection::queueAnalysis(juce::int64 id, bool force)
 {
     const auto* t = find(id);
@@ -903,6 +928,41 @@ void Collection::importRekordbox(Rekordbox& rekordbox, std::function<void(int, i
 void Collection::importRekordbox(Rekordbox& rekordbox, const RekordboxSource& source, const juce::String& passphrase,
                                  std::function<void(int, int)> progress, std::function<void(const juce::String&, bool)> done)
 {
+    importFromRekordbox(rekordbox, source, passphrase, {}, std::move(progress), std::move(done));
+}
+
+void Collection::importRekordboxPlaylist(Rekordbox& rekordbox, const RekordboxSource& source, const juce::String& passphrase,
+                                         const juce::String& playlistId, std::function<void(int, int)> progress,
+                                         std::function<void(const juce::String&, bool)> done)
+{
+    if (playlistId.isEmpty()) return;
+    importFromRekordbox(rekordbox, source, passphrase, playlistId, std::move(progress), std::move(done));
+}
+
+namespace
+{
+// A rekordbox playlist and, for a folder, everything under it (ids).
+std::set<juce::String> subtreeOf(const std::vector<RekordboxPlaylist>& playlists, const juce::String& top)
+{
+    std::set<juce::String> ids{top};
+    for (bool more = true; more;)
+    {
+        more = false;
+        for (const auto& p : playlists)
+            if (ids.count(p.id) == 0 && ids.count(p.parentId) != 0)
+            {
+                ids.insert(p.id);
+                more = true;
+            }
+    }
+    return ids;
+}
+} // namespace
+
+void Collection::importFromRekordbox(Rekordbox& rekordbox, const RekordboxSource& source, const juce::String& passphrase,
+                                     const juce::String& onlyPlaylist, std::function<void(int, int)> progress,
+                                     std::function<void(const juce::String&, bool)> done)
+{
     load();
     struct Read
     {
@@ -912,7 +972,7 @@ void Collection::importRekordbox(Rekordbox& rekordbox, const RekordboxSource& so
         std::vector<RekordboxPlaylist> playlists;
     };
     pool.addJob(
-        [this, &rekordbox, source, passphrase, progress, done, alive = alive]
+        [this, &rekordbox, source, passphrase, onlyPlaylist, progress, done, alive = alive]
         {
             auto read = std::make_shared<Read>();
             const auto previous = rekordbox.currentSource();
@@ -925,11 +985,26 @@ void Collection::importRekordbox(Rekordbox& rekordbox, const RekordboxSource& so
             {
                 read->ok = true;
                 read->playlists = snapshot.playlists;
-                const int total = static_cast<int>(snapshot.tracks.size());
+                // One playlist: only it (and, a folder, what it holds), and only its tracks.
+                std::set<juce::String> wanted;
+                if (onlyPlaylist.isNotEmpty())
+                {
+                    const auto lists = subtreeOf(snapshot.playlists, onlyPlaylist);
+                    std::vector<RekordboxPlaylist> kept;
+                    for (const auto& p : snapshot.playlists)
+                        if (lists.count(p.id) != 0)
+                        {
+                            kept.push_back(p);
+                            for (const auto& t : p.trackIds) wanted.insert(t);
+                        }
+                    read->playlists = std::move(kept);
+                }
+                const int total = onlyPlaylist.isNotEmpty() ? static_cast<int>(wanted.size()) : static_cast<int>(snapshot.tracks.size());
                 int count = 0;
                 for (const auto& r : snapshot.tracks)
                 {
                     if (!alive->load()) return;
+                    if (onlyPlaylist.isNotEmpty() && wanted.count(r.id) == 0) continue;
                     Track t;
                     t.rekordboxId = r.id;
                     t.path = juce::File(r.path).getFullPathName();
@@ -1000,7 +1075,7 @@ void Collection::importRekordbox(Rekordbox& rekordbox, const RekordboxSource& so
             // Whatever the rekordbox tab had open, it has again.
             if (previous.key() != source.key()) rekordbox.open(previous);
             juce::MessageManager::callAsync(
-                [this, read, done, alive]
+                [this, read, done, onlyPlaylist, alive]
                 {
                     if (!alive->load()) return;
                     if (!read->ok)
@@ -1043,14 +1118,17 @@ void Collection::importRekordbox(Rekordbox& rekordbox, const RekordboxSource& so
                         if (analyse) queueAnalysis(trackList.back().id, false);
                         ++added;
                     }
-                    // The playlists, in a "rekordbox" folder (replacing an earlier import's).
+                    // The playlists, in a "rekordbox" folder: the whole library replaces an
+                    // earlier import's; one playlist goes in beside what is there.
+                    juce::int64 top = 0;
                     for (const auto& p : playlistList)
                         if (p.parent == 0 && p.isFolder() && p.name == "rekordbox")
                         {
-                            deletePlaylist(p.id);
+                            if (onlyPlaylist.isEmpty()) deletePlaylist(p.id);
+                            else top = p.id;
                             break;
                         }
-                    const auto top = createPlaylist("rekordbox", 0, Playlist::Kind::folder);
+                    if (top == 0) top = createPlaylist("rekordbox", 0, Playlist::Kind::folder);
                     std::map<juce::String, juce::int64> listOf;
                     auto sorted = read->playlists;
                     std::stable_sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) { return a.seq < b.seq; });
@@ -1062,7 +1140,8 @@ void Collection::importRekordbox(Rekordbox& rekordbox, const RekordboxSource& so
                         for (const auto& r : sorted)
                         {
                             if (listOf.count(r.id) > 0) continue;
-                            const bool atTop = r.parentId.isEmpty() || r.parentId == "root" || r.parentId == "0";
+                            const bool atTop = onlyPlaylist.isNotEmpty() ? r.id == onlyPlaylist
+                                                                         : r.parentId.isEmpty() || r.parentId == "root" || r.parentId == "0";
                             if (!atTop && listOf.count(r.parentId) == 0) continue;
                             const auto parent = atTop ? top : listOf[r.parentId];
                             const auto id = createPlaylist(r.name, parent, r.isFolder() ? Playlist::Kind::folder : Playlist::Kind::playlist);

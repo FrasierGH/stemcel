@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **One library across projects.** Every track a project imports (a minute or longer) joins the DJ collection, and a project opened from before joins its tracks too. A track the collection has analysed comes into a project with its grid, key and cues instead of being analysed again.
+- **Stems stay with the track.** Separating a collection track writes its stems into the collection (`~/Stemcel/Collection/Stems`), and any project that uses the track, in performance mode or with Separate Stems, takes them from there instead of separating again.
+- **Playlists to and from rekordbox**: a Library-mode playlist's menu has **Send to rekordbox** (its tracks, with Stemcel's grid, key and cues, in a rekordbox playlist of the same name), and a rekordbox playlist's menu has **Copy to Stemcel Collection**.
+
+### Changed
+
+- The panel's first tab is **Project** (what this project uses); the library is Library mode.
+- Performance mode's pads, CUE and PLAY are drawn as the Fusion theme's other buttons, still raised.
+- Performance mode's mixer: each knob's caption under it, and CUE clear of the FILTER knob.
+
+### Fixed
+
+- **Hot cues crashed Stemcel** on a track in the DJ collection: saving the cues to the collection read memory that had just been freed.
+- **STACKED squeezed the mixer**: an old picture of the Beat FX display stayed over the EQ knobs, and the timeline strip took the mixer's room. The view repaints after a re-layout, and the strip gives way before the mixer does.
+
 ## 0.7.0
 
 ### Added

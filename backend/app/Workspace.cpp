@@ -2,6 +2,10 @@
 
 #include "TimeEdit.h"
 
+#include "AppPaths.h"
+#include "Log.h"
+#include "collection/Collection.h"
+
 #include "KeyWheel.h"
 
 #include "AutoMix.h"
@@ -43,6 +47,7 @@ Workspace::Workspace(EngineClient& engineClient, AppController& appController, A
                                                              {
                                                                  mirror.refreshNow();
                                                                  RelinkDialog::showIfNeeded(engine, mirror);
+                                                                 joinCollection();
                                                              });
                      });
     actions.onNotify = notify;
@@ -405,6 +410,25 @@ void Workspace::toggleMixer()
     if (bottomPanel != nullptr) bottomPanel->setVisible(!show);
     transport.setMixerShown(show);
     resized();
+}
+
+void Workspace::joinCollection()
+{
+    auto& collection = dj::Collection::shared();
+    collection.load();
+    juce::Array<juce::File> files;
+    for (const auto& item : mirror.model().library)
+    {
+        // Tracks: a minute or more (not loops or one-shots), not audio Stemcel made.
+        if (item.kind != "source" || item.unresolved || item.durationMs < 60000.0) continue;
+        const juce::File file(item.filePath);
+        if (file.existsAsFile() && !file.isAChildOf(systemTempDirectory()) && collection.findByPath(file.getFullPathName()) == nullptr
+            && !files.contains(file))
+            files.add(file);
+    }
+    if (files.isEmpty()) return;
+    collection.addFiles(files);
+    log::info("collection", juce::String(files.size()) + " track(s) of the project joined the collection");
 }
 
 void Workspace::toggleLibrary()
