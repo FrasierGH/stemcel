@@ -239,6 +239,55 @@ void testNormalizePass2ProducesLouderOutput()
     dir.deleteRecursively();
 }
 
+// A bus has no clips, so the snapshot once dropped it, and an export sent the tracks routed
+// to it straight to the master: none of the bus's gain or effects. Its gain must apply.
+void testBusIsMixedThroughInExport()
+{
+    auto dir = makeTempDir("mixdown-bus");
+    const auto src = writeSineWav(dir, "src.wav", 1.0, 44100.0, 440.0, 0.5F);
+
+    auto render = [&](bool routeThroughBus, const juce::String& outName) {
+        ProjectState state;
+        require(state.addTrack("t1"), "addTrack t1");
+        require(state.addTrack("bus1"), "addTrack bus1");
+        require(state.setTrackIsBus("bus1", true), "bus1 becomes a bus");
+        require(state.setTrackGain("bus1", 0.5F), "bus gain");
+        if (routeThroughBus)
+            require(state.setTrackOutputBus("t1", "bus1"), "t1 is sent to bus1");
+        require(state.addLibraryItem("lib1", src.getFullPathName(), src.getFileName(), 1000.0, 44100, 2),
+                "addLibraryItem");
+        require(state.addClip("t1", "c1", "lib1", 0.0, 1000.0), "addClip");
+
+        auto snapshot = snapshotProjectForMixdown(state);
+        bool busInSnapshot = false;
+        for (const auto& t : snapshot.tracks)
+            busInSnapshot = busInSnapshot || (t.id == "bus1" && t.isBus);
+        require(busInSnapshot, "the bus is in the mixdown snapshot");
+
+        const auto out = dir.getChildFile(outName);
+        MixdownOptions options;
+        options.outputFile = out;
+        options.outputSampleRate = 44100;
+        options.format = MixdownOptions::Format::Wav;
+        options.bitDepth = 32;
+        options.dither = false;
+        options.lengthMs = 1000.0;
+        BridgeServer bridge("", nullptr);
+        std::atomic<bool> cancel{false};
+        std::atomic<bool> busy{false};
+        runMixdownJob(std::move(snapshot), std::move(options), bridge, cancel, busy);
+        require(out.existsAsFile(), "the render wrote a file");
+        return fingerprint(out);
+    };
+
+    const auto direct = render(false, "direct.wav");
+    const auto viaBus = render(true, "via-bus.wav");
+    requireNear(direct.peak, 0.5, 1.0e-3, "a track not sent to the bus plays at its own level");
+    requireNear(viaBus.peak, 0.25, 1.0e-3, "a track sent to the bus takes the bus's gain (0.5)");
+
+    dir.deleteRecursively();
+}
+
 } // namespace
 
 void addMixdownRenderTests(std::vector<TestCase>& tests)
@@ -249,6 +298,8 @@ void addMixdownRenderTests(std::vector<TestCase>& tests)
                      testFlac16RenderRoundTrips});
     tests.push_back({"Mixdown Normalize pass-2 raises output level over Off",
                      testNormalizePass2ProducesLouderOutput});
+    tests.push_back({"Mixdown mixes tracks sent to a bus through the bus",
+                     testBusIsMixedThroughInExport});
 }
 
 } // namespace stemcel::tests

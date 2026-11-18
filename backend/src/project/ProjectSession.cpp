@@ -425,8 +425,9 @@ void rebuildEngineFromProject(stemcel::AudioEngine& engine, stemcel::ProjectStat
         const auto id = track.getProperty("id").toString();
         if (projectState.isTrackBus(id))
         {
-            engine.ensureBus(id);
+            // Gain first: a new bus starts at it rather than ramping from unity.
             engine.setBusGain(id, projectState.getEffectiveTrackGain(id));
+            engine.ensureBus(id);
         }
     }
     for (int t = 0; t < root.getNumChildren(); ++t)
