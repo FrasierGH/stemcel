@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Buses in exports.** An exported mix skipped every bus: the tracks sent to one went straight to the master, without the bus's gain, tone, saturation, plugins or automation. Playback was right; exports now match it.
+
 ## 0.7.0
 
 ### Added

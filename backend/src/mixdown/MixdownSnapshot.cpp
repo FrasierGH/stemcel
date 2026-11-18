@@ -235,7 +235,10 @@ MixdownSnapshot snapshotProjectForMixdown(const ProjectState& project,
                 track.clips.push_back(std::move(clip));
             }
         }
-        if (!track.clips.empty()) snapshot.tracks.push_back(std::move(track));
+        // A bus has no clips of its own, but the tracks sent to it are mixed through it (its
+        // gain, effects, plugins and automation), as in playback. Dropping it sent them
+        // straight to the master.
+        if (!track.clips.empty() || track.isBus) snapshot.tracks.push_back(std::move(track));
     }
     return snapshot;
 }
